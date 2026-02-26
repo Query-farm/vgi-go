@@ -7,11 +7,11 @@ import (
 	"bytes"
 	"fmt"
 	"log/slog"
+	"strconv"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // Arguments holds parsed function arguments from an Arrow IPC payload.
@@ -99,9 +99,9 @@ func ParseArguments(data []byte) (*Arguments, error) {
 				fieldArr := structArr.Field(fi)
 
 				if len(fieldName) > 11 && fieldName[:11] == "positional_" {
-					idx := 0
-					for _, c := range fieldName[11:] {
-						idx = idx*10 + int(c-'0')
+					idx, err := strconv.Atoi(fieldName[11:])
+					if err != nil {
+						return nil, fmt.Errorf("invalid positional argument index %q: %w", fieldName, err)
 					}
 					positionals = append(positionals, posArg{idx, fieldArr})
 					args.Named[fieldName] = fieldArr
@@ -345,8 +345,6 @@ func (a *Arguments) Release() {
 
 // SerializeArguments serializes arguments to Arrow IPC bytes.
 func SerializeArguments(schema *arrow.Schema, values []arrow.Array) ([]byte, error) {
-	mem := memory.NewGoAllocator()
-	_ = mem
 	var buf bytes.Buffer
 	w := ipc.NewWriter(&buf, ipc.WithSchema(schema))
 	if len(values) > 0 {

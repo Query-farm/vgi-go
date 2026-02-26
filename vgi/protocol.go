@@ -147,9 +147,11 @@ type FinalizeProducerState struct {
 
 func (s *FinalizeProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
 	if s.index >= len(s.batches) {
+		s.batches = nil
 		return out.Finish()
 	}
 	batch := s.batches[s.index]
+	s.batches[s.index] = nil // release reference after emission
 	s.index++
 	return out.Emit(batch)
 }

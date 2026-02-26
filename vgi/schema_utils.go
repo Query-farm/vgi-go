@@ -6,21 +6,13 @@ package vgi
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
-
-// SchemaFromFields creates an Arrow schema from name/type pairs.
-func SchemaFromFields(fields map[string]arrow.DataType) *arrow.Schema {
-	arrowFields := make([]arrow.Field, 0, len(fields))
-	for name, dt := range fields {
-		arrowFields = append(arrowFields, arrow.Field{Name: name, Type: dt})
-	}
-	return arrow.NewSchema(arrowFields, nil)
-}
 
 // SchemaFromOrderedFields creates an Arrow schema preserving insertion order.
 func SchemaFromOrderedFields(names []string, types []arrow.DataType) *arrow.Schema {
@@ -299,7 +291,8 @@ func extractScalarValue(col arrow.Array, idx int) interface{} {
 		dict := c.Dictionary().(*array.String)
 		return dict.Value(c.GetValueIndex(idx))
 	default:
-		return fmt.Sprintf("%v", col)
+		slog.Debug("extractScalarValue: unhandled array type", "type", fmt.Sprintf("%T", col))
+		return nil
 	}
 }
 

@@ -201,7 +201,7 @@ func buildDefaultValueBatch(mem memory.Allocator, schema *arrow.Schema, dt arrow
 	case []byte:
 		b.(*array.BinaryBuilder).Append(v)
 	default:
-		b.AppendNull()
+		return nil, fmt.Errorf("unsupported default value type: %T", val)
 	}
 
 	arr := b.NewArray()
