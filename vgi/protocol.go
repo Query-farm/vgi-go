@@ -372,7 +372,7 @@ func (w *Worker) initScalar(ctx context.Context, fn ScalarFunction, initParams *
 		resp.ExecutionID = initParams.ExecutionID
 	}
 	processParams.ExecutionID = resp.ExecutionID
-	storage, err := w.getOrCreateStorage(resp.ExecutionID)
+	storage, err := w.getOrCreateStorage(ctx, resp.ExecutionID)
 	if err != nil {
 		return nil, err
 	}
@@ -401,7 +401,7 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 	if initParams.ExecutionID == nil {
 		initParams.ExecutionID = newExecutionID()
 	}
-	initStorage, err := w.getOrCreateStorage(initParams.ExecutionID)
+	initStorage, err := w.getOrCreateStorage(ctx, initParams.ExecutionID)
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +432,7 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 	}
 	processParams.ExecutionID = resp.ExecutionID
 	processParams.InitOpaqueData = resp.OpaqueData
-	processStorage, err := w.getOrCreateStorage(resp.ExecutionID)
+	processStorage, err := w.getOrCreateStorage(ctx, resp.ExecutionID)
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +478,7 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 	if initParams.ExecutionID == nil {
 		initParams.ExecutionID = newExecutionID()
 	}
-	initStorage, err := w.getOrCreateStorage(initParams.ExecutionID)
+	initStorage, err := w.getOrCreateStorage(ctx, initParams.ExecutionID)
 	if err != nil {
 		return nil, err
 	}
@@ -509,7 +509,7 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 	}
 	processParams.ExecutionID = resp.ExecutionID
 	processParams.InitOpaqueData = resp.OpaqueData
-	processStorage, err := w.getOrCreateStorage(resp.ExecutionID)
+	processStorage, err := w.getOrCreateStorage(ctx, resp.ExecutionID)
 	if err != nil {
 		return nil, err
 	}

@@ -20,8 +20,81 @@ import (
 	"github.com/google/uuid"
 )
 
-// Ensure context is used (for handler signatures).
-var _ = context.Background
+// storageTrackerKeyType is the context key type for the storage tracker.
+type storageTrackerKeyType struct{}
+
+// storageTrackerKey is the context key used to store the tracker.
+var storageTrackerKey storageTrackerKeyType
+
+// storageTracker records execution ID hex keys used during a single dispatch.
+type storageTracker struct {
+	keys []string
+}
+
+// track records a hex key, deduplicating against previously tracked keys.
+func (t *storageTracker) track(key string) {
+	for _, k := range t.keys {
+		if k == key {
+			return
+		}
+	}
+	t.keys = append(t.keys, key)
+}
+
+// storageCleanupHook implements vgirpc.DispatchHook to clean up storage
+// entries when execution streams complete.
+//
+// Cleanup is deferred by one dispatch cycle: keys tracked during a dispatch
+// become "pending" at its end, and are only cleaned up in the next dispatch's
+// OnDispatchEnd — but only if the new dispatch did NOT reuse them. This handles
+// multi-worker (primary + secondary inits share an execution ID) and
+// table-in-out (INPUT + FINALIZE share an execution ID).
+type storageCleanupHook struct {
+	worker      *Worker
+	pendingKeys []string // keys from previous dispatch, candidates for cleanup
+	staleKeys   []string // snapshot of pendingKeys at current dispatch start
+}
+
+func (h *storageCleanupHook) OnDispatchStart(ctx context.Context, info vgirpc.DispatchInfo) (context.Context, vgirpc.HookToken) {
+	if info.Method != "init" {
+		return ctx, nil
+	}
+	// Snapshot pending keys; they'll be cleaned in OnDispatchEnd if not reused.
+	h.staleKeys = h.pendingKeys
+	h.pendingKeys = nil
+
+	tracker := &storageTracker{}
+	ctx = context.WithValue(ctx, storageTrackerKey, tracker)
+	return ctx, tracker
+}
+
+func (h *storageCleanupHook) OnDispatchEnd(ctx context.Context, token vgirpc.HookToken, info vgirpc.DispatchInfo, stats *vgirpc.CallStatistics, err error) {
+	tracker, ok := token.(*storageTracker)
+	if !ok || tracker == nil {
+		return
+	}
+
+	// Clean up stale keys that were NOT reused in this dispatch.
+	for _, key := range h.staleKeys {
+		reused := false
+		for _, tk := range tracker.keys {
+			if key == tk {
+				reused = true
+				break
+			}
+		}
+		if !reused {
+			if val, loaded := h.worker.storages.LoadAndDelete(key); loaded {
+				val.(*ExecutionStorage).Cleanup()
+				slog.Debug("storage: cleaned up execution", "key", key)
+			}
+		}
+	}
+	h.staleKeys = nil
+
+	// Save this dispatch's keys for the next cycle.
+	h.pendingKeys = append(h.pendingKeys, tracker.keys...)
+}
 
 // SettingSpec describes a DuckDB custom setting registered by the worker.
 type SettingSpec struct {
@@ -239,6 +312,7 @@ func (w *Worker) RunStdio() {
 	w.catalog = NewDefaultReadOnlyCatalog(w.catalogName, w)
 
 	s := vgirpc.NewServer()
+	s.SetDispatchHook(&storageCleanupHook{worker: w})
 
 	// Register bind (unary)
 	vgirpc.Unary[BindRequestWire, BindResponseWire](s, "bind", w.handleBind)
@@ -267,8 +341,11 @@ func newExecutionID() []byte {
 }
 
 // getOrCreateStorage returns or creates an ExecutionStorage for the given execution ID.
-func (w *Worker) getOrCreateStorage(executionID []byte) (*ExecutionStorage, error) {
+func (w *Worker) getOrCreateStorage(ctx context.Context, executionID []byte) (*ExecutionStorage, error) {
 	key := hex.EncodeToString(executionID)
+	if tracker, ok := ctx.Value(storageTrackerKey).(*storageTracker); ok {
+		tracker.track(key)
+	}
 	if s, ok := w.storages.Load(key); ok {
 		return s.(*ExecutionStorage), nil
 	}
