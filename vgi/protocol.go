@@ -6,6 +6,7 @@ package vgi
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -80,19 +81,45 @@ func (s *ScalarExchangeState) Exchange(ctx context.Context, input arrow.RecordBa
 
 // TableProducerState implements ProducerState for table functions.
 type TableProducerState struct {
-	fn        TableFunction
-	params    *ProcessParams
-	state     interface{}
-	autoApply *PushdownFilters
+	fn             TableFunction
+	params         *ProcessParams
+	state          interface{}
+	autoApply      *PushdownFilters
+	autoProjectIDs []int32 // non-nil when framework must project after emit
 }
 
 func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
-	if s.autoApply != nil {
+	if s.autoApply != nil || s.autoProjectIDs != nil {
+		if s.autoProjectIDs != nil {
+			// Tell OutputCollector to use the full schema for EmitArrays/EmitMap
+			// so functions that emit all columns can build valid batches.
+			// The interceptor below will project down before the wire write.
+			out.ProcessSchema = s.params.OutputSchema
+		}
 		out.EmitInterceptor = func(batch arrow.RecordBatch) (arrow.RecordBatch, error) {
-			return s.autoApply.Apply(ctx, batch)
+			result := batch
+			if s.autoProjectIDs != nil {
+				result = projectBatch(result, s.autoProjectIDs)
+			}
+			if s.autoApply != nil {
+				return s.autoApply.Apply(ctx, result)
+			}
+			return result, nil
 		}
 	}
 	return s.fn.Process(ctx, s.params, s.state, out)
+}
+
+// projectBatch selects only the columns at the given indices from a RecordBatch.
+func projectBatch(batch arrow.RecordBatch, ids []int32) arrow.RecordBatch {
+	fields := make([]arrow.Field, len(ids))
+	cols := make([]arrow.Array, len(ids))
+	for i, id := range ids {
+		fields[i] = batch.Schema().Field(int(id))
+		cols[i] = batch.Column(int(id))
+	}
+	schema := arrow.NewSchema(fields, nil)
+	return array.NewRecordBatch(schema, cols, batch.NumRows())
 }
 
 // TableInOutExchangeState implements ExchangeState for table-in-out INPUT phase.
@@ -133,20 +160,28 @@ func (s *FinalizeProducerState) Produce(ctx context.Context, out *vgirpc.OutputC
 
 // handleBind processes a bind RPC request.
 func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, req BindRequestWire) (BindResponseWire, error) {
-	debugLog("handleBind: function_name=%q function_type=%q args_len=%d has_input_schema=%v", req.FunctionName, req.FunctionType, len(req.Arguments), req.InputSchema != nil)
+	slog.Debug("bind: received request",
+		"function", req.FunctionName,
+		"type", req.FunctionType,
+		"args_len", len(req.Arguments),
+		"has_input_schema", req.InputSchema != nil,
+	)
 	bindParams, err := w.parseBindRequest(req)
 	if err != nil {
-		debugLog("handleBind: parseBindRequest error: %v", err)
+		slog.Debug("bind: parse failed", "err", err)
 		return BindResponseWire{}, err
 	}
-	debugLog("handleBind: parsed args ok, positional=%d named=%d", len(bindParams.Args.Positional), len(bindParams.Args.Named))
+	slog.Debug("bind: parsed args",
+		"positional", len(bindParams.Args.Positional),
+		"named", len(bindParams.Args.Named),
+	)
 
 	fn, err := w.resolveFunction(req.FunctionName, FunctionType(req.FunctionType))
 	if err != nil {
-		debugLog("handleBind: resolveFunction error: %v", err)
+		slog.Debug("bind: resolve function failed", "function", req.FunctionName, "err", err)
 		return BindResponseWire{}, err
 	}
-	debugLog("handleBind: resolved function %q as %T", req.FunctionName, fn)
+	slog.Debug("bind: resolved function", "function", req.FunctionName, "type", fmt.Sprintf("%T", fn))
 
 	// Remap positional args to original ArgSpec positions
 	argSpecs := w.getArgSpecs(fn)
@@ -154,7 +189,7 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 
 	// Validate type bounds against input schema before calling OnBind
 	if err := ValidateTypeBounds(argSpecs, bindParams.InputSchema); err != nil {
-		debugLog("handleBind: type bound validation error: %v", err)
+		slog.Debug("bind: type bound validation failed", "err", err)
 		return BindResponseWire{}, err
 	}
 
@@ -191,30 +226,35 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 
 // handleInit processes an init RPC request and returns a StreamResult.
 func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, req InitRequestWire) (*vgirpc.StreamResult, error) {
-	debugLog("handleInit: bind_call_len=%d output_schema_len=%d phase=%v exec_id_present=%v", len(req.BindCall), len(req.OutputSchema), req.Phase, req.ExecutionID != nil)
+	slog.Debug("init: received request",
+		"bind_call_len", len(req.BindCall),
+		"output_schema_len", len(req.OutputSchema),
+		"phase", req.Phase,
+		"exec_id_present", req.ExecutionID != nil,
+	)
 	// Deserialize the embedded bind call
 	bindReq, err := w.deserializeBindRequest(req.BindCall)
 	if err != nil {
-		debugLog("handleInit: deserializeBindRequest error: %v", err)
+		slog.Debug("init: deserialize bind_call failed", "err", err)
 		return nil, fmt.Errorf("deserializing bind_call: %w", err)
 	}
-	debugLog("handleInit: function=%q type=%q", bindReq.FunctionName, bindReq.FunctionType)
+	slog.Debug("init: parsed bind call", "function", bindReq.FunctionName, "type", bindReq.FunctionType)
 
 	// Parse output schema
 	outputSchema, err := DeserializeSchema(req.OutputSchema)
 	if err != nil {
-		debugLog("handleInit: deserialize output_schema error: %v", err)
+		slog.Debug("init: deserialize output_schema failed", "err", err)
 		return nil, fmt.Errorf("deserializing output_schema: %w", err)
 	}
-	debugLog("handleInit: output_schema fields=%d", outputSchema.NumFields())
+	slog.Debug("init: output schema", "fields", outputSchema.NumFields())
 
 	// Resolve the function
 	fn, err := w.resolveFunction(bindReq.FunctionName, FunctionType(bindReq.FunctionType))
 	if err != nil {
-		debugLog("handleInit: resolveFunction error: %v", err)
+		slog.Debug("init: resolve function failed", "function", bindReq.FunctionName, "err", err)
 		return nil, err
 	}
-	debugLog("handleInit: resolved function as %T", fn)
+	slog.Debug("init: resolved function", "type", fmt.Sprintf("%T", fn))
 
 	// Parse bind params for argument access
 	bindParams, err := w.parseBindRequest(*bindReq)
@@ -233,14 +273,14 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 
 	// Build init params
 	initParams := &InitParams{
-		FunctionName:   bindReq.FunctionName,
-		FunctionType:   FunctionType(bindReq.FunctionType),
-		Args:           bindParams.Args,
-		OutputSchema:   outputSchema,
-		InputSchema:    bindParams.InputSchema,
-		Phase:          phase,
-		Settings:       bindParams.Settings,
-		Secrets:        bindParams.Secrets,
+		FunctionName: bindReq.FunctionName,
+		FunctionType: FunctionType(bindReq.FunctionType),
+		Args:         bindParams.Args,
+		OutputSchema: outputSchema,
+		InputSchema:  bindParams.InputSchema,
+		Phase:        phase,
+		Settings:     bindParams.Settings,
+		Secrets:      bindParams.Secrets,
 	}
 	if req.ProjectionIDs != nil {
 		initParams.ProjectionIDs = *req.ProjectionIDs
@@ -262,45 +302,58 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		}
 	}
 
-	// Apply projection to output schema
+	// Apply projection to the wire output schema (what DuckDB expects back).
 	projectedSchema := ProjectSchema(initParams.ProjectionIDs, outputSchema)
+
+	// Determine the schema the function's Process method should see.
+	// If the function supports projection pushdown, it handles projection itself.
+	// Otherwise, give it the full schema and auto-project after emit.
+	fnMeta := w.getFunctionMetadata(fn)
+	processOutputSchema := projectedSchema
+	var autoProjectIDs []int32
+	if !fnMeta.ProjectionPushdown && initParams.ProjectionIDs != nil {
+		// Function doesn't support projection — let it emit all columns,
+		// framework will project down before sending to DuckDB.
+		processOutputSchema = outputSchema
+		autoProjectIDs = initParams.ProjectionIDs
+	}
 
 	// Build process params
 	processParams := &ProcessParams{
 		FunctionName:    bindReq.FunctionName,
 		FunctionType:    FunctionType(bindReq.FunctionType),
 		Args:            bindParams.Args,
-		OutputSchema:    projectedSchema,
+		OutputSchema:    processOutputSchema,
 		ProjectionIDs:   initParams.ProjectionIDs,
 		Settings:        bindParams.Settings,
 		Secrets:         bindParams.Secrets,
 		PushdownFilters: initParams.PushdownFilters,
 	}
 
-	debugLog("handleInit: dispatching to %T init", fn)
+	slog.Debug("init: dispatching", "type", fmt.Sprintf("%T", fn))
 	switch f := fn.(type) {
 	case ScalarFunction:
 		result, err := w.initScalar(ctx, f, initParams, processParams, projectedSchema)
 		if err != nil {
-			debugLog("handleInit: initScalar error: %v", err)
+			slog.Debug("init: scalar init failed", "err", err)
 		} else {
-			debugLog("handleInit: initScalar success, state=%T", result.State)
+			slog.Debug("init: scalar init success", "state", fmt.Sprintf("%T", result.State))
 		}
 		return result, err
 	case TableFunction:
-		result, err := w.initTable(ctx, f, initParams, processParams, projectedSchema)
+		result, err := w.initTable(ctx, f, initParams, processParams, projectedSchema, autoProjectIDs)
 		if err != nil {
-			debugLog("handleInit: initTable error: %v", err)
+			slog.Debug("init: table init failed", "err", err)
 		} else {
-			debugLog("handleInit: initTable success, state=%T", result.State)
+			slog.Debug("init: table init success", "state", fmt.Sprintf("%T", result.State))
 		}
 		return result, err
 	case TableInOutFunction:
 		result, err := w.initTableInOut(ctx, f, initParams, processParams, projectedSchema, phase)
 		if err != nil {
-			debugLog("handleInit: initTableInOut error: %v", err)
+			slog.Debug("init: table-in-out init failed", "err", err)
 		} else {
-			debugLog("handleInit: initTableInOut success, state=%T", result.State)
+			slog.Debug("init: table-in-out init success", "state", fmt.Sprintf("%T", result.State))
 		}
 		return result, err
 	default:
@@ -339,7 +392,7 @@ func (w *Worker) initScalar(ctx context.Context, fn ScalarFunction, initParams *
 	}, nil
 }
 
-func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *InitParams, processParams *ProcessParams, outputSchema *arrow.Schema) (*vgirpc.StreamResult, error) {
+func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *InitParams, processParams *ProcessParams, outputSchema *arrow.Schema, autoProjectIDs []int32) (*vgirpc.StreamResult, error) {
 	// Pre-create storage so OnInit can use it
 	if initParams.ExecutionID == nil {
 		initParams.ExecutionID = newExecutionID()
@@ -388,9 +441,10 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 	}
 
 	state := &TableProducerState{
-		fn:     fn,
-		params: processParams,
-		state:  userState,
+		fn:             fn,
+		params:         processParams,
+		state:          userState,
+		autoProjectIDs: autoProjectIDs,
 	}
 
 	// Set up auto-apply if the function opts in and filters are present
@@ -699,6 +753,19 @@ func (w *Worker) resolveFunction(name string, ft FunctionType) (interface{}, err
 		Type:    "ValueError",
 		Message: fmt.Sprintf("Unknown function: '%s'", name),
 	}
+}
+
+// getFunctionMetadata returns the FunctionMetadata for a resolved function.
+func (w *Worker) getFunctionMetadata(fn interface{}) FunctionMetadata {
+	switch f := fn.(type) {
+	case ScalarFunction:
+		return f.Metadata()
+	case TableFunction:
+		return f.Metadata()
+	case TableInOutFunction:
+		return f.Metadata()
+	}
+	return DefaultMetadata()
 }
 
 // getArgSpecs returns the ArgSpecs for a resolved function.

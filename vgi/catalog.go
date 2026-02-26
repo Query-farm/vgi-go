@@ -6,6 +6,7 @@ package vgi
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -489,7 +490,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			for _, spec := range w.settings {
 				data, err := serializeSettingSpec(spec)
 				if err != nil {
-					debugLog("Error serializing setting %s: %v", spec.Name, err)
+					slog.Error("failed to serialize setting", "name", spec.Name, "err", err)
 					continue
 				}
 				serializedSettings = append(serializedSettings, data)
@@ -620,7 +621,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_contents_functions
 	vgirpc.Unary[SchemaContentsFunctionsRequestWire, ItemsResponseWire](s, "catalog_schema_contents_functions",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsFunctionsRequestWire) (ItemsResponseWire, error) {
-			debugLog("catalog_schema_contents_functions: name=%q type=%q", req.Name, req.Type)
+			slog.Debug("catalog: listing functions", "schema", req.Name, "type", req.Type)
 			if w.catalog == nil {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
@@ -644,7 +645,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 						continue
 					}
 				}
-				debugLog("  returning function: %s (type=%s)", fi.Name, fi.FunctionType)
+				slog.Debug("catalog: returning function", "name", fi.Name, "type", fi.FunctionType)
 				data, err := SerializeFunctionInfo(fi)
 				if err != nil {
 					return ItemsResponseWire{}, err
@@ -691,7 +692,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_scan_function_get
 	vgirpc.Unary[TableScanFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_scan_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableScanFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
-			debugLog("catalog_table_scan_function_get: schema=%q table=%q", req.SchemaName, req.Name)
+			slog.Debug("catalog: scan function get", "schema", req.SchemaName, "table", req.Name)
 
 			// Check for a registered catalog table with a backing function
 			if w.catalog != nil {

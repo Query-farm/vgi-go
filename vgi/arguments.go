@@ -6,6 +6,7 @@ package vgi
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -59,14 +60,18 @@ func ParseArguments(data []byte) (*Arguments, error) {
 	batch := reader.RecordBatch()
 	batch.Retain()
 
-	debugLog("ParseArguments: schema fields=%d batch cols=%d rows=%d", schema.NumFields(), batch.NumCols(), batch.NumRows())
+	slog.Debug("parse arguments",
+		"schema_fields", schema.NumFields(),
+		"batch_cols", batch.NumCols(),
+		"batch_rows", batch.NumRows(),
+	)
 	for i := 0; i < schema.NumFields(); i++ {
 		f := schema.Field(i)
-		meta := ""
+		attrs := []any{"index", i, "name", f.Name, "type", f.Type.String()}
 		if f.HasMetadata() {
-			meta = fmt.Sprintf(" meta=%v", f.Metadata)
+			attrs = append(attrs, "meta", fmt.Sprintf("%v", f.Metadata))
 		}
-		debugLog("  arg[%d]: name=%q type=%v%s", i, f.Name, f.Type, meta)
+		slog.Debug("parse arguments: field", attrs...)
 	}
 
 	args := &Arguments{
@@ -124,7 +129,7 @@ func ParseArguments(data []byte) (*Arguments, error) {
 				}
 			}
 
-			debugLog("ParseArguments: unwrapped args struct: positional=%d named=%d", len(args.Positional), len(args.Named))
+			slog.Debug("parse arguments: unwrapped args struct", "positional", len(args.Positional), "named", len(args.Named))
 			return args, nil
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -46,7 +47,7 @@ func (s *ExecutionStorage) SetExecutionID(execID []byte) {
 
 	db, err := sql.Open("sqlite", s.dbPath)
 	if err != nil {
-		debugLog("SetExecutionID: open db error: %v", err)
+		slog.Error("storage: failed to open database", "path", s.dbPath, "err", err)
 		return
 	}
 
@@ -56,11 +57,11 @@ func (s *ExecutionStorage) SetExecutionID(execID []byte) {
 	// Enable WAL mode and set busy timeout for concurrent access
 	_, err = db.Exec("PRAGMA journal_mode=WAL")
 	if err != nil {
-		debugLog("SetExecutionID: WAL mode error: %v", err)
+		slog.Warn("storage: WAL mode failed", "err", err)
 	}
 	_, err = db.Exec("PRAGMA busy_timeout=5000")
 	if err != nil {
-		debugLog("SetExecutionID: busy_timeout error: %v", err)
+		slog.Warn("storage: busy_timeout failed", "err", err)
 	}
 
 	s.db = db
@@ -77,7 +78,7 @@ func (s *ExecutionStorage) SetExecutionID(execID []byte) {
 		);
 	`)
 	if err != nil {
-		debugLog("SetExecutionID: create tables error: %v", err)
+		slog.Error("storage: create tables failed", "err", err)
 	}
 }
 
@@ -93,26 +94,26 @@ func (s *ExecutionStorage) QueuePush(items [][]byte) {
 
 	tx, err := db.Begin()
 	if err != nil {
-		debugLog("QueuePush: begin tx error: %v", err)
+		slog.Error("storage: begin tx failed", "op", "queue_push", "err", err)
 		return
 	}
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare("INSERT INTO work_queue (work_item) VALUES (?)")
 	if err != nil {
-		debugLog("QueuePush: prepare error: %v", err)
+		slog.Error("storage: prepare statement failed", "op", "queue_push", "err", err)
 		return
 	}
 	defer stmt.Close()
 
 	for _, item := range items {
 		if _, err := stmt.Exec(item); err != nil {
-			debugLog("QueuePush: insert error: %v", err)
+			slog.Error("storage: insert work item failed", "op", "queue_push", "err", err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		debugLog("QueuePush: commit error: %v", err)
+		slog.Error("storage: commit tx failed", "op", "queue_push", "err", err)
 	}
 }
 
@@ -181,7 +182,7 @@ func (s *ExecutionStorage) Put(data []byte) {
 		pid, data,
 	)
 	if err != nil {
-		debugLog("Put: insert error: %v", err)
+		slog.Error("storage: put worker state failed", "pid", pid, "err", err)
 	}
 }
 

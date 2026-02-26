@@ -32,6 +32,24 @@ Tests live in the VGI DuckDB extension repo at `../vgi/test/sql/` and use the Du
 - `github.com/Query-farm/vgi-rpc` — VGI RPC framework (local replace: `../vgi-rpc-go`)
 - `github.com/apache/arrow-go/v18` — Arrow IPC (uses fork: `github.com/rustyconover/arrow-go/v18`)
 
+## Logging
+
+Both `vgi-go` and `vgi-rpc-go` use `log/slog` for structured logging. By default, the worker logs at Info level to stderr. Since VGI communicates over stdin/stdout, stderr is safe for logging.
+
+Configure logging via `WorkerOption`s:
+
+```go
+// Debug-level logging (shows all protocol trace messages)
+w := vgi.NewWorker(vgi.WithLogLevel(slog.LevelDebug))
+
+// Custom handler (e.g. JSON to a file)
+f, _ := os.Create("/tmp/vgi-debug.log")
+h := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug})
+w := vgi.NewWorker(vgi.WithLogHandler(h))
+```
+
+**Log levels in protocol.go**: Errors in `handleBind`/`handleInit` are logged at Debug, not Error. These are operational errors returned to DuckDB as RPC error responses — they're expected control flow, not system failures. Use `WithLogLevel(slog.LevelDebug)` to see them.
+
 ## Conventions
 
 - All source files begin with the copyright header:

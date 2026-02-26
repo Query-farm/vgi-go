@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 
@@ -18,16 +19,6 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/google/uuid"
 )
-
-// debugLog writes debug messages to /tmp/vgi-go.log
-func debugLog(format string, args ...interface{}) {
-	f, err := os.OpenFile("/tmp/vgi-go.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, format+"\n", args...)
-}
 
 // Ensure context is used (for handler signatures).
 var _ = context.Background
@@ -156,6 +147,8 @@ type Worker struct {
 	settings               []SettingSpec
 	catalogTables          map[string][]CatalogTable // schema_name → tables
 	scanFunctionGetHandler ScanFunctionGetHandler
+	logLevel               slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
+	logHandler             slog.Handler // nil means default TextHandler to stderr
 }
 
 // WorkerOption configures a Worker.
@@ -172,6 +165,22 @@ func WithCatalogName(name string) WorkerOption {
 func WithSettings(settings ...SettingSpec) WorkerOption {
 	return func(w *Worker) {
 		w.settings = append(w.settings, settings...)
+	}
+}
+
+// WithLogLevel sets the minimum log level for the default handler.
+// The zero value (slog.LevelInfo) logs Info and above.
+func WithLogLevel(level slog.Level) WorkerOption {
+	return func(w *Worker) {
+		w.logLevel = level
+	}
+}
+
+// WithLogHandler sets a custom slog.Handler for all logging.
+// When set, WithLogLevel is ignored (the handler controls its own level).
+func WithLogHandler(h slog.Handler) WorkerOption {
+	return func(w *Worker) {
+		w.logHandler = h
 	}
 }
 
@@ -218,6 +227,14 @@ func (w *Worker) SetScanFunctionGetHandler(h ScanFunctionGetHandler) {
 
 // RunStdio runs the worker serving RPC over stdin/stdout.
 func (w *Worker) RunStdio() {
+	// Configure structured logging.
+	// logLevel zero value is slog.LevelInfo (0) — Info by default is intentional.
+	handler := w.logHandler
+	if handler == nil {
+		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: w.logLevel})
+	}
+	slog.SetDefault(slog.New(handler))
+
 	// Build catalog from registered functions
 	w.catalog = NewDefaultReadOnlyCatalog(w.catalogName, w)
 
