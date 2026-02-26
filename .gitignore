@@ -1,0 +1,14 @@
+# Compiled binaries
+vgi-example-worker-go
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+
+# Temporary/stray files
+2

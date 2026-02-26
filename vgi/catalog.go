@@ -1,0 +1,741 @@
+// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
+// SPDX-License-Identifier: Apache-2.0
+
+package vgi
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/apache/arrow-go/v18/arrow"
+)
+
+// ---------------------------------------------------------------------------
+// Catalog wire types
+// ---------------------------------------------------------------------------
+
+// CatalogsResponseWire wraps the list of catalog names.
+type CatalogsResponseWire struct {
+	Items []string `vgirpc:"items"`
+}
+
+// CatalogAttachRequestWire is the wire type for catalog_attach.
+type CatalogAttachRequestWire struct {
+	Name    string  `vgirpc:"name"`
+	Options *[]byte `vgirpc:"options"`
+}
+
+// CatalogAttachResultWire is the wire type for catalog_attach result.
+type CatalogAttachResultWire struct {
+	AttachID             []byte   `vgirpc:"attach_id"`
+	SupportsTransactions bool     `vgirpc:"supports_transactions"`
+	SupportsTimeTravel   bool     `vgirpc:"supports_time_travel"`
+	CatalogVersionFrozen bool     `vgirpc:"catalog_version_frozen"`
+	CatalogVersion       int64    `vgirpc:"catalog_version"`
+	AttachIDRequired     bool     `vgirpc:"attach_id_required"`
+	DefaultSchema        string   `vgirpc:"default_schema"`
+	Settings             [][]byte `vgirpc:"settings"`
+}
+
+// CatalogVersionRequestWire is the wire type for catalog_version.
+type CatalogVersionRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// CatalogVersionResponseWire wraps the version number.
+type CatalogVersionResponseWire struct {
+	Version int64 `vgirpc:"version"`
+}
+
+// SchemasRequestWire is the wire type for catalog_schemas and related.
+type SchemasRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// SchemaGetRequestWire is the wire type for catalog_schema_get.
+type SchemaGetRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	Name          string  `vgirpc:"name"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// SchemaContentsRequestWire is for schema_contents_tables/views.
+type SchemaContentsRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	Name          string  `vgirpc:"name"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// SchemaContentsFunctionsRequestWire is for schema_contents_functions.
+type SchemaContentsFunctionsRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	Name          string  `vgirpc:"name"`
+	Type          string  `vgirpc:"type,enum"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// ItemsResponseWire wraps a list of serialized items (schemas/tables/views/functions).
+type ItemsResponseWire struct {
+	Items [][]byte `vgirpc:"items"`
+}
+
+// DetachRequestWire is the wire type for catalog_detach.
+type DetachRequestWire struct {
+	AttachID []byte `vgirpc:"attach_id"`
+}
+
+// TransactionBeginRequestWire is the wire type for catalog_transaction_begin.
+type TransactionBeginRequestWire struct {
+	AttachID []byte `vgirpc:"attach_id"`
+}
+
+// TransactionBeginResponseWire wraps optional transaction ID.
+type TransactionBeginResponseWire struct {
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// TransactionRequestWire is the wire type for commit/rollback.
+type TransactionRequestWire struct {
+	AttachID      []byte `vgirpc:"attach_id"`
+	TransactionID []byte `vgirpc:"transaction_id"`
+}
+
+// CatalogDropRequestWire is for catalog_drop.
+type CatalogDropRequestWire struct {
+	Name string `vgirpc:"name"`
+}
+
+// CatalogCreateRequestWire is for catalog_create.
+type CatalogCreateRequestWire struct {
+	Name       string  `vgirpc:"name"`
+	OnConflict string  `vgirpc:"on_conflict,enum"`
+	Options    *[]byte `vgirpc:"options"`
+}
+
+// SchemaCreateRequestWire is for catalog_schema_create.
+type SchemaCreateRequestWire struct {
+	AttachID      []byte             `vgirpc:"attach_id"`
+	Name          string             `vgirpc:"name"`
+	Comment       *string            `vgirpc:"comment"`
+	Tags          *map[string]string `vgirpc:"tags"`
+	TransactionID *[]byte            `vgirpc:"transaction_id"`
+}
+
+// SchemaDropRequestWire is for catalog_schema_drop.
+type SchemaDropRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	Name           string  `vgirpc:"name"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	Cascade        *bool   `vgirpc:"cascade"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableGetRequestWire is for catalog_table_get.
+type TableGetRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	SchemaName    string  `vgirpc:"schema_name"`
+	Name          string  `vgirpc:"name"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableDropRequestWire is for catalog_table_drop.
+type TableDropRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	SchemaName     string  `vgirpc:"schema_name"`
+	Name           string  `vgirpc:"name"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableScanFunctionGetRequestWire is for catalog_table_scan_function_get.
+type TableScanFunctionGetRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	SchemaName    string  `vgirpc:"schema_name"`
+	Name          string  `vgirpc:"name"`
+	AtUnit        *string `vgirpc:"at_unit"`
+	AtValue       *string `vgirpc:"at_value"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableScanFunctionGetResponseWire wraps the scan function result.
+type TableScanFunctionGetResponseWire struct {
+	Result []byte `vgirpc:"result"`
+}
+
+// TableCommentSetRequestWire is for catalog_table_comment_set.
+type TableCommentSetRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	SchemaName     string  `vgirpc:"schema_name"`
+	Name           string  `vgirpc:"name"`
+	Comment        *string `vgirpc:"comment"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableRenameRequestWire is for catalog_table_rename.
+type TableRenameRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	SchemaName     string  `vgirpc:"schema_name"`
+	Name           string  `vgirpc:"name"`
+	NewName        string  `vgirpc:"new_name"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableColumnAddRequestWire is for catalog_table_column_add.
+type TableColumnAddRequestWire struct {
+	AttachID          []byte  `vgirpc:"attach_id"`
+	SchemaName        string  `vgirpc:"schema_name"`
+	Name              string  `vgirpc:"name"`
+	ColumnDefinition  []byte  `vgirpc:"column_definition"`
+	IgnoreNotFound    *bool   `vgirpc:"ignore_not_found"`
+	IfColumnNotExists *bool   `vgirpc:"if_column_not_exists"`
+	TransactionID     *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableColumnDropRequestWire is for catalog_table_column_drop.
+type TableColumnDropRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	SchemaName     string  `vgirpc:"schema_name"`
+	Name           string  `vgirpc:"name"`
+	ColumnName     string  `vgirpc:"column_name"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	IfColumnExists *bool   `vgirpc:"if_column_exists"`
+	Cascade        *bool   `vgirpc:"cascade"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableColumnRenameRequestWire is for catalog_table_column_rename.
+type TableColumnRenameRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	SchemaName     string  `vgirpc:"schema_name"`
+	Name           string  `vgirpc:"name"`
+	ColumnName     string  `vgirpc:"column_name"`
+	NewColumnName  string  `vgirpc:"new_column_name"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableColumnDefaultSetRequestWire is for catalog_table_column_default_set.
+type TableColumnDefaultSetRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	SchemaName     string  `vgirpc:"schema_name"`
+	Name           string  `vgirpc:"name"`
+	ColumnName     string  `vgirpc:"column_name"`
+	Expression     string  `vgirpc:"expression"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableColumnDefaultDropRequestWire is for catalog_table_column_default_drop.
+type TableColumnDefaultDropRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	SchemaName     string  `vgirpc:"schema_name"`
+	Name           string  `vgirpc:"name"`
+	ColumnName     string  `vgirpc:"column_name"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableColumnTypeChangeRequestWire is for catalog_table_column_type_change.
+type TableColumnTypeChangeRequestWire struct {
+	AttachID         []byte  `vgirpc:"attach_id"`
+	SchemaName       string  `vgirpc:"schema_name"`
+	Name             string  `vgirpc:"name"`
+	ColumnDefinition []byte  `vgirpc:"column_definition"`
+	Expression       *string `vgirpc:"expression"`
+	IgnoreNotFound   *bool   `vgirpc:"ignore_not_found"`
+	TransactionID    *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableNotNullRequestWire is for catalog_table_not_null_set/drop.
+type TableNotNullRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	SchemaName     string  `vgirpc:"schema_name"`
+	Name           string  `vgirpc:"name"`
+	ColumnName     string  `vgirpc:"column_name"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// ViewGetRequestWire is for catalog_view_get.
+type ViewGetRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	SchemaName    string  `vgirpc:"schema_name"`
+	Name          string  `vgirpc:"name"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// ViewCreateRequestWire is for catalog_view_create.
+type ViewCreateRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	SchemaName    string  `vgirpc:"schema_name"`
+	Name          string  `vgirpc:"name"`
+	Definition    string  `vgirpc:"definition"`
+	OnConflict    string  `vgirpc:"on_conflict,enum"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// ViewDropRequestWire is for catalog_view_drop.
+type ViewDropRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	SchemaName     string  `vgirpc:"schema_name"`
+	Name           string  `vgirpc:"name"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// ViewRenameRequestWire is for catalog_view_rename.
+type ViewRenameRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	SchemaName     string  `vgirpc:"schema_name"`
+	Name           string  `vgirpc:"name"`
+	NewName        string  `vgirpc:"new_name"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// ViewCommentSetRequestWire is for catalog_view_comment_set.
+type ViewCommentSetRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	SchemaName     string  `vgirpc:"schema_name"`
+	Name           string  `vgirpc:"name"`
+	Comment        *string `vgirpc:"comment"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableCreateRequestWire is for catalog_table_create.
+type TableCreateRequestWire struct {
+	AttachID           []byte    `vgirpc:"attach_id"`
+	SchemaName         string    `vgirpc:"schema_name"`
+	Name               string    `vgirpc:"name"`
+	Columns            []byte    `vgirpc:"columns"`
+	OnConflict         string    `vgirpc:"on_conflict,enum"`
+	NotNullConstraints *[]int32  `vgirpc:"not_null_constraints"`
+	CheckConstraints   *[]string `vgirpc:"check_constraints"`
+	TransactionID      *[]byte   `vgirpc:"transaction_id"`
+}
+
+// ---------------------------------------------------------------------------
+// DefaultReadOnlyCatalog
+// ---------------------------------------------------------------------------
+
+// DefaultReadOnlyCatalog auto-generates from registered functions.
+type DefaultReadOnlyCatalog struct {
+	catalogName string
+	schemas     map[string]*catalogSchemaInfo
+	version     int64
+	attachID    []byte
+}
+
+type catalogSchemaInfo struct {
+	info      *SchemaInfo
+	functions []FunctionInfo
+}
+
+// NewDefaultReadOnlyCatalog creates a catalog from registered functions.
+func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCatalog {
+	cat := &DefaultReadOnlyCatalog{
+		catalogName: catalogName,
+		schemas:     make(map[string]*catalogSchemaInfo),
+		version:     1,
+	}
+
+	// Create "main" schema with all functions
+	mainSchema := &catalogSchemaInfo{
+		info: &SchemaInfo{
+			Name:    "main",
+			Comment: "Default schema containing all registered functions",
+		},
+	}
+
+	// Helper to build FunctionInfo from any function type
+	buildFunctionInfo := func(name string, ft FunctionType, meta FunctionMetadata, specs []ArgSpec) FunctionInfo {
+		fi := FunctionInfo{
+			Name:         name,
+			SchemaName:   "main",
+			FunctionType: ft,
+			Stability:    meta.Stability,
+			NullHandling: meta.NullHandling,
+			Description:  meta.Description,
+			ArgSchema:    BuildArgSchema(specs),
+			OutputSchema: arrow.NewSchema(nil, nil), // empty, resolved at bind time
+		}
+		if meta.ProjectionPushdown {
+			v := true
+			fi.ProjectionPushdown = &v
+		}
+		if meta.FilterPushdown {
+			v := true
+			fi.FilterPushdown = &v
+		}
+		return fi
+	}
+
+	// Scalar functions need a 1-field output schema for DuckDB.
+	// Use null type with vgi:any metadata (resolved at bind time).
+	scalarOutputSchema := arrow.NewSchema([]arrow.Field{
+		{Name: "result", Type: arrow.Null, Metadata: arrow.NewMetadata(
+			[]string{"vgi:any"}, []string{"true"},
+		)},
+	}, nil)
+
+	for name, fn := range w.scalars {
+		meta := fn.Metadata()
+		fi := buildFunctionInfo(name, FunctionTypeScalar, meta, fn.ArgumentSpecs())
+		fi.OutputSchema = scalarOutputSchema
+		mainSchema.functions = append(mainSchema.functions, fi)
+	}
+
+	for name, fn := range w.tables {
+		meta := fn.Metadata()
+		fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs())
+		mainSchema.functions = append(mainSchema.functions, fi)
+	}
+
+	for name, fn := range w.tableInOuts {
+		meta := fn.Metadata()
+		fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs()) // table-in-out registers as "table"
+		mainSchema.functions = append(mainSchema.functions, fi)
+	}
+
+	cat.schemas["main"] = mainSchema
+
+	// Add "data" schema (empty, for catalog compatibility)
+	dataSchema := &catalogSchemaInfo{
+		info: &SchemaInfo{
+			Name:    "data",
+			Comment: "Data schema",
+		},
+	}
+	cat.schemas["data"] = dataSchema
+
+	return cat
+}
+
+// ---------------------------------------------------------------------------
+// Catalog RPC handler registration
+// ---------------------------------------------------------------------------
+
+// registerCatalogMethods registers all catalog RPC methods on the server.
+func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
+	readOnlyErr := func(op string) error {
+		return &vgirpc.RpcError{
+			Type:    "NotImplementedError",
+			Message: fmt.Sprintf("Catalog is read-only: %s not supported", op),
+		}
+	}
+
+	// catalog_catalogs
+	vgirpc.Unary[struct{}, CatalogsResponseWire](s, "catalog_catalogs",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, _ struct{}) (CatalogsResponseWire, error) {
+			return CatalogsResponseWire{Items: []string{w.catalogName}}, nil
+		})
+
+	// catalog_attach
+	vgirpc.Unary[CatalogAttachRequestWire, CatalogAttachResultWire](s, "catalog_attach",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogAttachRequestWire) (CatalogAttachResultWire, error) {
+			// Validate catalog name matches
+			if req.Name != w.catalogName {
+				return CatalogAttachResultWire{}, &vgirpc.RpcError{
+					Type:    "ValueError",
+					Message: fmt.Sprintf("Unknown catalog: '%s'", req.Name),
+				}
+			}
+			// Generate a simple attach ID
+			attachID := []byte(req.Name)
+			if w.catalog != nil {
+				w.catalog.attachID = attachID
+			}
+			version := int64(1)
+			if w.catalog != nil {
+				version = w.catalog.version
+			}
+			// Serialize settings
+			var serializedSettings [][]byte
+			for _, spec := range w.settings {
+				data, err := serializeSettingSpec(spec)
+				if err != nil {
+					debugLog("Error serializing setting %s: %v", spec.Name, err)
+					continue
+				}
+				serializedSettings = append(serializedSettings, data)
+			}
+			if serializedSettings == nil {
+				serializedSettings = [][]byte{}
+			}
+
+			return CatalogAttachResultWire{
+				AttachID:             attachID,
+				SupportsTransactions: false,
+				SupportsTimeTravel:   false,
+				CatalogVersionFrozen: true,
+				CatalogVersion:       version,
+				AttachIDRequired:     false,
+				DefaultSchema:        "main",
+				Settings:             serializedSettings,
+			}, nil
+		})
+
+	// catalog_detach
+	vgirpc.UnaryVoid[DetachRequestWire](s, "catalog_detach",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req DetachRequestWire) error {
+			return nil
+		})
+
+	// catalog_version
+	vgirpc.Unary[CatalogVersionRequestWire, CatalogVersionResponseWire](s, "catalog_version",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogVersionRequestWire) (CatalogVersionResponseWire, error) {
+			version := int64(1)
+			if w.catalog != nil {
+				version = w.catalog.version
+			}
+			return CatalogVersionResponseWire{Version: version}, nil
+		})
+
+	// catalog_transaction_begin
+	vgirpc.Unary[TransactionBeginRequestWire, TransactionBeginResponseWire](s, "catalog_transaction_begin",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TransactionBeginRequestWire) (TransactionBeginResponseWire, error) {
+			return TransactionBeginResponseWire{}, nil
+		})
+
+	// catalog_transaction_commit
+	vgirpc.UnaryVoid[TransactionRequestWire](s, "catalog_transaction_commit",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TransactionRequestWire) error {
+			return nil
+		})
+
+	// catalog_transaction_rollback
+	vgirpc.UnaryVoid[TransactionRequestWire](s, "catalog_transaction_rollback",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TransactionRequestWire) error {
+			return nil
+		})
+
+	// catalog_schemas
+	vgirpc.Unary[SchemasRequestWire, ItemsResponseWire](s, "catalog_schemas",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemasRequestWire) (ItemsResponseWire, error) {
+			if w.catalog == nil {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			var items [][]byte
+			for _, si := range w.catalog.schemas {
+				data, err := SerializeSchemaInfo(si.info)
+				if err != nil {
+					return ItemsResponseWire{}, err
+				}
+				items = append(items, data)
+			}
+			return ItemsResponseWire{Items: items}, nil
+		})
+
+	// catalog_schema_get
+	vgirpc.Unary[SchemaGetRequestWire, ItemsResponseWire](s, "catalog_schema_get",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaGetRequestWire) (ItemsResponseWire, error) {
+			if w.catalog == nil {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			si, ok := w.catalog.schemas[req.Name]
+			if !ok {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			data, err := SerializeSchemaInfo(si.info)
+			if err != nil {
+				return ItemsResponseWire{}, err
+			}
+			return ItemsResponseWire{Items: [][]byte{data}}, nil
+		})
+
+	// catalog_schema_create (read-only)
+	vgirpc.UnaryVoid[SchemaCreateRequestWire](s, "catalog_schema_create",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaCreateRequestWire) error {
+			return readOnlyErr("catalog_schema_create")
+		})
+
+	// catalog_schema_drop (read-only)
+	vgirpc.UnaryVoid[SchemaDropRequestWire](s, "catalog_schema_drop",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaDropRequestWire) error {
+			return readOnlyErr("catalog_schema_drop")
+		})
+
+	// catalog_schema_contents_tables
+	vgirpc.Unary[SchemaContentsRequestWire, ItemsResponseWire](s, "catalog_schema_contents_tables",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsRequestWire) (ItemsResponseWire, error) {
+			return ItemsResponseWire{Items: [][]byte{}}, nil
+		})
+
+	// catalog_schema_contents_views
+	vgirpc.Unary[SchemaContentsRequestWire, ItemsResponseWire](s, "catalog_schema_contents_views",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsRequestWire) (ItemsResponseWire, error) {
+			return ItemsResponseWire{Items: [][]byte{}}, nil
+		})
+
+	// catalog_schema_contents_functions
+	vgirpc.Unary[SchemaContentsFunctionsRequestWire, ItemsResponseWire](s, "catalog_schema_contents_functions",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsFunctionsRequestWire) (ItemsResponseWire, error) {
+			debugLog("catalog_schema_contents_functions: name=%q type=%q", req.Name, req.Type)
+			if w.catalog == nil {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			si, ok := w.catalog.schemas[req.Name]
+			if !ok {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+
+			var items [][]byte
+			for i := range si.functions {
+				fi := &si.functions[i]
+				// Filter by type if requested
+				// DuckDB sends "SCALAR_FUNCTION", "TABLE_FUNCTION", etc.
+				if req.Type != "" {
+					wantScalar := req.Type == "scalar" || req.Type == "SCALAR_FUNCTION"
+					wantTable := req.Type == "table" || req.Type == "TABLE_FUNCTION"
+					if wantScalar && fi.FunctionType != FunctionTypeScalar {
+						continue
+					}
+					if wantTable && fi.FunctionType != FunctionTypeTable {
+						continue
+					}
+				}
+				debugLog("  returning function: %s (type=%s)", fi.Name, fi.FunctionType)
+				data, err := SerializeFunctionInfo(fi)
+				if err != nil {
+					return ItemsResponseWire{}, err
+				}
+				items = append(items, data)
+			}
+			return ItemsResponseWire{Items: items}, nil
+		})
+
+	// catalog_table_get
+	vgirpc.Unary[TableGetRequestWire, ItemsResponseWire](s, "catalog_table_get",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableGetRequestWire) (ItemsResponseWire, error) {
+			return ItemsResponseWire{Items: [][]byte{}}, nil
+		})
+
+	// catalog_table_create (read-only)
+	vgirpc.UnaryVoid[TableCreateRequestWire](s, "catalog_table_create",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableCreateRequestWire) error {
+			return readOnlyErr("catalog_table_create")
+		})
+
+	// catalog_table_drop (read-only)
+	vgirpc.UnaryVoid[TableDropRequestWire](s, "catalog_table_drop",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableDropRequestWire) error {
+			return readOnlyErr("catalog_table_drop")
+		})
+
+	// catalog_table_scan_function_get
+	vgirpc.Unary[TableScanFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_scan_function_get",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableScanFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
+			return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{
+				Type:    "NotImplementedError",
+				Message: "table_scan_function_get not implemented",
+			}
+		})
+
+	// catalog_table_comment_set (read-only)
+	vgirpc.UnaryVoid[TableCommentSetRequestWire](s, "catalog_table_comment_set",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableCommentSetRequestWire) error {
+			return readOnlyErr("catalog_table_comment_set")
+		})
+
+	// catalog_table_rename (read-only)
+	vgirpc.UnaryVoid[TableRenameRequestWire](s, "catalog_table_rename",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableRenameRequestWire) error {
+			return readOnlyErr("catalog_table_rename")
+		})
+
+	// catalog_table_column_add (read-only)
+	vgirpc.UnaryVoid[TableColumnAddRequestWire](s, "catalog_table_column_add",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableColumnAddRequestWire) error {
+			return readOnlyErr("catalog_table_column_add")
+		})
+
+	// catalog_table_column_drop (read-only)
+	vgirpc.UnaryVoid[TableColumnDropRequestWire](s, "catalog_table_column_drop",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableColumnDropRequestWire) error {
+			return readOnlyErr("catalog_table_column_drop")
+		})
+
+	// catalog_table_column_rename (read-only)
+	vgirpc.UnaryVoid[TableColumnRenameRequestWire](s, "catalog_table_column_rename",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableColumnRenameRequestWire) error {
+			return readOnlyErr("catalog_table_column_rename")
+		})
+
+	// catalog_table_column_default_set (read-only)
+	vgirpc.UnaryVoid[TableColumnDefaultSetRequestWire](s, "catalog_table_column_default_set",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableColumnDefaultSetRequestWire) error {
+			return readOnlyErr("catalog_table_column_default_set")
+		})
+
+	// catalog_table_column_default_drop (read-only)
+	vgirpc.UnaryVoid[TableColumnDefaultDropRequestWire](s, "catalog_table_column_default_drop",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableColumnDefaultDropRequestWire) error {
+			return readOnlyErr("catalog_table_column_default_drop")
+		})
+
+	// catalog_table_column_type_change (read-only)
+	vgirpc.UnaryVoid[TableColumnTypeChangeRequestWire](s, "catalog_table_column_type_change",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableColumnTypeChangeRequestWire) error {
+			return readOnlyErr("catalog_table_column_type_change")
+		})
+
+	// catalog_table_not_null_set (read-only)
+	vgirpc.UnaryVoid[TableNotNullRequestWire](s, "catalog_table_not_null_set",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableNotNullRequestWire) error {
+			return readOnlyErr("catalog_table_not_null_set")
+		})
+
+	// catalog_table_not_null_drop (read-only)
+	vgirpc.UnaryVoid[TableNotNullRequestWire](s, "catalog_table_not_null_drop",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableNotNullRequestWire) error {
+			return readOnlyErr("catalog_table_not_null_drop")
+		})
+
+	// catalog_view_get
+	vgirpc.Unary[ViewGetRequestWire, ItemsResponseWire](s, "catalog_view_get",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req ViewGetRequestWire) (ItemsResponseWire, error) {
+			return ItemsResponseWire{Items: [][]byte{}}, nil
+		})
+
+	// catalog_view_create (read-only)
+	vgirpc.UnaryVoid[ViewCreateRequestWire](s, "catalog_view_create",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req ViewCreateRequestWire) error {
+			return readOnlyErr("catalog_view_create")
+		})
+
+	// catalog_view_drop (read-only)
+	vgirpc.UnaryVoid[ViewDropRequestWire](s, "catalog_view_drop",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req ViewDropRequestWire) error {
+			return readOnlyErr("catalog_view_drop")
+		})
+
+	// catalog_view_rename (read-only)
+	vgirpc.UnaryVoid[ViewRenameRequestWire](s, "catalog_view_rename",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req ViewRenameRequestWire) error {
+			return readOnlyErr("catalog_view_rename")
+		})
+
+	// catalog_view_comment_set (read-only)
+	vgirpc.UnaryVoid[ViewCommentSetRequestWire](s, "catalog_view_comment_set",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req ViewCommentSetRequestWire) error {
+			return readOnlyErr("catalog_view_comment_set")
+		})
+
+	// catalog_create (read-only)
+	vgirpc.UnaryVoid[CatalogCreateRequestWire](s, "catalog_create",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogCreateRequestWire) error {
+			return readOnlyErr("catalog_create")
+		})
+
+	// catalog_drop (read-only)
+	vgirpc.UnaryVoid[CatalogDropRequestWire](s, "catalog_drop",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogDropRequestWire) error {
+			return readOnlyErr("catalog_drop")
+		})
+}

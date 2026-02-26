@@ -1,0 +1,50 @@
+// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
+// SPDX-License-Identifier: Apache-2.0
+
+package vgi
+
+import "github.com/apache/arrow-go/v18/arrow"
+
+// InitParams holds the parameters available during the init phase.
+type InitParams struct {
+	// FunctionName is the name of the function.
+	FunctionName string
+	// FunctionType is the type of the function.
+	FunctionType FunctionType
+	// Args are the parsed function arguments.
+	Args *Arguments
+	// OutputSchema is the output schema resolved during bind.
+	OutputSchema *arrow.Schema
+	// InputSchema is the input table schema (nil for table functions).
+	InputSchema *arrow.Schema
+	// ProjectionIDs are the projected column indices (nil = all columns).
+	ProjectionIDs []int32
+	// Phase is the table-in-out init phase ("INPUT" or "FINALIZE").
+	Phase string
+	// ExecutionID is the execution ID for secondary inits.
+	ExecutionID []byte
+	// BindOpaqueData is opaque data from the bind phase.
+	BindOpaqueData []byte
+	// InitOpaqueData is opaque data from a previous global init (secondary inits).
+	InitOpaqueData []byte
+	// Settings is a map of DuckDB setting names to their scalar values.
+	Settings map[string]interface{}
+	// Secrets is a map of secret names to their value maps.
+	Secrets map[string]map[string]interface{}
+	// IsSecondary is true if this is a secondary init (worker init).
+	IsSecondary bool
+	// PushdownFilters is the pushdown filter batch (nil if none).
+	PushdownFilters arrow.RecordBatch
+	// Storage provides shared execution storage for cross-phase data.
+	Storage *ExecutionStorage
+}
+
+// GlobalInitResponse is returned by a function's OnInit method.
+type GlobalInitResponse struct {
+	// ExecutionID uniquely identifies this execution.
+	ExecutionID []byte
+	// MaxWorkers is the maximum number of parallel workers (0 = default/4).
+	MaxWorkers int64
+	// OpaqueData is optional data passed to secondary inits.
+	OpaqueData []byte
+}
