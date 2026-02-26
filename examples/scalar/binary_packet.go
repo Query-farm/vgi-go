@@ -33,11 +33,7 @@ func (f *BinaryPacketFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *BinaryPacketFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema([]arrow.Field{
-			{Name: "result", Type: arrow.BinaryTypes.Binary},
-		}, nil),
-	}, nil
+	return vgi.BindResult(arrow.BinaryTypes.Binary)
 }
 
 func (f *BinaryPacketFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
@@ -52,7 +48,10 @@ func (f *BinaryPacketFunction) Process(ctx context.Context, params *vgi.ProcessP
 	if err != nil {
 		return nil, err
 	}
-	structArr := configCol.(*array.Struct)
+	structArr, err := vgi.MustTyped[*array.Struct](configCol)
+	if err != nil {
+		return nil, err
+	}
 	structType := structArr.DataType().(*arrow.StructType)
 
 	var label string
@@ -66,48 +65,29 @@ func (f *BinaryPacketFunction) Process(ctx context.Context, params *vgi.ProcessP
 				label = s.Value(0)
 			}
 		case "version":
-			switch v := fieldArr.(type) {
-			case *array.Int64:
-				version = v.Value(0)
-			case *array.Int32:
-				version = int64(v.Value(0))
-			case *array.Int16:
-				version = int64(v.Value(0))
-			case *array.Int8:
-				version = int64(v.Value(0))
-			}
+			version = vgi.GetInt64Value(fieldArr, 0)
 		}
 	}
 
 	// Build suffix from config: label bytes + version as single byte
 	suffix := append([]byte(label), byte(version&0xFF))
 
-	mem := memory.NewGoAllocator()
-	payloadCol := batch.Column(0).(*array.Binary)
-	n := int(batch.NumRows())
-
-	builder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
-	defer builder.Release()
-
-	for i := 0; i < n; i++ {
-		if payloadCol.IsNull(i) {
-			// Empty payload for nulls
-			result := make([]byte, 0, len(header)+len(suffix))
-			result = append(result, header...)
-			result = append(result, suffix...)
-			builder.Append(result)
-		} else {
-			payload := payloadCol.Value(i)
+	return vgi.MapColumnCustomNulls(params, batch, 0,
+		func(mem memory.Allocator) *array.BinaryBuilder {
+			return array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+		},
+		func(col arrow.Array, i int) []byte {
+			if col.IsNull(i) {
+				result := make([]byte, 0, len(header)+len(suffix))
+				result = append(result, header...)
+				result = append(result, suffix...)
+				return result
+			}
+			payload := col.(*array.Binary).Value(i)
 			result := make([]byte, 0, len(header)+len(payload)+len(suffix))
 			result = append(result, header...)
 			result = append(result, payload...)
 			result = append(result, suffix...)
-			builder.Append(result)
-		}
-	}
-
-	resultArr := builder.NewArray()
-	defer resultArr.Release()
-
-	return array.NewRecordBatch(params.OutputSchema, []arrow.Array{resultArr}, int64(n)), nil
+			return result
+		})
 }

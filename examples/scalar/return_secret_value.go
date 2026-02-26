@@ -4,6 +4,7 @@
 package scalar
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"sort"
@@ -11,7 +12,6 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // ReturnSecretValueFunction returns a secret's value as JSON.
@@ -31,17 +31,10 @@ func (f *ReturnSecretValueFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *ReturnSecretValueFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema([]arrow.Field{
-			{Name: "result", Type: arrow.BinaryTypes.String},
-		}, nil),
-	}, nil
+	return vgi.BindResult(arrow.BinaryTypes.String)
 }
 
 func (f *ReturnSecretValueFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
-	mem := memory.NewGoAllocator()
-	n := int(batch.NumRows())
-
 	// Get the vgi_example_secret
 	var jsonStr string
 	if params.Secrets != nil {
@@ -61,17 +54,8 @@ func (f *ReturnSecretValueFunction) Process(ctx context.Context, params *vgi.Pro
 		jsonStr = "{}"
 	}
 
-	builder := array.NewStringBuilder(mem)
-	defer builder.Release()
-
-	for i := 0; i < n; i++ {
-		builder.Append(jsonStr)
-	}
-
-	resultArr := builder.NewArray()
-	defer resultArr.Release()
-
-	return array.NewRecordBatch(params.OutputSchema, []arrow.Array{resultArr}, int64(n)), nil
+	return vgi.GenerateColumn(params, batch, array.NewStringBuilder,
+		func(i int) string { return jsonStr })
 }
 
 // marshalOrderedJSON marshals a map with sorted keys for deterministic output.
@@ -82,9 +66,24 @@ func marshalOrderedJSON(m map[string]interface{}) ([]byte, error) {
 	}
 	sort.Strings(keys)
 
-	ordered := make(map[string]interface{}, len(m))
-	for _, k := range keys {
-		ordered[k] = m[k]
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		keyJSON, err := json.Marshal(k)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(keyJSON)
+		buf.WriteByte(':')
+		valJSON, err := json.Marshal(m[k])
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(valJSON)
 	}
-	return json.Marshal(ordered)
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
 }

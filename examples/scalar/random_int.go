@@ -10,7 +10,6 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // RandomIntFunction generates random integers (demonstrates VOLATILE stability).
@@ -33,38 +32,17 @@ func (f *RandomIntFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *RandomIntFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema([]arrow.Field{
-			{Name: "result", Type: arrow.PrimitiveTypes.Int64},
-		}, nil),
-	}, nil
+	return vgi.BindResult(arrow.PrimitiveTypes.Int64)
 }
 
 func (f *RandomIntFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
-	mem := memory.NewGoAllocator()
-	minCol := batch.Column(0)
-	maxCol := batch.Column(1)
-	n := int(batch.NumRows())
-
-	builder := array.NewInt64Builder(mem)
-	defer builder.Release()
-
-	for i := 0; i < n; i++ {
-		if minCol.IsNull(i) || maxCol.IsNull(i) {
-			builder.AppendNull()
-		} else {
-			minVal := getInt64Value(minCol, i)
-			maxVal := getInt64Value(maxCol, i)
+	return vgi.MapColumns(params, batch, []int{0, 1}, array.NewInt64Builder,
+		func(cols []arrow.Array, i int) int64 {
+			minVal := vgi.GetInt64Value(cols[0], i)
+			maxVal := vgi.GetInt64Value(cols[1], i)
 			if maxVal <= minVal {
-				builder.Append(minVal)
-			} else {
-				builder.Append(minVal + rand.Int63n(maxVal-minVal+1))
+				return minVal
 			}
-		}
-	}
-
-	resultArr := builder.NewArray()
-	defer resultArr.Release()
-
-	return array.NewRecordBatch(params.OutputSchema, []arrow.Array{resultArr}, int64(n)), nil
+			return minVal + rand.Int63n(maxVal-minVal+1)
+		})
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // MultiplyBySettingFunction multiplies the input value by a setting value.
@@ -33,11 +32,7 @@ func (f *MultiplyBySettingFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *MultiplyBySettingFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema([]arrow.Field{
-			{Name: "result", Type: arrow.PrimitiveTypes.Int64},
-		}, nil),
-	}, nil
+	return vgi.BindResult(arrow.PrimitiveTypes.Int64)
 }
 
 func (f *MultiplyBySettingFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
@@ -58,23 +53,8 @@ func (f *MultiplyBySettingFunction) Process(ctx context.Context, params *vgi.Pro
 		}
 	}
 
-	mem := memory.NewGoAllocator()
-	valueCol := batch.Column(0)
-	n := int(batch.NumRows())
-
-	builder := array.NewInt64Builder(mem)
-	defer builder.Release()
-
-	for i := 0; i < n; i++ {
-		if valueCol.IsNull(i) {
-			builder.AppendNull()
-		} else {
-			builder.Append(getInt64Value(valueCol, i) * multiplier)
-		}
-	}
-
-	resultArr := builder.NewArray()
-	defer resultArr.Release()
-
-	return array.NewRecordBatch(params.OutputSchema, []arrow.Array{resultArr}, int64(n)), nil
+	return vgi.MapColumn(params, batch, 0, array.NewInt64Builder,
+		func(col arrow.Array, i int) int64 {
+			return vgi.GetInt64Value(col, i) * multiplier
+		})
 }

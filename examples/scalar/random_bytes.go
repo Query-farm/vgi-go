@@ -33,11 +33,7 @@ func (f *RandomBytesFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *RandomBytesFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema([]arrow.Field{
-			{Name: "result", Type: arrow.BinaryTypes.Binary},
-		}, nil),
-	}, nil
+	return vgi.BindResult(arrow.BinaryTypes.Binary)
 }
 
 func (f *RandomBytesFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
@@ -50,24 +46,17 @@ func (f *RandomBytesFunction) Process(ctx context.Context, params *vgi.ProcessPa
 		return nil, err
 	}
 
-	mem := memory.NewGoAllocator()
-	n := int(batch.NumRows())
-
-	builder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
-	defer builder.Release()
-
 	rng := rand.New(rand.NewSource(seed))
 
-	for i := 0; i < n; i++ {
-		blob := make([]byte, byteLength)
-		for j := range blob {
-			blob[j] = byte(rng.Intn(256))
-		}
-		builder.Append(blob)
-	}
-
-	resultArr := builder.NewArray()
-	defer resultArr.Release()
-
-	return array.NewRecordBatch(params.OutputSchema, []arrow.Array{resultArr}, int64(n)), nil
+	return vgi.GenerateColumn(params, batch,
+		func(mem memory.Allocator) *array.BinaryBuilder {
+			return array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+		},
+		func(i int) []byte {
+			blob := make([]byte, byteLength)
+			for j := range blob {
+				blob[j] = byte(rng.Intn(256))
+			}
+			return blob
+		})
 }

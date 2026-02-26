@@ -10,7 +10,6 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // ConditionalMessageFunction returns a repeated message when condition is true.
@@ -34,11 +33,7 @@ func (f *ConditionalMessageFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *ConditionalMessageFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema([]arrow.Field{
-			{Name: "result", Type: arrow.BinaryTypes.String},
-		}, nil),
-	}, nil
+	return vgi.BindResult(arrow.BinaryTypes.String)
 }
 
 func (f *ConditionalMessageFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
@@ -53,25 +48,13 @@ func (f *ConditionalMessageFunction) Process(ctx context.Context, params *vgi.Pr
 
 	repeatedMessage := strings.Repeat(message, int(repeatCount))
 
-	mem := memory.NewGoAllocator()
-	condCol := batch.Column(0).(*array.Boolean)
-	n := int(batch.NumRows())
-
-	builder := array.NewStringBuilder(mem)
-	defer builder.Release()
-
-	for i := 0; i < n; i++ {
-		if condCol.IsNull(i) {
-			builder.AppendNull()
-		} else if condCol.Value(i) {
-			builder.Append(repeatedMessage)
-		} else {
-			builder.Append("")
-		}
-	}
-
-	resultArr := builder.NewArray()
-	defer resultArr.Release()
-
-	return array.NewRecordBatch(params.OutputSchema, []arrow.Array{resultArr}, int64(n)), nil
+	// Column 0 in the batch is the "condition" boolean; const params
+	// (repeat_count, message) are stripped by DuckDB before reaching Process.
+	return vgi.MapColumn(params, batch, 0, array.NewStringBuilder,
+		func(col arrow.Array, i int) string {
+			if col.(*array.Boolean).Value(i) {
+				return repeatedMessage
+			}
+			return ""
+		})
 }

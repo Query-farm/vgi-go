@@ -9,7 +9,6 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // NullHandlingFunction demonstrates special null handling.
@@ -33,31 +32,15 @@ func (f *NullHandlingFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *NullHandlingFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema([]arrow.Field{
-			{Name: "result", Type: arrow.PrimitiveTypes.Int64},
-		}, nil),
-	}, nil
+	return vgi.BindResult(arrow.PrimitiveTypes.Int64)
 }
 
 func (f *NullHandlingFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
-	mem := memory.NewGoAllocator()
-	col := batch.Column(0)
-	n := int(batch.NumRows())
-
-	builder := array.NewInt64Builder(mem)
-	defer builder.Release()
-
-	for i := 0; i < n; i++ {
-		if col.IsNull(i) {
-			builder.Append(-5000)
-		} else {
-			builder.Append(getInt64Value(col, i))
-		}
-	}
-
-	resultArr := builder.NewArray()
-	defer resultArr.Release()
-
-	return array.NewRecordBatch(params.OutputSchema, []arrow.Array{resultArr}, int64(n)), nil
+	return vgi.MapColumnCustomNulls(params, batch, 0, array.NewInt64Builder,
+		func(col arrow.Array, i int) int64 {
+			if col.IsNull(i) {
+				return -5000
+			}
+			return vgi.GetInt64Value(col, i)
+		})
 }
