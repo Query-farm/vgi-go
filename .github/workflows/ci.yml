@@ -34,13 +34,10 @@ jobs:
         run: test -z "$(gofmt -l .)"
 
       - name: Vet
-        run: go vet ./...
+        run: make vet
 
       - name: Build
-        run: go build ./...
-
-      - name: Build worker binary
-        run: go build -o vgi-example-worker-go ./cmd/vgi-example-worker
+        run: make build
 
       - name: Test
         run: go test ./...
