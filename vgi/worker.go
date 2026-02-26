@@ -147,13 +147,15 @@ func buildDefaultValueBatch(mem memory.Allocator, schema *arrow.Schema, dt arrow
 
 // Worker is the main VGI worker that hosts functions and serves RPC.
 type Worker struct {
-	scalars     map[string]ScalarFunction
-	tables      map[string]TableFunction
-	tableInOuts map[string]TableInOutFunction
-	catalogName string
-	catalog     *DefaultReadOnlyCatalog
-	storages    sync.Map // map[hex execution ID string]*ExecutionStorage
-	settings    []SettingSpec
+	scalars                map[string]ScalarFunction
+	tables                 map[string]TableFunction
+	tableInOuts            map[string]TableInOutFunction
+	catalogName            string
+	catalog                *DefaultReadOnlyCatalog
+	storages               sync.Map // map[hex execution ID string]*ExecutionStorage
+	settings               []SettingSpec
+	catalogTables          map[string][]CatalogTable // schema_name → tables
+	scanFunctionGetHandler ScanFunctionGetHandler
 }
 
 // WorkerOption configures a Worker.
@@ -176,10 +178,11 @@ func WithSettings(settings ...SettingSpec) WorkerOption {
 // NewWorker creates a new VGI worker.
 func NewWorker(opts ...WorkerOption) *Worker {
 	w := &Worker{
-		scalars:     make(map[string]ScalarFunction),
-		tables:      make(map[string]TableFunction),
-		tableInOuts: make(map[string]TableInOutFunction),
-		catalogName: "example",
+		scalars:       make(map[string]ScalarFunction),
+		tables:        make(map[string]TableFunction),
+		tableInOuts:   make(map[string]TableInOutFunction),
+		catalogTables: make(map[string][]CatalogTable),
+		catalogName:   "example",
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -200,6 +203,17 @@ func (w *Worker) RegisterTable(f TableFunction) {
 // RegisterTableInOut registers a table-in-out function.
 func (w *Worker) RegisterTableInOut(f TableInOutFunction) {
 	w.tableInOuts[f.Name()] = f
+}
+
+// RegisterCatalogTable registers a table in the given schema of the catalog.
+func (w *Worker) RegisterCatalogTable(schemaName string, table CatalogTable) {
+	w.catalogTables[schemaName] = append(w.catalogTables[schemaName], table)
+}
+
+// SetScanFunctionGetHandler sets a handler for resolving scan functions
+// for tables that are not directly backed by a registered Function.
+func (w *Worker) SetScanFunctionGetHandler(h ScanFunctionGetHandler) {
+	w.scanFunctionGetHandler = h
 }
 
 // RunStdio runs the worker serving RPC over stdin/stdout.

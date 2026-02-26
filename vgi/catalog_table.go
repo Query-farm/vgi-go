@@ -1,0 +1,206 @@
+// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
+// SPDX-License-Identifier: Apache-2.0
+
+package vgi
+
+import (
+	"bytes"
+	"fmt"
+
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
+)
+
+// CatalogTable describes a table to register in the catalog.
+type CatalogTable struct {
+	// Name is the table name visible in SQL.
+	Name string
+	// Comment is a human-readable description.
+	Comment string
+	// Columns is the explicit column schema. If nil and Function is set,
+	// columns are derived from the function's OnBind response.
+	Columns *arrow.Schema
+	// Function is the backing table function (nil for handler-only tables).
+	Function TableFunction
+	// FuncArgs are the arguments to pass when calling the backing function.
+	FuncArgs []CatalogTableArg
+	// NotNull lists column names with NOT NULL constraints.
+	NotNull []string
+	// Unique lists groups of column names for UNIQUE constraints.
+	Unique [][]string
+	// Check lists check constraint expressions.
+	Check []string
+}
+
+// CatalogTableArg describes a single argument for a function-backed table.
+type CatalogTableArg struct {
+	// Position is the 0-based positional index, or -1 for named arguments.
+	Position int
+	// Name is the argument name (for named args).
+	Name string
+	// Value is the Go value (int64, float64, string, bool, []byte).
+	Value interface{}
+	// Type is the Arrow type for serialization.
+	Type arrow.DataType
+}
+
+// ScanFunctionGetHandler is a callback for resolving table scan functions
+// that are not backed by a registered CatalogTable with a Function field.
+type ScanFunctionGetHandler func(schemaName, tableName string) (*ScanFunctionResult, error)
+
+// ScanFunctionResult describes the function to call when scanning a catalog table.
+type ScanFunctionResult struct {
+	// FunctionName is the name of the function to invoke.
+	FunctionName string
+	// PositionalArguments are the positional arguments.
+	PositionalArguments []ScanArg
+	// NamedArguments are the named arguments.
+	NamedArguments map[string]ScanArg
+	// RequiredExtensions lists DuckDB extensions that must be loaded.
+	RequiredExtensions []string
+}
+
+// ScanArg is a single argument value with its Arrow type.
+type ScanArg struct {
+	Value interface{}
+	Type  arrow.DataType
+}
+
+// scanFunctionResultSchema is the wire format for ScanFunctionResult.
+// Matches Python ScanFunctionResult.ARROW_SCHEMA.
+var scanFunctionResultSchema = arrow.NewSchema([]arrow.Field{
+	{Name: "function_name", Type: arrow.BinaryTypes.String},
+	{Name: "arguments", Type: arrow.BinaryTypes.Binary},
+	{Name: "required_extensions", Type: arrow.ListOf(arrow.BinaryTypes.String)},
+}, nil)
+
+// SerializeScanFunctionResult serializes a ScanFunctionResult to IPC bytes.
+func SerializeScanFunctionResult(result *ScanFunctionResult) ([]byte, error) {
+	mem := memory.NewGoAllocator()
+
+	// Build the arguments batch
+	argBytes, err := serializeScanArgs(mem, result.PositionalArguments, result.NamedArguments)
+	if err != nil {
+		return nil, fmt.Errorf("serializing scan arguments: %w", err)
+	}
+
+	// function_name
+	fnNameBuilder := array.NewStringBuilder(mem)
+	defer fnNameBuilder.Release()
+	fnNameBuilder.Append(result.FunctionName)
+
+	// arguments
+	argBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	defer argBuilder.Release()
+	argBuilder.Append(argBytes)
+
+	// required_extensions
+	extBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer extBuilder.Release()
+	extBuilder.Append(true)
+	if len(result.RequiredExtensions) > 0 {
+		vb := extBuilder.ValueBuilder().(*array.StringBuilder)
+		for _, ext := range result.RequiredExtensions {
+			vb.Append(ext)
+		}
+	}
+
+	cols := []arrow.Array{
+		fnNameBuilder.NewArray(),
+		argBuilder.NewArray(),
+		extBuilder.NewArray(),
+	}
+	defer func() {
+		for _, c := range cols {
+			c.Release()
+		}
+	}()
+
+	batch := array.NewRecordBatch(scanFunctionResultSchema, cols, 1)
+	defer batch.Release()
+
+	var buf bytes.Buffer
+	w := ipc.NewWriter(&buf, ipc.WithSchema(scanFunctionResultSchema))
+	if err := w.Write(batch); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// serializeScanArgs builds and serializes the nested arguments batch.
+// Positional args are named arg_0, arg_1, ...; named args use their name.
+func serializeScanArgs(mem memory.Allocator, positional []ScanArg, named map[string]ScanArg) ([]byte, error) {
+	// Count total fields
+	nFields := len(positional) + len(named)
+	if nFields == 0 {
+		// Empty arguments: serialize an empty schema
+		emptySchema := arrow.NewSchema(nil, nil)
+		return SerializeSchema(emptySchema)
+	}
+
+	fields := make([]arrow.Field, 0, nFields)
+	builders := make([]array.Builder, 0, nFields)
+
+	// Positional arguments
+	for i, arg := range positional {
+		name := fmt.Sprintf("arg_%d", i)
+		fields = append(fields, arrow.Field{Name: name, Type: arg.Type})
+		b := array.NewBuilder(mem, arg.Type)
+		appendValue(b, arg.Value)
+		builders = append(builders, b)
+	}
+
+	// Named arguments
+	for name, arg := range named {
+		fields = append(fields, arrow.Field{Name: name, Type: arg.Type})
+		b := array.NewBuilder(mem, arg.Type)
+		appendValue(b, arg.Value)
+		builders = append(builders, b)
+	}
+
+	schema := arrow.NewSchema(fields, nil)
+	cols := make([]arrow.Array, len(builders))
+	for i, b := range builders {
+		cols[i] = b.NewArray()
+		b.Release()
+	}
+	defer func() {
+		for _, c := range cols {
+			c.Release()
+		}
+	}()
+
+	batch := array.NewRecordBatch(schema, cols, 1)
+	defer batch.Release()
+
+	return SerializeRecordBatch(batch)
+}
+
+// appendValue appends a Go value to the appropriate Arrow builder.
+func appendValue(b array.Builder, val interface{}) {
+	switch v := val.(type) {
+	case bool:
+		b.(*array.BooleanBuilder).Append(v)
+	case int:
+		b.(*array.Int64Builder).Append(int64(v))
+	case int64:
+		b.(*array.Int64Builder).Append(v)
+	case int32:
+		b.(*array.Int32Builder).Append(v)
+	case float64:
+		b.(*array.Float64Builder).Append(v)
+	case float32:
+		b.(*array.Float32Builder).Append(v)
+	case string:
+		b.(*array.StringBuilder).Append(v)
+	case []byte:
+		b.(*array.BinaryBuilder).Append(v)
+	default:
+		b.AppendNull()
+	}
+}

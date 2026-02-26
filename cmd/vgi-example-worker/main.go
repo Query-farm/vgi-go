@@ -4,6 +4,8 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/Query-farm/vgi-go/examples/scalar"
 	"github.com/Query-farm/vgi-go/examples/table"
 	table_in_out "github.com/Query-farm/vgi-go/examples/table_in_out"
@@ -71,6 +73,40 @@ func main() {
 	w.RegisterTableInOut(table_in_out.NewExceptionProcessFunction())
 	w.RegisterTableInOut(table_in_out.NewRepeatInputsFunction())
 	w.RegisterTableInOut(table_in_out.NewSumAllColumnsFunction())
+
+	// Catalog tables
+
+	// Function-backed table: columns derived from sequence's OnBind
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:     "large_sequence",
+		Comment:  "A large sequence of integers from 0 to 1,000,000",
+		Function: table.NewSequenceFunction(),
+		FuncArgs: []vgi.CatalogTableArg{
+			{Position: 0, Value: int64(1_000_000), Type: arrow.PrimitiveTypes.Int64},
+		},
+	})
+
+	// Explicit-columns table: uses scan function handler below
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "numbers",
+		Comment: "First 100 integers (demonstrates explicit columns)",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "value", Type: arrow.PrimitiveTypes.Int64},
+		}, nil),
+	})
+
+	// Handler for tables without a backing Function
+	w.SetScanFunctionGetHandler(func(schemaName, tableName string) (*vgi.ScanFunctionResult, error) {
+		if schemaName == "data" && tableName == "numbers" {
+			return &vgi.ScanFunctionResult{
+				FunctionName: "sequence",
+				PositionalArguments: []vgi.ScanArg{
+					{Value: int64(100), Type: arrow.PrimitiveTypes.Int64},
+				},
+			}, nil
+		}
+		return nil, fmt.Errorf("no scan function for %s.%s", schemaName, tableName)
+	})
 
 	w.RunStdio()
 }

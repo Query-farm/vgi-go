@@ -9,6 +9,8 @@ import (
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // ---------------------------------------------------------------------------
@@ -161,8 +163,12 @@ type TableScanFunctionGetRequestWire struct {
 }
 
 // TableScanFunctionGetResponseWire wraps the scan function result.
+// Fields are serialized directly (not wrapped in a binary "result" column)
+// so the C++ extension's ExtractAndDeserializeResult can find them.
 type TableScanFunctionGetResponseWire struct {
-	Result []byte `vgirpc:"result"`
+	FunctionName       string   `vgirpc:"function_name"`
+	Arguments          []byte   `vgirpc:"arguments"`
+	RequiredExtensions []string `vgirpc:"required_extensions"`
 }
 
 // TableCommentSetRequestWire is for catalog_table_comment_set.
@@ -335,6 +341,7 @@ type DefaultReadOnlyCatalog struct {
 type catalogSchemaInfo struct {
 	info      *SchemaInfo
 	functions []FunctionInfo
+	tables    []CatalogTable
 }
 
 // NewDefaultReadOnlyCatalog creates a catalog from registered functions.
@@ -420,6 +427,21 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		},
 	}
 	cat.schemas["data"] = dataSchema
+
+	// Populate catalog tables from worker registrations
+	for schemaName, tables := range w.catalogTables {
+		si, ok := cat.schemas[schemaName]
+		if !ok {
+			si = &catalogSchemaInfo{
+				info: &SchemaInfo{
+					Name:    schemaName,
+					Comment: schemaName + " schema",
+				},
+			}
+			cat.schemas[schemaName] = si
+		}
+		si.tables = append(si.tables, tables...)
+	}
 
 	return cat
 }
@@ -571,7 +593,22 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_contents_tables
 	vgirpc.Unary[SchemaContentsRequestWire, ItemsResponseWire](s, "catalog_schema_contents_tables",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsRequestWire) (ItemsResponseWire, error) {
-			return ItemsResponseWire{Items: [][]byte{}}, nil
+			if w.catalog == nil {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			si, ok := w.catalog.schemas[req.Name]
+			if !ok || len(si.tables) == 0 {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			var items [][]byte
+			for i := range si.tables {
+				data, err := w.serializeCatalogTable(req.Name, &si.tables[i])
+				if err != nil {
+					return ItemsResponseWire{}, err
+				}
+				items = append(items, data)
+			}
+			return ItemsResponseWire{Items: items}, nil
 		})
 
 	// catalog_schema_contents_views
@@ -620,6 +657,22 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_get
 	vgirpc.Unary[TableGetRequestWire, ItemsResponseWire](s, "catalog_table_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableGetRequestWire) (ItemsResponseWire, error) {
+			if w.catalog == nil {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			si, ok := w.catalog.schemas[req.SchemaName]
+			if !ok {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			for i := range si.tables {
+				if si.tables[i].Name == req.Name {
+					data, err := w.serializeCatalogTable(req.SchemaName, &si.tables[i])
+					if err != nil {
+						return ItemsResponseWire{}, err
+					}
+					return ItemsResponseWire{Items: [][]byte{data}}, nil
+				}
+			}
 			return ItemsResponseWire{Items: [][]byte{}}, nil
 		})
 
@@ -638,9 +691,35 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_scan_function_get
 	vgirpc.Unary[TableScanFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_scan_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableScanFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
+			debugLog("catalog_table_scan_function_get: schema=%q table=%q", req.SchemaName, req.Name)
+
+			// Check for a registered catalog table with a backing function
+			if w.catalog != nil {
+				if si, ok := w.catalog.schemas[req.SchemaName]; ok {
+					for i := range si.tables {
+						if si.tables[i].Name == req.Name && si.tables[i].Function != nil {
+							result := w.buildScanResultFromTable(&si.tables[i])
+							return buildScanFunctionGetResponse(result)
+						}
+					}
+				}
+			}
+
+			// Delegate to the handler if set
+			if w.scanFunctionGetHandler != nil {
+				result, err := w.scanFunctionGetHandler(req.SchemaName, req.Name)
+				if err != nil {
+					return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{
+						Type:    "ValueError",
+						Message: err.Error(),
+					}
+				}
+				return buildScanFunctionGetResponse(result)
+			}
+
 			return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{
 				Type:    "NotImplementedError",
-				Message: "table_scan_function_get not implemented",
+				Message: fmt.Sprintf("table_scan_function_get not implemented for %s.%s", req.SchemaName, req.Name),
 			}
 		})
 
@@ -745,4 +824,130 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogDropRequestWire) error {
 			return readOnlyErr("catalog_drop")
 		})
+}
+
+// serializeCatalogTable converts a CatalogTable into serialized TableInfo bytes.
+func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]byte, error) {
+	// Resolve columns: if Function is set but Columns is nil, derive via OnBind
+	columns := ct.Columns
+	if columns == nil && ct.Function != nil {
+		bindParams := &BindParams{
+			FunctionName: ct.Function.Name(),
+			FunctionType: FunctionTypeTable,
+			Args:         w.buildBindArgs(ct),
+		}
+		resp, err := ct.Function.OnBind(bindParams)
+		if err != nil {
+			return nil, fmt.Errorf("resolving columns for table %s via OnBind: %w", ct.Name, err)
+		}
+		columns = resp.OutputSchema
+	}
+
+	// Resolve NOT NULL constraint indices from column names
+	var notNull []int32
+	if columns != nil {
+		for _, colName := range ct.NotNull {
+			for i := 0; i < columns.NumFields(); i++ {
+				if columns.Field(i).Name == colName {
+					notNull = append(notNull, int32(i))
+					break
+				}
+			}
+		}
+	}
+
+	// Resolve UNIQUE constraint indices from column name groups
+	var unique [][]int32
+	if columns != nil {
+		for _, group := range ct.Unique {
+			var indices []int32
+			for _, colName := range group {
+				for i := 0; i < columns.NumFields(); i++ {
+					if columns.Field(i).Name == colName {
+						indices = append(indices, int32(i))
+						break
+					}
+				}
+			}
+			unique = append(unique, indices)
+		}
+	}
+
+	info := &TableInfo{
+		Name:               ct.Name,
+		SchemaName:         schemaName,
+		Comment:            ct.Comment,
+		Columns:            columns,
+		NotNullConstraints: notNull,
+		UniqueConstraints:  unique,
+		CheckConstraints:   ct.Check,
+	}
+
+	return SerializeTableInfo(info)
+}
+
+// buildScanResultFromTable creates a ScanFunctionResult from a function-backed CatalogTable.
+func (w *Worker) buildScanResultFromTable(ct *CatalogTable) *ScanFunctionResult {
+	result := &ScanFunctionResult{
+		FunctionName: ct.Function.Name(),
+	}
+
+	for _, arg := range ct.FuncArgs {
+		sa := ScanArg{Value: arg.Value, Type: arg.Type}
+		if arg.Position >= 0 {
+			// Grow slice if needed
+			for len(result.PositionalArguments) <= arg.Position {
+				result.PositionalArguments = append(result.PositionalArguments, ScanArg{})
+			}
+			result.PositionalArguments[arg.Position] = sa
+		} else {
+			if result.NamedArguments == nil {
+				result.NamedArguments = make(map[string]ScanArg)
+			}
+			result.NamedArguments[arg.Name] = sa
+		}
+	}
+
+	return result
+}
+
+// buildScanFunctionGetResponse converts a ScanFunctionResult to the wire response.
+func buildScanFunctionGetResponse(result *ScanFunctionResult) (TableScanFunctionGetResponseWire, error) {
+	mem := memory.NewGoAllocator()
+	argBytes, err := serializeScanArgs(mem, result.PositionalArguments, result.NamedArguments)
+	if err != nil {
+		return TableScanFunctionGetResponseWire{}, fmt.Errorf("serializing scan arguments: %w", err)
+	}
+	return TableScanFunctionGetResponseWire{
+		FunctionName:       result.FunctionName,
+		Arguments:          argBytes,
+		RequiredExtensions: result.RequiredExtensions,
+	}, nil
+}
+
+// buildBindArgs creates an Arguments struct from CatalogTable.FuncArgs
+// for use in OnBind calls to derive output schemas.
+func (w *Worker) buildBindArgs(ct *CatalogTable) *Arguments {
+	mem := memory.NewGoAllocator()
+	args := &Arguments{
+		Named: make(map[string]arrow.Array),
+	}
+
+	for _, arg := range ct.FuncArgs {
+		b := array.NewBuilder(mem, arg.Type)
+		appendValue(b, arg.Value)
+		arr := b.NewArray()
+		b.Release()
+
+		if arg.Position >= 0 {
+			for len(args.Positional) <= arg.Position {
+				args.Positional = append(args.Positional, nil)
+			}
+			args.Positional[arg.Position] = arr
+		} else {
+			args.Named[arg.Name] = arr
+		}
+	}
+
+	return args
 }
