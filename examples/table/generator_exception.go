@@ -23,12 +23,13 @@ func (f *GeneratorExceptionFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Raises an exception after N batches for testing",
 		Stability:   vgi.StabilityConsistent,
+		Categories:  []string{"testing"},
 	}
 }
 
 func (f *GeneratorExceptionFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "fail_after", Position: 0, ArrowType: "int64", Doc: "Number of batches before failure"},
+		{Name: "fail_after", Position: 0, ArrowType: "int64", Doc: "Number of batches before failure", IsConst: true},
 	}
 }
 

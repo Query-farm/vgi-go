@@ -29,7 +29,7 @@ func (f *SettingsAwareFunction) Metadata() vgi.FunctionMetadata {
 
 func (f *SettingsAwareFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate"},
+		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
 	}
 }
 

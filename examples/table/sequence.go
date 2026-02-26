@@ -20,15 +20,16 @@ func (f *SequenceFunction) Name() string { return "sequence" }
 
 func (f *SequenceFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description:       "Generates a sequence of integers from 0 to n-1",
-		Stability:         vgi.StabilityConsistent,
+		Description:        "Generates a sequence of integers from 0 to n-1",
+		Stability:          vgi.StabilityConsistent,
 		ProjectionPushdown: true,
+		Categories:         []string{"generator", "utility"},
 	}
 }
 
 func (f *SequenceFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of integers to generate"},
+		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of integers to generate", IsConst: true},
 		{Name: "batch_size", Position: -1, ArrowType: "int64", Doc: "Batch size for output", HasDefault: true, DefaultValue: "1000", IsConst: true},
 		{Name: "increment", Position: -1, ArrowType: "int64", Doc: "Step between values", HasDefault: true, DefaultValue: "1", IsConst: true},
 	}

@@ -23,6 +23,7 @@ func (f *ReturnSecretValueFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Return a secret's value",
 		Stability:   vgi.StabilityConsistent,
+		ReturnType:  arrow.BinaryTypes.String,
 	}
 }
 

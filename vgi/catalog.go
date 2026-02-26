@@ -362,6 +362,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			Stability:    meta.Stability,
 			NullHandling: meta.NullHandling,
 			Description:  meta.Description,
+			Categories:   meta.Categories,
 			ArgSchema:    BuildArgSchema(specs),
 			OutputSchema: arrow.NewSchema(nil, nil), // empty, resolved at bind time
 		}
@@ -377,8 +378,8 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 	}
 
 	// Scalar functions need a 1-field output schema for DuckDB.
-	// Use null type with vgi:any metadata (resolved at bind time).
-	scalarOutputSchema := arrow.NewSchema([]arrow.Field{
+	// Use the concrete return type if declared, otherwise null with vgi:any metadata.
+	dynamicOutputSchema := arrow.NewSchema([]arrow.Field{
 		{Name: "result", Type: arrow.Null, Metadata: arrow.NewMetadata(
 			[]string{"vgi:any"}, []string{"true"},
 		)},
@@ -387,7 +388,13 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 	for name, fn := range w.scalars {
 		meta := fn.Metadata()
 		fi := buildFunctionInfo(name, FunctionTypeScalar, meta, fn.ArgumentSpecs())
-		fi.OutputSchema = scalarOutputSchema
+		if meta.ReturnType != nil {
+			fi.OutputSchema = arrow.NewSchema([]arrow.Field{
+				{Name: "result", Type: meta.ReturnType},
+			}, nil)
+		} else {
+			fi.OutputSchema = dynamicOutputSchema
+		}
 		mainSchema.functions = append(mainSchema.functions, fi)
 	}
 

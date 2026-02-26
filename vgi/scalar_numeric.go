@@ -90,3 +90,33 @@ func NumericTypeSize(dt arrow.DataType) int {
 		return 0
 	}
 }
+
+// IsDecimalType checks if an Arrow type is a decimal type.
+func IsDecimalType(dt arrow.DataType) bool {
+	switch dt.ID() {
+	case arrow.DECIMAL32, arrow.DECIMAL64, arrow.DECIMAL128, arrow.DECIMAL256:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsTemporalType checks if an Arrow type is a temporal type
+// (date, time, timestamp, duration, or interval).
+func IsTemporalType(dt arrow.DataType) bool {
+	switch dt.ID() {
+	case arrow.DATE32, arrow.DATE64,
+		arrow.TIME32, arrow.TIME64,
+		arrow.TIMESTAMP, arrow.DURATION,
+		arrow.INTERVAL_MONTHS, arrow.INTERVAL_DAY_TIME, arrow.INTERVAL_MONTH_DAY_NANO:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsAddableType checks if an Arrow type supports addition operations.
+// Matches Python's _is_addable_type: integer, floating, decimal, or temporal.
+func IsAddableType(dt arrow.DataType) bool {
+	return IsIntegerType(dt) || IsFloatingType(dt) || IsDecimalType(dt) || IsTemporalType(dt)
+}

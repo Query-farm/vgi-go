@@ -28,7 +28,7 @@ func (f *LoggingGeneratorFunction) Metadata() vgi.FunctionMetadata {
 
 func (f *LoggingGeneratorFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of values to generate"},
+		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of values to generate", IsConst: true},
 	}
 }
 

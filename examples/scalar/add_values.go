@@ -24,8 +24,8 @@ func (f *AddValuesFunction) Metadata() vgi.FunctionMetadata {
 
 func (f *AddValuesFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "col1", Position: 0, ArrowType: "any", Doc: "First numeric value"},
-		{Name: "col2", Position: 1, ArrowType: "any", Doc: "Second numeric value"},
+		{Name: "col1", Position: 0, ArrowType: "any", Doc: "First numeric value", TypeBound: []vgi.TypeBoundPredicate{vgi.IsAddableType}},
+		{Name: "col2", Position: 1, ArrowType: "any", Doc: "Second numeric value", TypeBound: []vgi.TypeBoundPredicate{vgi.IsAddableType}},
 	}
 }
 

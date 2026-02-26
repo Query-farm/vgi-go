@@ -22,6 +22,7 @@ func (f *MultiplyBySettingFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Multiply the input value by a setting value",
 		Stability:   vgi.StabilityConsistent,
+		ReturnType:  arrow.PrimitiveTypes.Int64,
 	}
 }
 

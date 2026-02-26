@@ -118,7 +118,12 @@ func BuildArgSchema(specs []ArgSpec) *arrow.Schema {
 
 	fields := make([]arrow.Field, len(specs))
 	for i, spec := range specs {
-		arrowType := argTypeToArrowType(spec.ArrowType)
+		var arrowType arrow.DataType
+		if spec.ArrowDataType != nil {
+			arrowType = spec.ArrowDataType
+		} else {
+			arrowType = argTypeToArrowType(spec.ArrowType)
+		}
 		meta := make(map[string]string)
 
 		// Named argument marker
@@ -126,22 +131,23 @@ func BuildArgSchema(specs []ArgSpec) *arrow.Schema {
 			meta["vgi_arg"] = "named"
 		}
 
-		// Type markers: non-const column params are always "any" in the catalog.
-		// DuckDB resolves actual types at bind time via input_schema.
-		// Const params with concrete types (int64, varchar, etc.) keep their
-		// specific types for DuckDB validation. Const params with complex/dynamic
-		// types (struct, any) must also be "any" since Go can't express
-		// parameterized types (e.g., STRUCT(label VARCHAR, version BIGINT)).
+		// Type markers:
+		// - Non-const "any"/"" params: vgi_type="any", arrow type = null placeholder
+		// - Non-const "table" params: vgi_type="table"
+		// - Non-const concrete-typed params: keep their Arrow type, no vgi_type metadata
+		// - Const params with complex/dynamic types (struct, any, ""): vgi_type="any"
 		if !spec.IsConst {
 			switch spec.ArrowType {
 			case "table":
 				meta["vgi_type"] = "table"
-			default:
+			case "any", "":
 				meta["vgi_type"] = "any"
 				arrowType = arrow.Null // placeholder for any/flexible type
+			default:
+				// Concrete-typed non-const params keep their Arrow type.
 			}
-		} else if spec.ArrowType == "struct" || spec.ArrowType == "any" || spec.ArrowType == "" {
-			// Const params with complex/dynamic types need "any" marker
+		} else if spec.ArrowDataType == nil && (spec.ArrowType == "struct" || spec.ArrowType == "any" || spec.ArrowType == "") {
+			// Const params with complex/dynamic types (without explicit ArrowDataType) need "any" marker
 			meta["vgi_type"] = "any"
 			arrowType = arrow.Null
 		}
@@ -295,4 +301,57 @@ func extractScalarValue(col arrow.Array, idx int) interface{} {
 	default:
 		return fmt.Sprintf("%v", col)
 	}
+}
+
+// ValidateTypeBounds validates that the input schema field types satisfy
+// the TypeBound predicates declared on each ArgSpec.
+// For each non-const ArgSpec with ArrowType "any" and non-nil TypeBound,
+// the corresponding input schema field must satisfy at least one predicate
+// (OR logic). For varargs, all fields from the spec's position onward are validated.
+func ValidateTypeBounds(specs []ArgSpec, inputSchema *arrow.Schema) error {
+	if inputSchema == nil {
+		return nil
+	}
+	for _, spec := range specs {
+		if spec.IsConst || len(spec.TypeBound) == 0 || spec.ArrowType != "any" {
+			continue
+		}
+		if spec.Position < 0 {
+			continue
+		}
+		if spec.IsVarargs {
+			for i := spec.Position; i < inputSchema.NumFields(); i++ {
+				fieldType := inputSchema.Field(i).Type
+				if !matchesAnyBound(fieldType, spec.TypeBound) {
+					return &TypeBoundError{
+						ArgName:   spec.Name,
+						Position:  i,
+						FieldType: fieldType,
+					}
+				}
+			}
+		} else {
+			if spec.Position >= inputSchema.NumFields() {
+				continue
+			}
+			fieldType := inputSchema.Field(spec.Position).Type
+			if !matchesAnyBound(fieldType, spec.TypeBound) {
+				return &TypeBoundError{
+					ArgName:   spec.Name,
+					Position:  spec.Position,
+					FieldType: fieldType,
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func matchesAnyBound(fieldType arrow.DataType, bounds []TypeBoundPredicate) bool {
+	for _, pred := range bounds {
+		if pred(fieldType) {
+			return true
+		}
+	}
+	return false
 }

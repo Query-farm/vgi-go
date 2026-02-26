@@ -24,7 +24,7 @@ func (f *SumValuesFunction) Metadata() vgi.FunctionMetadata {
 
 func (f *SumValuesFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "values", Position: 0, ArrowType: "any", Doc: "Numeric values to sum", IsVarargs: true},
+		{Name: "values", Position: 0, ArrowType: "any", Doc: "Numeric values to sum", IsVarargs: true, TypeBound: []vgi.TypeBoundPredicate{vgi.IsAddableType}},
 	}
 }
 

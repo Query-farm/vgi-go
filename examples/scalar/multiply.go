@@ -20,6 +20,7 @@ func (f *MultiplyFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Multiplies a value by a constant factor",
 		Stability:   vgi.StabilityConsistent,
+		ReturnType:  arrow.PrimitiveTypes.Int64,
 	}
 }
 

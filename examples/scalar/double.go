@@ -24,7 +24,7 @@ func (f *DoubleFunction) Metadata() vgi.FunctionMetadata {
 
 func (f *DoubleFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "any", Doc: "Numeric value to double"},
+		{Name: "value", Position: 0, ArrowType: "any", Doc: "Numeric value to double", TypeBound: []vgi.TypeBoundPredicate{vgi.IsAddableType}},
 	}
 }
 

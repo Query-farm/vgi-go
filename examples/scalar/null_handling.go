@@ -22,6 +22,7 @@ func (f *NullHandlingFunction) Metadata() vgi.FunctionMetadata {
 		Description:  "Returns value or -5000 if null",
 		Stability:    vgi.StabilityConsistent,
 		NullHandling: vgi.NullHandlingSpecial,
+		ReturnType:   arrow.PrimitiveTypes.Int64,
 	}
 }
 

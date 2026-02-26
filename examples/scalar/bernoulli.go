@@ -21,6 +21,7 @@ func (f *BernoulliFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Generate random booleans (demonstrates VOLATILE stability)",
 		Stability:   vgi.StabilityVolatile,
+		ReturnType:  arrow.FixedWidthTypes.Boolean,
 	}
 }
 

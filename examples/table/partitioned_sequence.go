@@ -33,7 +33,7 @@ func (f *PartitionedSequenceFunction) Metadata() vgi.FunctionMetadata {
 
 func (f *PartitionedSequenceFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Total number of integers to generate"},
+		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Total number of integers to generate", IsConst: true},
 		{Name: "increment", Position: -1, ArrowType: "int64", Doc: "Step between values", HasDefault: true, DefaultValue: "1", IsConst: true},
 	}
 }

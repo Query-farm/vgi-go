@@ -21,6 +21,7 @@ func (f *RandomIntFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Generate random integers (demonstrates VOLATILE stability)",
 		Stability:   vgi.StabilityVolatile,
+		ReturnType:  arrow.PrimitiveTypes.Int64,
 	}
 }
 

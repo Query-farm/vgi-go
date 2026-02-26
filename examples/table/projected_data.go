@@ -36,7 +36,7 @@ func (f *ProjectedDataFunction) Metadata() vgi.FunctionMetadata {
 
 func (f *ProjectedDataFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate"},
+		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
 	}
 }
 

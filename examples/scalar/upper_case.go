@@ -21,6 +21,7 @@ func (f *UpperCaseFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Converts string values to uppercase",
 		Stability:   vgi.StabilityConsistent,
+		ReturnType:  arrow.BinaryTypes.String,
 	}
 }
 

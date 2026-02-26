@@ -24,6 +24,7 @@ type FunctionInfo struct {
 	Description        string
 	Comment            string
 	Tags               map[string]string
+	Categories         []string
 	ProjectionPushdown *bool
 	FilterPushdown     *bool
 }
@@ -152,10 +153,16 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	defer examplesBuilder.Release()
 	examplesBuilder.Append(true) // non-null empty list
 
-	// categories (empty list)
+	// categories
 	categoriesBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
 	defer categoriesBuilder.Release()
-	categoriesBuilder.Append(true) // non-null empty list
+	categoriesBuilder.Append(true)
+	if len(info.Categories) > 0 {
+		vb := categoriesBuilder.ValueBuilder().(*array.StringBuilder)
+		for _, cat := range info.Categories {
+			vb.Append(cat)
+		}
+	}
 
 	// projection_pushdown
 	ppBuilder := array.NewBooleanBuilder(mem)

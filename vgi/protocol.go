@@ -137,7 +137,14 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 	debugLog("handleBind: resolved function %q as %T", req.FunctionName, fn)
 
 	// Remap positional args to original ArgSpec positions
-	bindParams.Args.RemapPositionalArgs(w.getArgSpecs(fn))
+	argSpecs := w.getArgSpecs(fn)
+	bindParams.Args.RemapPositionalArgs(argSpecs)
+
+	// Validate type bounds against input schema before calling OnBind
+	if err := ValidateTypeBounds(argSpecs, bindParams.InputSchema); err != nil {
+		debugLog("handleBind: type bound validation error: %v", err)
+		return BindResponseWire{}, err
+	}
 
 	var bindResp *BindResponse
 

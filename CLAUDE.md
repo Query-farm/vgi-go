@@ -28,7 +28,9 @@ cd ../vgi && VGI_TEST_WORKER=$(pwd)/../vgi-go/vgi-example-worker-go ./build/rele
 cd ../vgi && VGI_TEST_WORKER=$(pwd)/../vgi-go/vgi-example-worker-go ./build/release/test/unittest "test/sql/integration/scalar/add_values.test"
 ```
 
-Always rebuild the worker before running tests. Use the release build (`./build/release/`) by default.
+Always rebuild the worker before running tests. Use the release build (`./build/release/`) by default. Always supply the full path of the VGI worker binary when testing.
+
+Tests use the DuckDB sqllogictest format. Refer to the documentation at https://duckdb.org/docs/stable/dev/sqllogictest/intro when debugging test files.
 
 ## Dependencies
 

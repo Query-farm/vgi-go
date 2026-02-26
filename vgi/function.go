@@ -3,6 +3,13 @@
 
 package vgi
 
+import "github.com/apache/arrow-go/v18/arrow"
+
+// TypeBoundPredicate is a function that validates whether an Arrow DataType
+// is acceptable for a given argument. Used with ArgSpec.TypeBound to constrain
+// "any"-typed arguments to specific type families (e.g., numeric types only).
+type TypeBoundPredicate func(arrow.DataType) bool
+
 // FunctionType identifies the kind of VGI function.
 type FunctionType string
 
@@ -43,6 +50,12 @@ type FunctionMetadata struct {
 	FilterPushdown bool
 	// AutoApplyFilters indicates the framework should auto-apply pushdown filters.
 	AutoApplyFilters bool
+	// Categories is a list of classification tags for the function.
+	Categories []string
+	// ReturnType is the static return type for scalar functions.
+	// When set, the catalog registers this concrete type instead of ANY.
+	// Leave nil for functions with dynamic return types (resolved at bind time).
+	ReturnType arrow.DataType
 }
 
 // DefaultMetadata returns metadata with default values.
@@ -71,4 +84,13 @@ type ArgSpec struct {
 	HasDefault bool
 	// DefaultValue is the string representation of the default.
 	DefaultValue string
+	// ArrowDataType is an optional concrete Arrow DataType for the argument.
+	// When set, it takes precedence over ArrowType for schema building.
+	// Use this for complex types like structs where the string representation
+	// is insufficient (e.g., arrow.StructOf(...) for typed struct params).
+	ArrowDataType arrow.DataType
+	// TypeBound is an optional slice of type predicates for "any"-typed arguments.
+	// At bind time, the input schema field type must satisfy at least one predicate
+	// (OR logic). Nil means no type constraint (any type is accepted).
+	TypeBound []TypeBoundPredicate
 }

@@ -21,6 +21,7 @@ func (f *ConditionalMessageFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Returns repeated message when condition is true",
 		Stability:   vgi.StabilityConsistent,
+		ReturnType:  arrow.BinaryTypes.String,
 	}
 }
 

@@ -27,7 +27,7 @@ func (f *DoubleSequenceFunction) Metadata() vgi.FunctionMetadata {
 
 func (f *DoubleSequenceFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of values to generate"},
+		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of values to generate", IsConst: true},
 		{Name: "batch_size", Position: -1, ArrowType: "int64", Doc: "Batch size for output", HasDefault: true, DefaultValue: "1000", IsConst: true},
 		{Name: "increment", Position: -1, ArrowType: "double", Doc: "Step between values", HasDefault: true, DefaultValue: "1.0", IsConst: true},
 	}

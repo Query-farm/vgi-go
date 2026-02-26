@@ -21,6 +21,7 @@ func (f *BinaryPacketFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Build binary packets with header, payload, and config",
 		Stability:   vgi.StabilityConsistent,
+		ReturnType:  arrow.BinaryTypes.Binary,
 	}
 }
 
@@ -28,7 +29,11 @@ func (f *BinaryPacketFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
 		{Name: "header", Position: 0, ArrowType: "blob", Doc: "Header bytes to prepend", IsConst: true},
 		{Name: "payload", Position: 1, ArrowType: "blob", Doc: "Binary payload data"},
-		{Name: "config", Position: 2, ArrowType: "struct", Doc: "Config {label, version}", IsConst: true},
+		{Name: "config", Position: 2, ArrowType: "struct", Doc: "Config {label, version}", IsConst: true,
+			ArrowDataType: arrow.StructOf(
+				arrow.Field{Name: "label", Type: arrow.BinaryTypes.String},
+				arrow.Field{Name: "version", Type: arrow.PrimitiveTypes.Int64},
+			)},
 	}
 }
 

@@ -22,6 +22,7 @@ func (f *RandomBytesFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Generate pseudo-random binary blobs from seed and length",
 		Stability:   vgi.StabilityConsistent,
+		ReturnType:  arrow.BinaryTypes.Binary,
 	}
 }
 

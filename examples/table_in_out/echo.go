@@ -18,9 +18,10 @@ func (f *EchoFunction) Name() string { return "echo" }
 
 func (f *EchoFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description:       "Passthrough function that emits each input batch unchanged",
-		Stability:         vgi.StabilityConsistent,
+		Description:        "Passthrough function that emits each input batch unchanged",
+		Stability:          vgi.StabilityConsistent,
 		ProjectionPushdown: true,
+		Categories:         []string{"utility", "debug"},
 	}
 }
 

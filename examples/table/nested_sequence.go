@@ -38,7 +38,7 @@ func (f *NestedSequenceFunction) Metadata() vgi.FunctionMetadata {
 
 func (f *NestedSequenceFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate"},
+		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
 		{Name: "batch_size", Position: -1, ArrowType: "int64", Doc: "Batch size for output", HasDefault: true, DefaultValue: "1000", IsConst: true},
 		{Name: "history_size", Position: -1, ArrowType: "int64", Doc: "Max items in history list", HasDefault: true, DefaultValue: "20", IsConst: true},
 	}
