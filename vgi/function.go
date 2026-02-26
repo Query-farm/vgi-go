@@ -29,11 +29,21 @@ const (
 )
 
 // NullHandling describes how the function handles NULL inputs.
+// These values are DuckDB wire-protocol constants and must not be changed.
 type NullHandling string
 
 const (
+	// NullHandlingDefault tells DuckDB to skip calling the function for NULL
+	// inputs and return NULL automatically (standard SQL behaviour).
 	NullHandlingDefault NullHandling = "DEFAULT"
+
+	// NullHandlingSpecial tells DuckDB to pass NULL values through to the
+	// function, letting it decide what to return. Use this when the function
+	// needs to distinguish NULL from non-NULL inputs.
 	NullHandlingSpecial NullHandling = "SPECIAL"
+
+	// NullHandlingReceiveNulls is a Go-friendly alias for NullHandlingSpecial.
+	NullHandlingReceiveNulls = NullHandlingSpecial
 )
 
 // FunctionMetadata holds descriptive metadata about a function.

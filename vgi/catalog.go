@@ -14,6 +14,9 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
+// SerializedItems is a list of Arrow-IPC-encoded items sent over the wire.
+type SerializedItems = [][]byte
+
 // ---------------------------------------------------------------------------
 // Catalog wire types
 // ---------------------------------------------------------------------------
@@ -31,14 +34,14 @@ type CatalogAttachRequestWire struct {
 
 // CatalogAttachResultWire is the wire type for catalog_attach result.
 type CatalogAttachResultWire struct {
-	AttachID             []byte   `vgirpc:"attach_id"`
-	SupportsTransactions bool     `vgirpc:"supports_transactions"`
-	SupportsTimeTravel   bool     `vgirpc:"supports_time_travel"`
-	CatalogVersionFrozen bool     `vgirpc:"catalog_version_frozen"`
-	CatalogVersion       int64    `vgirpc:"catalog_version"`
-	AttachIDRequired     bool     `vgirpc:"attach_id_required"`
-	DefaultSchema        string   `vgirpc:"default_schema"`
-	Settings             [][]byte `vgirpc:"settings"`
+	AttachID             []byte          `vgirpc:"attach_id"`
+	SupportsTransactions bool            `vgirpc:"supports_transactions"`
+	SupportsTimeTravel   bool            `vgirpc:"supports_time_travel"`
+	CatalogVersionFrozen bool            `vgirpc:"catalog_version_frozen"`
+	CatalogVersion       int64           `vgirpc:"catalog_version"`
+	AttachIDRequired     bool            `vgirpc:"attach_id_required"`
+	DefaultSchema        string          `vgirpc:"default_schema"`
+	Settings             SerializedItems `vgirpc:"settings"`
 }
 
 // CatalogVersionRequestWire is the wire type for catalog_version.
@@ -82,7 +85,7 @@ type SchemaContentsFunctionsRequestWire struct {
 
 // ItemsResponseWire wraps a list of serialized items (schemas/tables/views/functions).
 type ItemsResponseWire struct {
-	Items [][]byte `vgirpc:"items"`
+	Items SerializedItems `vgirpc:"items"`
 }
 
 // DetachRequestWire is the wire type for catalog_detach.
