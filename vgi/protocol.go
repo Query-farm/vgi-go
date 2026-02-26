@@ -80,23 +80,35 @@ func (s *ScalarExchangeState) Exchange(ctx context.Context, input arrow.RecordBa
 
 // TableProducerState implements ProducerState for table functions.
 type TableProducerState struct {
-	fn    TableFunction
-	params *ProcessParams
-	state interface{}
+	fn        TableFunction
+	params    *ProcessParams
+	state     interface{}
+	autoApply *PushdownFilters
 }
 
 func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
+	if s.autoApply != nil {
+		out.EmitInterceptor = func(batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+			return s.autoApply.Apply(ctx, batch)
+		}
+	}
 	return s.fn.Process(ctx, s.params, s.state, out)
 }
 
 // TableInOutExchangeState implements ExchangeState for table-in-out INPUT phase.
 type TableInOutExchangeState struct {
-	fn     TableInOutFunction
-	params *ProcessParams
-	state  interface{}
+	fn        TableInOutFunction
+	params    *ProcessParams
+	state     interface{}
+	autoApply *PushdownFilters
 }
 
 func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
+	if s.autoApply != nil {
+		out.EmitInterceptor = func(batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+			return s.autoApply.Apply(ctx, batch)
+		}
+	}
 	return s.fn.Process(ctx, s.params, s.state, input, out)
 }
 
@@ -381,6 +393,14 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 		state:  userState,
 	}
 
+	// Set up auto-apply if the function opts in and filters are present
+	if fn.Metadata().AutoApplyFilters && processParams.PushdownFilters != nil {
+		parsed, err := DeserializeFilters(processParams.PushdownFilters)
+		if err == nil && len(parsed.Filters) > 0 {
+			state.autoApply = parsed
+		}
+	}
+
 	return &vgirpc.StreamResult{
 		OutputSchema: outputSchema,
 		State:        state,
@@ -463,6 +483,14 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 		fn:     fn,
 		params: processParams,
 		state:  userState,
+	}
+
+	// Set up auto-apply if the function opts in and filters are present
+	if fn.Metadata().AutoApplyFilters && processParams.PushdownFilters != nil {
+		parsed, err := DeserializeFilters(processParams.PushdownFilters)
+		if err == nil && len(parsed.Filters) > 0 {
+			state.autoApply = parsed
+		}
 	}
 
 	return &vgirpc.StreamResult{

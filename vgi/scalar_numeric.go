@@ -21,7 +21,9 @@ func PromoteForAddition(dt arrow.DataType) arrow.DataType {
 		return arrow.PrimitiveTypes.Uint32
 	case arrow.UINT32, arrow.UINT64:
 		return arrow.PrimitiveTypes.Uint64
-	case arrow.FLOAT32, arrow.FLOAT64:
+	case arrow.FLOAT32:
+		return arrow.PrimitiveTypes.Float64
+	case arrow.FLOAT64:
 		return dt
 	default:
 		return dt

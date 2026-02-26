@@ -23,6 +23,8 @@ func (f *SequenceFunction) Metadata() vgi.FunctionMetadata {
 		Description:        "Generates a sequence of integers from 0 to n-1",
 		Stability:          vgi.StabilityConsistent,
 		ProjectionPushdown: true,
+		FilterPushdown:     true,
+		AutoApplyFilters:   true,
 		Categories:         []string{"generator", "utility"},
 	}
 }

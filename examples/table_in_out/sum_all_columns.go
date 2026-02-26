@@ -5,6 +5,7 @@ package table_in_out
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc/vgirpc"
@@ -96,7 +97,7 @@ func (f *SumAllColumnsFunction) NewState(params *vgi.ProcessParams) (*sumAllColu
 
 func (f *SumAllColumnsFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *sumAllColumnsState, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	if state.logging {
-		out.ClientLog(vgirpc.LogInfo, "Processing batch")
+		out.ClientLog(vgirpc.LogInfo, fmt.Sprintf("Processing batch with %d rows", batch.NumRows()))
 	}
 
 	// Accumulate sums from this batch

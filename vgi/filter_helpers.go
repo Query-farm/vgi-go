@@ -1,0 +1,384 @@
+// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
+// SPDX-License-Identifier: Apache-2.0
+
+package vgi
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow/scalar"
+)
+
+// ColumnBounds represents numeric/comparable bounds for a column
+// extracted from comparison filters.
+type ColumnBounds struct {
+	// MinValue is the minimum bound value, or nil if unbounded below.
+	MinValue scalar.Scalar
+	// MinInclusive is true if MinValue is inclusive (>=), false if exclusive (>).
+	MinInclusive bool
+	// MaxValue is the maximum bound value, or nil if unbounded above.
+	MaxValue scalar.Scalar
+	// MaxInclusive is true if MaxValue is inclusive (<=), false if exclusive (<).
+	MaxInclusive bool
+}
+
+// GetColumnBounds extracts numeric bounds from comparison filters on the
+// named column. Returns nil if no bounds can be determined.
+func (pf *PushdownFilters) GetColumnBounds(name string) *ColumnBounds {
+	var minVal scalar.Scalar
+	minInc := true
+	var maxVal scalar.Scalar
+	maxInc := true
+
+	for _, f := range pf.collectColumnFilters(name) {
+		cf, ok := f.(*ConstantFilter)
+		if !ok {
+			continue
+		}
+		switch cf.Op {
+		case OpEQ:
+			return &ColumnBounds{
+				MinValue:     cf.Value,
+				MinInclusive: true,
+				MaxValue:     cf.Value,
+				MaxInclusive: true,
+			}
+		case OpGT:
+			if minVal == nil || scalarGreater(cf.Value, minVal) {
+				minVal = cf.Value
+				minInc = false
+			}
+		case OpGE:
+			if minVal == nil || scalarGreaterEqual(cf.Value, minVal) {
+				minVal = cf.Value
+				minInc = true
+			}
+		case OpLT:
+			if maxVal == nil || scalarLess(cf.Value, maxVal) {
+				maxVal = cf.Value
+				maxInc = false
+			}
+		case OpLE:
+			if maxVal == nil || scalarLessEqual(cf.Value, maxVal) {
+				maxVal = cf.Value
+				maxInc = true
+			}
+		}
+	}
+
+	if minVal == nil && maxVal == nil {
+		return nil
+	}
+	return &ColumnBounds{
+		MinValue:     minVal,
+		MinInclusive: minInc,
+		MaxValue:     maxVal,
+		MaxInclusive: maxInc,
+	}
+}
+
+// GetColumnConstant returns the constant value if the column has an equality
+// filter, or nil if no equality filter exists.
+func (pf *PushdownFilters) GetColumnConstant(name string) scalar.Scalar {
+	for _, f := range pf.Filters {
+		if f.ColumnName() == name {
+			if cf, ok := f.(*ConstantFilter); ok && cf.Op == OpEQ {
+				return cf.Value
+			}
+		}
+	}
+	return nil
+}
+
+// GetColumnInValues returns the IN filter values for a column, or nil if
+// no IN filter exists.
+func (pf *PushdownFilters) GetColumnInValues(name string) arrow.Array {
+	for _, f := range pf.Filters {
+		if f.ColumnName() == name {
+			if inf, ok := f.(*InFilter); ok {
+				return inf.Values
+			}
+		}
+	}
+	return nil
+}
+
+// GetColumnValues returns discrete values a column could have based on
+// equality or IN filters. For EQ, wraps the value in a 1-element array.
+// Returns nil if no discrete values can be determined.
+func (pf *PushdownFilters) GetColumnValues(name string) arrow.Array {
+	for _, f := range pf.Filters {
+		if f.ColumnName() != name {
+			continue
+		}
+		switch ft := f.(type) {
+		case *ConstantFilter:
+			if ft.Op == OpEQ {
+				return scalarToArray(ft.Value)
+			}
+		case *InFilter:
+			return ft.Values
+		}
+	}
+	return nil
+}
+
+// ToSQL converts filters to a SQL WHERE clause with parameters.
+// The quoteIdentifier function is used to quote column names (default: double quotes).
+// The placeholder is the parameter placeholder style ("?", "%s", etc.).
+// Returns the clause (excluding "WHERE" keyword) and parameter values.
+func (pf *PushdownFilters) ToSQL(quoteIdentifier func(string) string, placeholder string) (string, []interface{}) {
+	if len(pf.Filters) == 0 {
+		return "", nil
+	}
+
+	if quoteIdentifier == nil {
+		quoteIdentifier = func(s string) string { return fmt.Sprintf("%q", s) }
+	}
+
+	var conditions []string
+	var params []interface{}
+
+	for _, f := range pf.Filters {
+		sql, ps := filterToSQL(f, quoteIdentifier, placeholder)
+		conditions = append(conditions, sql)
+		params = append(params, ps...)
+	}
+
+	return strings.Join(conditions, " AND "), params
+}
+
+// collectColumnFilters collects filters for a column from top-level and
+// direct AND children.
+func (pf *PushdownFilters) collectColumnFilters(name string) []Filter {
+	var result []Filter
+	for _, f := range pf.Filters {
+		if f.ColumnName() == name {
+			if af, ok := f.(*AndFilter); ok {
+				for _, c := range af.Children {
+					if c.ColumnName() == name {
+						result = append(result, c)
+					}
+				}
+			} else {
+				result = append(result, f)
+			}
+		}
+	}
+	return result
+}
+
+// ---------------------------------------------------------------------------
+// SQL generation helper
+// ---------------------------------------------------------------------------
+
+func filterToSQL(f Filter, quote func(string) string, placeholder string) (string, []interface{}) {
+	col := quote(f.ColumnName())
+
+	switch ft := f.(type) {
+	case *ConstantFilter:
+		return fmt.Sprintf("%s %s %s", col, ft.Op.Symbol(), placeholder), []interface{}{scalarToGo(ft.Value)}
+
+	case *IsNullFilter:
+		return fmt.Sprintf("%s IS NULL", col), nil
+
+	case *IsNotNullFilter:
+		return fmt.Sprintf("%s IS NOT NULL", col), nil
+
+	case *InFilter:
+		placeholders := make([]string, ft.Values.Len())
+		for i := range placeholders {
+			placeholders[i] = placeholder
+		}
+		vals := arrayToGoSlice(ft.Values)
+		return fmt.Sprintf("%s IN (%s)", col, strings.Join(placeholders, ", ")), vals
+
+	case *AndFilter:
+		var parts []string
+		var params []interface{}
+		for _, child := range ft.Children {
+			sql, ps := filterToSQL(child, quote, placeholder)
+			parts = append(parts, sql)
+			params = append(params, ps...)
+		}
+		return fmt.Sprintf("(%s)", strings.Join(parts, " AND ")), params
+
+	case *OrFilter:
+		var parts []string
+		var params []interface{}
+		for _, child := range ft.Children {
+			sql, ps := filterToSQL(child, quote, placeholder)
+			parts = append(parts, sql)
+			params = append(params, ps...)
+		}
+		return fmt.Sprintf("(%s)", strings.Join(parts, " OR ")), params
+
+	case *StructFilter:
+		nestedCol := fmt.Sprintf("%s.%s", f.ColumnName(), ft.ChildName)
+		return filterToSQL(ft.ChildFilter, func(_ string) string { return quote(nestedCol) }, placeholder)
+
+	default:
+		return "1=1", nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scalar comparison helpers
+// ---------------------------------------------------------------------------
+
+func scalarToGo(s scalar.Scalar) interface{} {
+	if s == nil || !s.IsValid() {
+		return nil
+	}
+	switch v := s.(type) {
+	case *scalar.Int8:
+		return v.Value
+	case *scalar.Int16:
+		return v.Value
+	case *scalar.Int32:
+		return v.Value
+	case *scalar.Int64:
+		return v.Value
+	case *scalar.Uint8:
+		return v.Value
+	case *scalar.Uint16:
+		return v.Value
+	case *scalar.Uint32:
+		return v.Value
+	case *scalar.Uint64:
+		return v.Value
+	case *scalar.Float32:
+		return v.Value
+	case *scalar.Float64:
+		return v.Value
+	case *scalar.String:
+		return string(v.Value.Bytes())
+	case *scalar.Boolean:
+		return v.Value
+	default:
+		return s.String()
+	}
+}
+
+func scalarToFloat64(s scalar.Scalar) (float64, bool) {
+	switch v := s.(type) {
+	case *scalar.Int8:
+		return float64(v.Value), true
+	case *scalar.Int16:
+		return float64(v.Value), true
+	case *scalar.Int32:
+		return float64(v.Value), true
+	case *scalar.Int64:
+		return float64(v.Value), true
+	case *scalar.Uint8:
+		return float64(v.Value), true
+	case *scalar.Uint16:
+		return float64(v.Value), true
+	case *scalar.Uint32:
+		return float64(v.Value), true
+	case *scalar.Uint64:
+		return float64(v.Value), true
+	case *scalar.Float32:
+		return float64(v.Value), true
+	case *scalar.Float64:
+		return v.Value, true
+	default:
+		return 0, false
+	}
+}
+
+func scalarGreater(a, b scalar.Scalar) bool {
+	av, aok := scalarToFloat64(a)
+	bv, bok := scalarToFloat64(b)
+	if aok && bok {
+		return av > bv
+	}
+	return false
+}
+
+func scalarGreaterEqual(a, b scalar.Scalar) bool {
+	av, aok := scalarToFloat64(a)
+	bv, bok := scalarToFloat64(b)
+	if aok && bok {
+		return av >= bv
+	}
+	return false
+}
+
+func scalarLess(a, b scalar.Scalar) bool {
+	av, aok := scalarToFloat64(a)
+	bv, bok := scalarToFloat64(b)
+	if aok && bok {
+		return av < bv
+	}
+	return false
+}
+
+func scalarLessEqual(a, b scalar.Scalar) bool {
+	av, aok := scalarToFloat64(a)
+	bv, bok := scalarToFloat64(b)
+	if aok && bok {
+		return av <= bv
+	}
+	return false
+}
+
+func scalarToArray(s scalar.Scalar) arrow.Array {
+	mem := memory.NewGoAllocator()
+	switch v := s.(type) {
+	case *scalar.Int64:
+		b := array.NewInt64Builder(mem)
+		defer b.Release()
+		b.Append(v.Value)
+		return b.NewArray()
+	case *scalar.Int32:
+		b := array.NewInt32Builder(mem)
+		defer b.Release()
+		b.Append(v.Value)
+		return b.NewArray()
+	case *scalar.Float64:
+		b := array.NewFloat64Builder(mem)
+		defer b.Release()
+		b.Append(v.Value)
+		return b.NewArray()
+	case *scalar.String:
+		b := array.NewStringBuilder(mem)
+		defer b.Release()
+		b.Append(string(v.Value.Bytes()))
+		return b.NewArray()
+	case *scalar.Boolean:
+		b := array.NewBooleanBuilder(mem)
+		defer b.Release()
+		b.Append(v.Value)
+		return b.NewArray()
+	default:
+		// Fallback: build from the general builder
+		b := array.NewBuilder(mem, s.DataType())
+		defer b.Release()
+		if err := scalar.Append(b, s); err != nil {
+			b.AppendNull()
+		}
+		return b.NewArray()
+	}
+}
+
+func arrayToGoSlice(arr arrow.Array) []interface{} {
+	result := make([]interface{}, arr.Len())
+	for i := 0; i < arr.Len(); i++ {
+		if arr.IsNull(i) {
+			result[i] = nil
+			continue
+		}
+		s, err := scalar.GetScalar(arr, i)
+		if err != nil {
+			result[i] = nil
+			continue
+		}
+		result[i] = scalarToGo(s)
+	}
+	return result
+}

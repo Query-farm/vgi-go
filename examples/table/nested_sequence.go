@@ -35,6 +35,8 @@ func (f *NestedSequenceFunction) Metadata() vgi.FunctionMetadata {
 		Description:        "Generates a sequence with nested struct and list columns",
 		Stability:          vgi.StabilityConsistent,
 		ProjectionPushdown: true,
+		FilterPushdown:     true,
+		AutoApplyFilters:   true,
 	}
 }
 
