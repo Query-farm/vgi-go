@@ -58,6 +58,7 @@ func main() {
 	w.RegisterTable(table.NewDoubleSequenceFunction())
 	w.RegisterTable(table.NewGeneratorExceptionFunction())
 	w.RegisterTable(table.NewLoggingGeneratorFunction())
+	w.RegisterTable(table.NewNamedParamsEchoFunction())
 	w.RegisterTable(table.NewNestedSequenceFunction())
 	w.RegisterTable(table.NewPartitionedSequenceFunction())
 	w.RegisterTable(table.NewProjectedDataFunction())

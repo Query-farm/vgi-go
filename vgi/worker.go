@@ -267,17 +267,19 @@ func newExecutionID() []byte {
 }
 
 // getOrCreateStorage returns or creates an ExecutionStorage for the given execution ID.
-func (w *Worker) getOrCreateStorage(executionID []byte) *ExecutionStorage {
+func (w *Worker) getOrCreateStorage(executionID []byte) (*ExecutionStorage, error) {
 	key := hex.EncodeToString(executionID)
 	if s, ok := w.storages.Load(key); ok {
-		return s.(*ExecutionStorage)
+		return s.(*ExecutionStorage), nil
 	}
 	s := NewExecutionStorage()
-	s.SetExecutionID(executionID)
+	if err := s.SetExecutionID(executionID); err != nil {
+		return nil, err
+	}
 	actual, loaded := w.storages.LoadOrStore(key, s)
 	if loaded {
 		// Another goroutine beat us; close our duplicate
 		s.Cleanup()
 	}
-	return actual.(*ExecutionStorage)
+	return actual.(*ExecutionStorage), nil
 }

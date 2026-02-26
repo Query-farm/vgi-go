@@ -11,8 +11,6 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // SettingsAwareFunction generates data demonstrating settings are passed.
@@ -83,10 +81,6 @@ func (f *SettingsAwareFunction) NewState(params *vgi.ProcessParams) (*settingsAw
 }
 
 func (f *SettingsAwareFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *settingsAwareState, out *vgirpc.OutputCollector) error {
-	if state.Remaining <= 0 {
-		return out.Finish()
-	}
-
 	// Extract settings
 	verbose := false
 	greeting := "Hello"
@@ -119,56 +113,17 @@ func (f *SettingsAwareFunction) Process(ctx context.Context, params *vgi.Process
 		}
 	}
 
-	size := state.BatchSize
-	if state.Remaining < size {
-		size = state.Remaining
-	}
-
-	mem := memory.NewGoAllocator()
-	start := state.Index
-
-	idBuilder := array.NewInt64Builder(mem)
-	defer idBuilder.Release()
-	greetingBuilder := array.NewStringBuilder(mem)
-	defer greetingBuilder.Release()
-	valueBuilder := array.NewFloat64Builder(mem)
-	defer valueBuilder.Release()
-
-	var detailsBuilder *array.StringBuilder
-	if verbose {
-		detailsBuilder = array.NewStringBuilder(mem)
-		defer detailsBuilder.Release()
-	}
-
-	for i := int64(0); i < size; i++ {
-		idx := start + i
-		idBuilder.Append(idx)
-		greetingBuilder.Append(greeting)
-		valueBuilder.Append(float64(idx) * 2.5 * float64(multiplier))
+	return vgi.GenerateBatchMap(&state.BatchState, out, params.OutputSchema, func(size int64) (map[string]arrow.Array, error) {
+		start := state.Index
+		colMap := make(map[string]arrow.Array)
+		colMap["id"] = vgi.BuildInt64Array(size, func(i int64) int64 { return start + i })
+		colMap["greeting"] = vgi.BuildStringArray(size, func(i int64) string { return greeting })
+		colMap["value"] = vgi.BuildFloat64Array(size, func(i int64) float64 { return float64(start+i) * 2.5 * float64(multiplier) })
 		if verbose {
-			detailsBuilder.Append(fmt.Sprintf("row_%d", idx))
+			colMap["details"] = vgi.BuildStringArray(size, func(i int64) string { return fmt.Sprintf("row_%d", start+i) })
 		}
-	}
-
-	idArr := idBuilder.NewArray()
-	defer idArr.Release()
-	greetingArr := greetingBuilder.NewArray()
-	defer greetingArr.Release()
-	valueArr := valueBuilder.NewArray()
-	defer valueArr.Release()
-
-	var cols []arrow.Array
-	if verbose {
-		detailsArr := detailsBuilder.NewArray()
-		defer detailsArr.Release()
-		cols = []arrow.Array{idArr, greetingArr, valueArr, detailsArr}
-	} else {
-		cols = []arrow.Array{idArr, greetingArr, valueArr}
-	}
-
-	state.Remaining -= size
-	state.Index += size
-	return out.EmitArrays(cols, size)
+		return colMap, nil
+	})
 }
 
 func NewSettingsAwareFunction() vgi.TableFunction {

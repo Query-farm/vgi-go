@@ -11,7 +11,6 @@ import (
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // sumColumnsArgSpecs is the shared argument specification for sum column functions.
@@ -119,8 +118,11 @@ func (f *SumAllColumnsFunction) Process(ctx context.Context, params *vgi.Process
 	if params.Storage != nil {
 		sumBatch := buildSumBatch(params.OutputSchema, state.intSums, state.floatSums)
 		data, err := vgi.SerializeRecordBatch(sumBatch)
-		if err == nil {
-			params.Storage.Put(data)
+		if err != nil {
+			return err
+		}
+		if err := params.Storage.Put(data); err != nil {
+			return err
 		}
 	}
 
@@ -143,7 +145,11 @@ func (f *SumAllColumnsFunction) Finalize(ctx context.Context, params *vgi.Proces
 
 	// Collect from storage
 	if params.Storage != nil {
-		for _, data := range params.Storage.Collect() {
+		workerData, err := params.Storage.Collect()
+		if err != nil {
+			return nil, err
+		}
+		for _, data := range workerData {
 			batch, err := vgi.DeserializeRecordBatch(data)
 			if err != nil {
 				continue
@@ -249,27 +255,15 @@ func sumFloat64Column(col arrow.Array) float64 {
 }
 
 func buildSumBatch(schema *arrow.Schema, intSums map[string]int64, floatSums map[string]float64) arrow.RecordBatch {
-	mem := memory.NewGoAllocator()
-	cols := make([]arrow.Array, schema.NumFields())
-
-	for i, field := range schema.Fields() {
+	colMap := make(map[string]arrow.Array)
+	for _, field := range schema.Fields() {
 		switch field.Type.ID() {
 		case arrow.INT64:
-			b := array.NewInt64Builder(mem)
-			b.Append(intSums[field.Name])
-			cols[i] = b.NewArray()
-			b.Release()
+			colMap[field.Name] = vgi.BuildInt64Array(1, func(_ int64) int64 { return intSums[field.Name] })
 		case arrow.FLOAT64:
-			b := array.NewFloat64Builder(mem)
-			b.Append(floatSums[field.Name])
-			cols[i] = b.NewArray()
-			b.Release()
+			colMap[field.Name] = vgi.BuildFloat64Array(1, func(_ int64) float64 { return floatSums[field.Name] })
 		}
 	}
-
-	batch := array.NewRecordBatch(schema, cols, 1)
-	for _, c := range cols {
-		c.Release()
-	}
+	batch, _ := vgi.BatchFromMap(schema, colMap, 1)
 	return batch
 }

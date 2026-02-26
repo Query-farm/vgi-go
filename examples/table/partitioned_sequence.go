@@ -61,7 +61,9 @@ func (f *PartitionedSequenceFunction) OnInit(params *vgi.InitParams) (*vgi.Globa
 	}
 
 	if params.Storage != nil {
-		params.Storage.QueuePush(workItems)
+		if err := params.Storage.QueuePush(workItems); err != nil {
+			return nil, err
+		}
 	}
 
 	return &vgi.GlobalInitResponse{MaxWorkers: 4}, nil
@@ -95,7 +97,10 @@ func (f *PartitionedSequenceFunction) Process(ctx context.Context, params *vgi.P
 		if params.Storage == nil {
 			return out.Finish()
 		}
-		workData := params.Storage.QueuePop()
+		workData, err := params.Storage.QueuePop()
+		if err != nil {
+			return err
+		}
 		if workData == nil {
 			return out.Finish()
 		}

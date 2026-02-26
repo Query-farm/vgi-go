@@ -372,7 +372,11 @@ func (w *Worker) initScalar(ctx context.Context, fn ScalarFunction, initParams *
 		resp.ExecutionID = initParams.ExecutionID
 	}
 	processParams.ExecutionID = resp.ExecutionID
-	processParams.Storage = w.getOrCreateStorage(resp.ExecutionID)
+	storage, err := w.getOrCreateStorage(resp.ExecutionID)
+	if err != nil {
+		return nil, err
+	}
+	processParams.Storage = storage
 
 	header := &GlobalInitResponseWire{
 		ExecutionID: resp.ExecutionID,
@@ -397,12 +401,15 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 	if initParams.ExecutionID == nil {
 		initParams.ExecutionID = newExecutionID()
 	}
-	initParams.Storage = w.getOrCreateStorage(initParams.ExecutionID)
+	initStorage, err := w.getOrCreateStorage(initParams.ExecutionID)
+	if err != nil {
+		return nil, err
+	}
+	initParams.Storage = initStorage
 
 	var resp *GlobalInitResponse
 	if !initParams.IsSecondary {
 		// Primary init: call OnInit (global_init) to set up work items, etc.
-		var err error
 		resp, err = fn.OnInit(initParams)
 		if err != nil {
 			return nil, err
@@ -425,7 +432,11 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 	}
 	processParams.ExecutionID = resp.ExecutionID
 	processParams.InitOpaqueData = resp.OpaqueData
-	processParams.Storage = w.getOrCreateStorage(resp.ExecutionID)
+	processStorage, err := w.getOrCreateStorage(resp.ExecutionID)
+	if err != nil {
+		return nil, err
+	}
+	processParams.Storage = processStorage
 
 	userState, err := fn.NewState(processParams)
 	if err != nil {
@@ -467,12 +478,15 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 	if initParams.ExecutionID == nil {
 		initParams.ExecutionID = newExecutionID()
 	}
-	initParams.Storage = w.getOrCreateStorage(initParams.ExecutionID)
+	initStorage, err := w.getOrCreateStorage(initParams.ExecutionID)
+	if err != nil {
+		return nil, err
+	}
+	initParams.Storage = initStorage
 
 	var resp *GlobalInitResponse
 	if !initParams.IsSecondary {
 		// Primary init: call OnInit (global_init)
-		var err error
 		resp, err = fn.OnInit(initParams)
 		if err != nil {
 			return nil, err
@@ -495,7 +509,11 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 	}
 	processParams.ExecutionID = resp.ExecutionID
 	processParams.InitOpaqueData = resp.OpaqueData
-	processParams.Storage = w.getOrCreateStorage(resp.ExecutionID)
+	processStorage, err := w.getOrCreateStorage(resp.ExecutionID)
+	if err != nil {
+		return nil, err
+	}
+	processParams.Storage = processStorage
 
 	header := &GlobalInitResponseWire{
 		ExecutionID: resp.ExecutionID,

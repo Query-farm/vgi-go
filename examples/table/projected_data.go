@@ -10,7 +10,6 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
 )
 
 var projectedDataFullSchema = arrow.NewSchema([]arrow.Field{
@@ -67,44 +66,24 @@ func (f *ProjectedDataFunction) NewState(params *vgi.ProcessParams) (*projectedD
 }
 
 func (f *ProjectedDataFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *projectedDataState, out *vgirpc.OutputCollector) error {
-	if state.Remaining <= 0 {
-		return out.Finish()
-	}
-
-	size := state.BatchSize
-	if state.Remaining < size {
-		size = state.Remaining
-	}
-
 	projected := vgi.ProjectedColumns(params.ProjectionIDs, projectedDataFullSchema)
-	start := state.Index
-	colMap := make(map[string]arrow.Array)
-
-	if projected.Contains("id") {
-		colMap["id"] = vgi.BuildInt64Array(size, func(i int64) int64 { return start + i })
-	}
-	if projected.Contains("name") {
-		colMap["name"] = vgi.BuildStringArray(size, func(i int64) string { return fmt.Sprintf("item_%d", start+i) })
-	}
-	if projected.Contains("value") {
-		colMap["value"] = vgi.BuildFloat64Array(size, func(i int64) float64 { return float64(start+i) * 1.5 })
-	}
-	if projected.Contains("extra") {
-		colMap["extra"] = vgi.BuildInt64Array(size, func(i int64) int64 { v := start + i; return v * v })
-	}
-
-	cols := make([]arrow.Array, params.OutputSchema.NumFields())
-	for i, f := range params.OutputSchema.Fields() {
-		cols[i] = colMap[f.Name]
-	}
-	batch := array.NewRecordBatch(params.OutputSchema, cols, size)
-	for _, c := range cols {
-		c.Release()
-	}
-
-	state.Remaining -= size
-	state.Index += size
-	return out.Emit(batch)
+	return vgi.GenerateBatchMap(&state.BatchState, out, params.OutputSchema, func(size int64) (map[string]arrow.Array, error) {
+		start := state.Index
+		colMap := make(map[string]arrow.Array)
+		if projected.Contains("id") {
+			colMap["id"] = vgi.BuildInt64Array(size, func(i int64) int64 { return start + i })
+		}
+		if projected.Contains("name") {
+			colMap["name"] = vgi.BuildStringArray(size, func(i int64) string { return fmt.Sprintf("item_%d", start+i) })
+		}
+		if projected.Contains("value") {
+			colMap["value"] = vgi.BuildFloat64Array(size, func(i int64) float64 { return float64(start+i) * 1.5 })
+		}
+		if projected.Contains("extra") {
+			colMap["extra"] = vgi.BuildInt64Array(size, func(i int64) int64 { v := start + i; return v * v })
+		}
+		return colMap, nil
+	})
 }
 
 func NewProjectedDataFunction() vgi.TableFunction {

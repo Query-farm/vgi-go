@@ -80,8 +80,11 @@ func (f *DistributedSumFunction) Process(ctx context.Context, params *vgi.Proces
 	if params.Storage != nil {
 		sumBatch := buildSumBatch(params.OutputSchema, state.intSums, state.floatSums)
 		data, err := vgi.SerializeRecordBatch(sumBatch)
-		if err == nil {
-			params.Storage.Put(data)
+		if err != nil {
+			return err
+		}
+		if err := params.Storage.Put(data); err != nil {
+			return err
 		}
 	}
 
@@ -102,7 +105,11 @@ func (f *DistributedSumFunction) Finalize(ctx context.Context, params *vgi.Proce
 	}
 
 	if params.Storage != nil {
-		for _, data := range params.Storage.Collect() {
+		workerData, err := params.Storage.Collect()
+		if err != nil {
+			return nil, err
+		}
+		for _, data := range workerData {
 			batch, err := vgi.DeserializeRecordBatch(data)
 			if err != nil {
 				continue

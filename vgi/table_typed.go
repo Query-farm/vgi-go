@@ -77,8 +77,8 @@ type typedTableAdapter[S any] struct {
 }
 
 func (a *typedTableAdapter[S]) Name() string               { return a.inner.Name() }
-func (a *typedTableAdapter[S]) Metadata() FunctionMetadata  { return a.inner.Metadata() }
-func (a *typedTableAdapter[S]) ArgumentSpecs() []ArgSpec    { return a.inner.ArgumentSpecs() }
+func (a *typedTableAdapter[S]) Metadata() FunctionMetadata { return a.inner.Metadata() }
+func (a *typedTableAdapter[S]) ArgumentSpecs() []ArgSpec   { return a.inner.ArgumentSpecs() }
 
 func (a *typedTableAdapter[S]) OnBind(params *BindParams) (*BindResponse, error) {
 	return a.inner.OnBind(params)

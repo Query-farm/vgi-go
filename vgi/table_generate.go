@@ -4,6 +4,8 @@
 package vgi
 
 import (
+	"fmt"
+
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -29,6 +31,18 @@ func NewBatchState(count, batchSize int64) BatchState {
 		BatchSize: batchSize,
 	}
 }
+
+// Three paths for batch construction:
+//
+//   - GenerateBatch: Fixed schema, known column order, no projection pushdown.
+//     Callback returns []arrow.Array in schema order.
+//
+//   - GenerateBatchMap: Dynamic or projected schema, name-keyed columns.
+//     Callback returns map[string]arrow.Array; columns are reordered to match
+//     the schema automatically.
+//
+//   - BatchFromMap: Standalone batch construction from name-keyed columns,
+//     for non-BatchState use cases like Finalize or one-off batch creation.
 
 // GenerateBatch handles one batch of a batch-splitting table function.
 // Call this from Process — it handles the complete remaining-work pattern:
@@ -70,6 +84,61 @@ func GenerateBatch(bs *BatchState, out *vgirpc.OutputCollector, generateFn func(
 	}
 
 	return err
+}
+
+// BatchFromMap reorders columns from a name-keyed map to match schema field order
+// and creates a RecordBatch. It consumes all arrays in the map — every array
+// (both schema-matched and extra) is released on success and on error, matching
+// GenerateBatch's ownership model. Returns an error if a schema field is missing
+// from the map. Extra map keys are silently ignored but their arrays are still released.
+func BatchFromMap(schema *arrow.Schema, columns map[string]arrow.Array, numRows int64) (arrow.RecordBatch, error) {
+	cols := make([]arrow.Array, schema.NumFields())
+	for i, field := range schema.Fields() {
+		a, ok := columns[field.Name]
+		if !ok {
+			for _, arr := range columns {
+				arr.Release()
+			}
+			return nil, fmt.Errorf("BatchFromMap: schema field %q not found in column map", field.Name)
+		}
+		cols[i] = a
+	}
+
+	batch := array.NewRecordBatch(schema, cols, numRows)
+	for _, arr := range columns {
+		arr.Release()
+	}
+	return batch, nil
+}
+
+// GenerateBatchMap handles one batch of a batch-splitting table function using
+// name-keyed columns. Same lifecycle as GenerateBatch (check remaining, compute
+// size, call callback, update state) but the callback returns map[string]arrow.Array.
+// Uses BatchFromMap internally and emits via out.Emit.
+func GenerateBatchMap(bs *BatchState, out *vgirpc.OutputCollector, schema *arrow.Schema, generateFn func(size int64) (map[string]arrow.Array, error)) error {
+	if bs.Remaining <= 0 {
+		return out.Finish()
+	}
+
+	size := bs.BatchSize
+	if bs.Remaining < size {
+		size = bs.Remaining
+	}
+
+	colMap, err := generateFn(size)
+	if err != nil {
+		return err
+	}
+
+	batch, err := BatchFromMap(schema, colMap, size)
+	if err != nil {
+		return err
+	}
+
+	bs.Remaining -= size
+	bs.Index += size
+
+	return out.Emit(batch)
 }
 
 // BuildInt64Array creates an int64 array by calling fn for each row index.

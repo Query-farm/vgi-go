@@ -74,72 +74,54 @@ func (f *NestedSequenceFunction) NewState(params *vgi.ProcessParams) (*nestedSeq
 }
 
 func (f *NestedSequenceFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *nestedSequenceState, out *vgirpc.OutputCollector) error {
-	if state.Remaining <= 0 {
-		return out.Finish()
-	}
-
-	size := state.BatchSize
-	if state.Remaining < size {
-		size = state.Remaining
-	}
-
-	mem := memory.NewGoAllocator()
 	projected := vgi.ProjectedColumns(params.ProjectionIDs, nestedSequenceFullSchema)
-	start := state.Index
-	colMap := make(map[string]arrow.Array)
+	return vgi.GenerateBatchMap(&state.BatchState, out, params.OutputSchema, func(size int64) (map[string]arrow.Array, error) {
+		mem := memory.NewGoAllocator()
+		start := state.Index
+		colMap := make(map[string]arrow.Array)
 
-	if projected.Contains("n") {
-		colMap["n"] = vgi.BuildInt64Array(size, func(i int64) int64 { return start + i })
-	}
-
-	if projected.Contains("metadata") {
-		structType := arrow.StructOf(
-			arrow.Field{Name: "index", Type: arrow.PrimitiveTypes.Int64},
-			arrow.Field{Name: "label", Type: arrow.BinaryTypes.String},
-		)
-		sb := array.NewStructBuilder(mem, structType)
-		indexBuilder := sb.FieldBuilder(0).(*array.Int64Builder)
-		labelBuilder := sb.FieldBuilder(1).(*array.StringBuilder)
-		for i := int64(0); i < size; i++ {
-			sb.Append(true)
-			idx := start + i
-			indexBuilder.Append(idx)
-			labelBuilder.Append(fmt.Sprintf("row_%d", idx))
+		if projected.Contains("n") {
+			colMap["n"] = vgi.BuildInt64Array(size, func(i int64) int64 { return start + i })
 		}
-		colMap["metadata"] = sb.NewArray()
-		sb.Release()
-	}
 
-	if projected.Contains("history") {
-		lb := array.NewListBuilder(mem, arrow.PrimitiveTypes.Int64)
-		valueBuilder := lb.ValueBuilder().(*array.Int64Builder)
-		for i := int64(0); i < size; i++ {
-			lb.Append(true)
-			idx := start + i
-			histStart := idx - state.historySize + 1
-			if histStart < 0 {
-				histStart = 0
+		if projected.Contains("metadata") {
+			structType := arrow.StructOf(
+				arrow.Field{Name: "index", Type: arrow.PrimitiveTypes.Int64},
+				arrow.Field{Name: "label", Type: arrow.BinaryTypes.String},
+			)
+			sb := array.NewStructBuilder(mem, structType)
+			indexBuilder := sb.FieldBuilder(0).(*array.Int64Builder)
+			labelBuilder := sb.FieldBuilder(1).(*array.StringBuilder)
+			for i := int64(0); i < size; i++ {
+				sb.Append(true)
+				idx := start + i
+				indexBuilder.Append(idx)
+				labelBuilder.Append(fmt.Sprintf("row_%d", idx))
 			}
-			for j := histStart; j <= idx; j++ {
-				valueBuilder.Append(j)
-			}
+			colMap["metadata"] = sb.NewArray()
+			sb.Release()
 		}
-		colMap["history"] = lb.NewArray()
-		lb.Release()
-	}
 
-	cols := make([]arrow.Array, params.OutputSchema.NumFields())
-	for i, f := range params.OutputSchema.Fields() {
-		cols[i] = colMap[f.Name]
-	}
-	batch := array.NewRecordBatch(params.OutputSchema, cols, size)
-	for _, c := range cols {
-		c.Release()
-	}
+		if projected.Contains("history") {
+			lb := array.NewListBuilder(mem, arrow.PrimitiveTypes.Int64)
+			valueBuilder := lb.ValueBuilder().(*array.Int64Builder)
+			for i := int64(0); i < size; i++ {
+				lb.Append(true)
+				idx := start + i
+				histStart := idx - state.historySize + 1
+				if histStart < 0 {
+					histStart = 0
+				}
+				for j := histStart; j <= idx; j++ {
+					valueBuilder.Append(j)
+				}
+			}
+			colMap["history"] = lb.NewArray()
+			lb.Release()
+		}
 
-	state.Remaining -= size
-	state.Index += size
-	return out.Emit(batch)
+		return colMap, nil
+	})
 }
 
 func NewNestedSequenceFunction() vgi.TableFunction {

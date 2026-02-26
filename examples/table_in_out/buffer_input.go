@@ -42,7 +42,9 @@ func (f *BufferInputFunction) NewState(params *vgi.ProcessParams) (*struct{}, er
 func (f *BufferInputFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *struct{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	// Buffer the batch in storage
 	if params.Storage != nil {
-		params.Storage.QueuePushBatches([]arrow.RecordBatch{batch})
+		if err := params.Storage.QueuePushBatches([]arrow.RecordBatch{batch}); err != nil {
+			return err
+		}
 	}
 	// Emit empty batch
 	return out.Emit(vgi.EmptyBatch(params.OutputSchema))
@@ -54,7 +56,10 @@ func (f *BufferInputFunction) Finalize(ctx context.Context, params *vgi.ProcessP
 	}
 	var batches []arrow.RecordBatch
 	for {
-		batch := params.Storage.QueuePopBatch()
+		batch, err := params.Storage.QueuePopBatch()
+		if err != nil {
+			return nil, err
+		}
 		if batch == nil {
 			break
 		}

@@ -116,9 +116,9 @@ type ConstantFilter struct {
 	Value       scalar.Scalar
 }
 
-func (f *ConstantFilter) ColumnName() string  { return f.columnName }
-func (f *ConstantFilter) ColumnIndex() int    { return f.columnIndex }
-func (f *ConstantFilter) Type() FilterType    { return FilterConstant }
+func (f *ConstantFilter) ColumnName() string { return f.columnName }
+func (f *ConstantFilter) ColumnIndex() int   { return f.columnIndex }
+func (f *ConstantFilter) Type() FilterType   { return FilterConstant }
 
 func (f *ConstantFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	col := batch.Column(f.columnIndex)
@@ -151,9 +151,9 @@ type IsNullFilter struct {
 	columnIndex int
 }
 
-func (f *IsNullFilter) ColumnName() string  { return f.columnName }
-func (f *IsNullFilter) ColumnIndex() int    { return f.columnIndex }
-func (f *IsNullFilter) Type() FilterType    { return FilterIsNull }
+func (f *IsNullFilter) ColumnName() string { return f.columnName }
+func (f *IsNullFilter) ColumnIndex() int   { return f.columnIndex }
+func (f *IsNullFilter) Type() FilterType   { return FilterIsNull }
 
 func (f *IsNullFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	col := batch.Column(f.columnIndex)
@@ -179,9 +179,9 @@ type IsNotNullFilter struct {
 	columnIndex int
 }
 
-func (f *IsNotNullFilter) ColumnName() string  { return f.columnName }
-func (f *IsNotNullFilter) ColumnIndex() int    { return f.columnIndex }
-func (f *IsNotNullFilter) Type() FilterType    { return FilterIsNotNull }
+func (f *IsNotNullFilter) ColumnName() string { return f.columnName }
+func (f *IsNotNullFilter) ColumnIndex() int   { return f.columnIndex }
+func (f *IsNotNullFilter) Type() FilterType   { return FilterIsNotNull }
 
 func (f *IsNotNullFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	col := batch.Column(f.columnIndex)
@@ -209,9 +209,9 @@ type InFilter struct {
 	Values      arrow.Array
 }
 
-func (f *InFilter) ColumnName() string  { return f.columnName }
-func (f *InFilter) ColumnIndex() int    { return f.columnIndex }
-func (f *InFilter) Type() FilterType    { return FilterIn }
+func (f *InFilter) ColumnName() string { return f.columnName }
+func (f *InFilter) ColumnIndex() int   { return f.columnIndex }
+func (f *InFilter) Type() FilterType   { return FilterIn }
 
 func (f *InFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	col := batch.Column(f.columnIndex)
@@ -241,9 +241,9 @@ type AndFilter struct {
 	Children    []Filter
 }
 
-func (f *AndFilter) ColumnName() string  { return f.columnName }
-func (f *AndFilter) ColumnIndex() int    { return f.columnIndex }
-func (f *AndFilter) Type() FilterType    { return FilterAnd }
+func (f *AndFilter) ColumnName() string { return f.columnName }
+func (f *AndFilter) ColumnIndex() int   { return f.columnIndex }
+func (f *AndFilter) Type() FilterType   { return FilterAnd }
 
 func (f *AndFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	if len(f.Children) == 0 {
@@ -289,9 +289,9 @@ type OrFilter struct {
 	Children    []Filter
 }
 
-func (f *OrFilter) ColumnName() string  { return f.columnName }
-func (f *OrFilter) ColumnIndex() int    { return f.columnIndex }
-func (f *OrFilter) Type() FilterType    { return FilterOr }
+func (f *OrFilter) ColumnName() string { return f.columnName }
+func (f *OrFilter) ColumnIndex() int   { return f.columnIndex }
+func (f *OrFilter) Type() FilterType   { return FilterOr }
 
 func (f *OrFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	if len(f.Children) == 0 {
@@ -339,9 +339,9 @@ type StructFilter struct {
 	ChildFilter Filter
 }
 
-func (f *StructFilter) ColumnName() string  { return f.columnName }
-func (f *StructFilter) ColumnIndex() int    { return f.columnIndex }
-func (f *StructFilter) Type() FilterType    { return FilterStruct }
+func (f *StructFilter) ColumnName() string { return f.columnName }
+func (f *StructFilter) ColumnIndex() int   { return f.columnIndex }
+func (f *StructFilter) Type() FilterType   { return FilterStruct }
 
 func (f *StructFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	structCol, ok := batch.Column(f.columnIndex).(*array.Struct)
