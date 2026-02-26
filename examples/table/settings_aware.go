@@ -18,6 +18,8 @@ import (
 // SettingsAwareFunction generates data demonstrating settings are passed.
 type SettingsAwareFunction struct{}
 
+var _ vgi.TypedTableFunc[settingsAwareState] = (*SettingsAwareFunction)(nil)
+
 func (f *SettingsAwareFunction) Name() string { return "settings_aware" }
 
 func (f *SettingsAwareFunction) Metadata() vgi.FunctionMetadata {
@@ -56,13 +58,7 @@ func (f *SettingsAwareFunction) OnBind(params *vgi.BindParams) (*vgi.BindRespons
 		}
 	}
 
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema(fields, nil),
-	}, nil
-}
-
-func (f *SettingsAwareFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+	return vgi.BindSchema(arrow.NewSchema(fields, nil))
 }
 
 func (f *SettingsAwareFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
@@ -74,20 +70,20 @@ func (f *SettingsAwareFunction) Cardinality(params *vgi.BindParams) (*vgi.TableC
 }
 
 type settingsAwareState struct {
-	remaining    int64
-	currentIndex int64
-}
-
-func (f *SettingsAwareFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	return &settingsAwareState{remaining: count, currentIndex: 0}, nil
+	vgi.BatchState
 }
 
 const settingsAwareBatchSize = 1000
 
-func (f *SettingsAwareFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, out *vgirpc.OutputCollector) error {
-	s := state.(*settingsAwareState)
-	if s.remaining <= 0 {
+func (f *SettingsAwareFunction) NewState(params *vgi.ProcessParams) (*settingsAwareState, error) {
+	count, _ := params.Args.GetScalarInt64(0)
+	return &settingsAwareState{
+		BatchState: vgi.NewBatchState(count, settingsAwareBatchSize),
+	}, nil
+}
+
+func (f *SettingsAwareFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *settingsAwareState, out *vgirpc.OutputCollector) error {
+	if state.Remaining <= 0 {
 		return out.Finish()
 	}
 
@@ -123,12 +119,13 @@ func (f *SettingsAwareFunction) Process(ctx context.Context, params *vgi.Process
 		}
 	}
 
-	size := int64(settingsAwareBatchSize)
-	if s.remaining < size {
-		size = s.remaining
+	size := state.BatchSize
+	if state.Remaining < size {
+		size = state.Remaining
 	}
 
 	mem := memory.NewGoAllocator()
+	start := state.Index
 
 	idBuilder := array.NewInt64Builder(mem)
 	defer idBuilder.Release()
@@ -144,7 +141,7 @@ func (f *SettingsAwareFunction) Process(ctx context.Context, params *vgi.Process
 	}
 
 	for i := int64(0); i < size; i++ {
-		idx := s.currentIndex + i
+		idx := start + i
 		idBuilder.Append(idx)
 		greetingBuilder.Append(greeting)
 		valueBuilder.Append(float64(idx) * 2.5 * float64(multiplier))
@@ -169,7 +166,11 @@ func (f *SettingsAwareFunction) Process(ctx context.Context, params *vgi.Process
 		cols = []arrow.Array{idArr, greetingArr, valueArr}
 	}
 
-	s.currentIndex += size
-	s.remaining -= size
+	state.Remaining -= size
+	state.Index += size
 	return out.EmitArrays(cols, size)
+}
+
+func NewSettingsAwareFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[settingsAwareState](&SettingsAwareFunction{})
 }

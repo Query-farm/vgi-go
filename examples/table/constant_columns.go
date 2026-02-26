@@ -17,6 +17,8 @@ import (
 // ConstantColumnsFunction generates a table with constant values from varargs.
 type ConstantColumnsFunction struct{}
 
+var _ vgi.TypedTableFunc[constantColumnsState] = (*ConstantColumnsFunction)(nil)
+
 func (f *ConstantColumnsFunction) Name() string { return "constant_columns" }
 
 func (f *ConstantColumnsFunction) Metadata() vgi.FunctionMetadata {
@@ -34,8 +36,6 @@ func (f *ConstantColumnsFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *ConstantColumnsFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	// Output schema: one column per vararg, named col_0, col_1, etc.
-	// Skip the first argument (count).
 	numValues := params.Args.NumArgs() - 1
 	fields := make([]arrow.Field, numValues)
 	for i := 0; i < numValues; i++ {
@@ -45,13 +45,7 @@ func (f *ConstantColumnsFunction) OnBind(params *vgi.BindParams) (*vgi.BindRespo
 			Type: col.DataType(),
 		}
 	}
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema(fields, nil),
-	}, nil
-}
-
-func (f *ConstantColumnsFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+	return vgi.BindSchema(arrow.NewSchema(fields, nil))
 }
 
 func (f *ConstantColumnsFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
@@ -63,25 +57,26 @@ func (f *ConstantColumnsFunction) Cardinality(params *vgi.BindParams) (*vgi.Tabl
 }
 
 type constantColumnsState struct {
-	remaining int64
-}
-
-func (f *ConstantColumnsFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	return &constantColumnsState{remaining: count}, nil
+	vgi.BatchState
 }
 
 const constantColumnsBatchSize = 2048
 
-func (f *ConstantColumnsFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, out *vgirpc.OutputCollector) error {
-	s := state.(*constantColumnsState)
-	if s.remaining <= 0 {
+func (f *ConstantColumnsFunction) NewState(params *vgi.ProcessParams) (*constantColumnsState, error) {
+	count, _ := params.Args.GetScalarInt64(0)
+	return &constantColumnsState{
+		BatchState: vgi.NewBatchState(count, constantColumnsBatchSize),
+	}, nil
+}
+
+func (f *ConstantColumnsFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *constantColumnsState, out *vgirpc.OutputCollector) error {
+	if state.Remaining <= 0 {
 		return out.Finish()
 	}
 
-	size := int64(constantColumnsBatchSize)
-	if s.remaining < size {
-		size = s.remaining
+	size := state.BatchSize
+	if state.Remaining < size {
+		size = state.Remaining
 	}
 
 	mem := memory.NewGoAllocator()
@@ -98,19 +93,20 @@ func (f *ConstantColumnsFunction) Process(ctx context.Context, params *vgi.Proce
 		c.Release()
 	}
 
-	s.remaining -= size
+	state.Remaining -= size
+	state.Index += size
 	return out.Emit(batch)
 }
 
+func NewConstantColumnsFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[constantColumnsState](&ConstantColumnsFunction{})
+}
+
 // repeatScalar creates an array by repeating the scalar value at index 0 of src.
-// Uses array.Concatenate for a generic implementation that works for any Arrow type
-// (Decimal128, Struct, List, Map, etc.).
 func repeatScalar(mem memory.Allocator, src arrow.Array, n int) arrow.Array {
-	// Create a single-element slice from the source
 	single := array.NewSlice(src, 0, 1)
 	defer single.Release()
 
-	// Build an array of N references to the single-element array
 	arrs := make([]arrow.Array, n)
 	for i := range arrs {
 		arrs[i] = single
@@ -118,7 +114,6 @@ func repeatScalar(mem memory.Allocator, src arrow.Array, n int) arrow.Array {
 
 	result, err := array.Concatenate(arrs, mem)
 	if err != nil {
-		// Fallback: null array
 		b := array.NewBuilder(mem, src.DataType())
 		defer b.Release()
 		for i := 0; i < n; i++ {

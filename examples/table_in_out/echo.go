@@ -14,6 +14,8 @@ import (
 // EchoFunction is a passthrough function that emits each input batch unchanged.
 type EchoFunction struct{}
 
+var _ vgi.TypedTableInOutFunc[struct{}] = (*EchoFunction)(nil)
+
 func (f *EchoFunction) Name() string { return "echo" }
 
 func (f *EchoFunction) Metadata() vgi.FunctionMetadata {
@@ -32,21 +34,22 @@ func (f *EchoFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *EchoFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{OutputSchema: params.InputSchema}, nil
+	return vgi.BindInputSchema(params)
 }
 
-func (f *EchoFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+func (f *EchoFunction) NewState(params *vgi.ProcessParams) (*struct{}, error) {
+	return &struct{}{}, nil
 }
 
-func (f *EchoFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
-	return nil, nil
-}
-
-func (f *EchoFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
+func (f *EchoFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *struct{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	return out.Emit(batch)
 }
 
-func (f *EchoFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state interface{}) ([]arrow.RecordBatch, error) {
+func (f *EchoFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *struct{}) ([]arrow.RecordBatch, error) {
 	return nil, nil
+}
+
+// NewEchoFunction creates an EchoFunction wrapped for registration.
+func NewEchoFunction() vgi.TableInOutFunction {
+	return vgi.AsTableInOutFunction[struct{}](&EchoFunction{})
 }

@@ -10,8 +10,6 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 const (
@@ -21,6 +19,8 @@ const (
 
 // PartitionedSequenceFunction generates a partitioned sequence for multi-worker execution.
 type PartitionedSequenceFunction struct{}
+
+var _ vgi.TypedTableFunc[partitionedSequenceState] = (*PartitionedSequenceFunction)(nil)
 
 func (f *PartitionedSequenceFunction) Name() string { return "partitioned_sequence" }
 
@@ -39,11 +39,9 @@ func (f *PartitionedSequenceFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *PartitionedSequenceFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema([]arrow.Field{
-			{Name: "n", Type: arrow.PrimitiveTypes.Int64},
-		}, nil),
-	}, nil
+	return vgi.BindSchema(arrow.NewSchema([]arrow.Field{
+		{Name: "n", Type: arrow.PrimitiveTypes.Int64},
+	}, nil))
 }
 
 func (f *PartitionedSequenceFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
@@ -85,21 +83,15 @@ type partitionedSequenceState struct {
 	increment    int64
 }
 
-func (f *PartitionedSequenceFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
-	increment := int64(1)
-	if !params.Args.IsNull("increment") {
-		if v, err := params.Args.GetScalarInt64("increment"); err == nil {
-			increment = v
-		}
-	}
-	return &partitionedSequenceState{increment: increment}, nil
+func (f *PartitionedSequenceFunction) NewState(params *vgi.ProcessParams) (*partitionedSequenceState, error) {
+	return &partitionedSequenceState{
+		increment: vgi.OptionalInt64(params.Args, "increment", 1),
+	}, nil
 }
 
-func (f *PartitionedSequenceFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, out *vgirpc.OutputCollector) error {
-	s := state.(*partitionedSequenceState)
-
+func (f *PartitionedSequenceFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *partitionedSequenceState, out *vgirpc.OutputCollector) error {
 	// If no current chunk or finished, pop next from queue
-	if !s.hasChunk || s.currentIdx >= s.currentEnd {
+	if !state.hasChunk || state.currentIdx >= state.currentEnd {
 		if params.Storage == nil {
 			return out.Finish()
 		}
@@ -107,29 +99,28 @@ func (f *PartitionedSequenceFunction) Process(ctx context.Context, params *vgi.P
 		if workData == nil {
 			return out.Finish()
 		}
-		s.currentStart = int64(binary.BigEndian.Uint64(workData[0:8]))
-		s.currentEnd = int64(binary.BigEndian.Uint64(workData[8:16]))
-		s.currentIdx = s.currentStart
-		s.hasChunk = true
+		state.currentStart = int64(binary.BigEndian.Uint64(workData[0:8]))
+		state.currentEnd = int64(binary.BigEndian.Uint64(workData[8:16]))
+		state.currentIdx = state.currentStart
+		state.hasChunk = true
 	}
 
-	batchEnd := s.currentIdx + partitionBatchSize
-	if batchEnd > s.currentEnd {
-		batchEnd = s.currentEnd
+	batchEnd := state.currentIdx + partitionBatchSize
+	if batchEnd > state.currentEnd {
+		batchEnd = state.currentEnd
 	}
 
-	mem := memory.NewGoAllocator()
-	builder := array.NewInt64Builder(mem)
-	defer builder.Release()
-
-	for idx := s.currentIdx; idx < batchEnd; idx++ {
-		builder.Append(idx * s.increment)
-	}
-
-	arr := builder.NewArray()
+	start := state.currentIdx
+	size := batchEnd - start
+	arr := vgi.BuildInt64Array(size, func(i int64) int64 {
+		return (start + i) * state.increment
+	})
 	defer arr.Release()
 
-	size := batchEnd - s.currentIdx
-	s.currentIdx = batchEnd
+	state.currentIdx = batchEnd
 	return out.EmitArrays([]arrow.Array{arr}, size)
+}
+
+func NewPartitionedSequenceFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[partitionedSequenceState](&PartitionedSequenceFunction{})
 }

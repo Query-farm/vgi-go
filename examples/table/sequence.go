@@ -9,12 +9,12 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // SequenceFunction generates a sequence of integers from 0 to n-1.
 type SequenceFunction struct{}
+
+var _ vgi.TypedTableFunc[sequenceState] = (*SequenceFunction)(nil)
 
 func (f *SequenceFunction) Name() string { return "sequence" }
 
@@ -40,11 +40,7 @@ var sequenceOutputSchema = arrow.NewSchema([]arrow.Field{
 }, nil)
 
 func (f *SequenceFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{OutputSchema: sequenceOutputSchema}, nil
-}
-
-func (f *SequenceFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+	return vgi.BindSchema(sequenceOutputSchema)
 }
 
 func (f *SequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
@@ -56,57 +52,27 @@ func (f *SequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardin
 }
 
 type sequenceState struct {
-	remaining    int64
-	currentIndex int64
-	batchSize    int64
-	increment    int64
+	vgi.BatchState
+	increment int64
 }
 
-func (f *SequenceFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
+func (f *SequenceFunction) NewState(params *vgi.ProcessParams) (*sequenceState, error) {
 	count, _ := params.Args.GetScalarInt64(0)
-	batchSize := int64(1000)
-	if !params.Args.IsNull("batch_size") {
-		if v, err := params.Args.GetScalarInt64("batch_size"); err == nil {
-			batchSize = v
-		}
-	}
-	increment := int64(1)
-	if !params.Args.IsNull("increment") {
-		if v, err := params.Args.GetScalarInt64("increment"); err == nil {
-			increment = v
-		}
-	}
 	return &sequenceState{
-		remaining:    count,
-		currentIndex: 0,
-		batchSize:    batchSize,
-		increment:    increment,
+		BatchState: vgi.NewBatchState(count, vgi.OptionalInt64(params.Args, "batch_size", 1000)),
+		increment:  vgi.OptionalInt64(params.Args, "increment", 1),
 	}, nil
 }
 
-func (f *SequenceFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, out *vgirpc.OutputCollector) error {
-	s := state.(*sequenceState)
-	if s.remaining <= 0 {
-		return out.Finish()
-	}
+func (f *SequenceFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *sequenceState, out *vgirpc.OutputCollector) error {
+	return vgi.GenerateBatch(&state.BatchState, out, func(size int64) ([]arrow.Array, error) {
+		start := state.Index
+		return []arrow.Array{
+			vgi.BuildInt64Array(size, func(i int64) int64 { return (start + i) * state.increment }),
+		}, nil
+	})
+}
 
-	size := s.batchSize
-	if s.remaining < size {
-		size = s.remaining
-	}
-
-	mem := memory.NewGoAllocator()
-	builder := array.NewInt64Builder(mem)
-	defer builder.Release()
-
-	for i := int64(0); i < size; i++ {
-		builder.Append(s.currentIndex * s.increment)
-		s.currentIndex++
-	}
-
-	arr := builder.NewArray()
-	defer arr.Release()
-
-	s.remaining -= size
-	return out.EmitArrays([]arrow.Array{arr}, size)
+func NewSequenceFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[sequenceState](&SequenceFunction{})
 }

@@ -14,6 +14,8 @@ import (
 // BufferInputFunction collects all input batches and emits during finalization.
 type BufferInputFunction struct{}
 
+var _ vgi.TypedTableInOutFunc[struct{}] = (*BufferInputFunction)(nil)
+
 func (f *BufferInputFunction) Name() string { return "buffer_input" }
 
 func (f *BufferInputFunction) Metadata() vgi.FunctionMetadata {
@@ -30,18 +32,14 @@ func (f *BufferInputFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *BufferInputFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{OutputSchema: params.InputSchema}, nil
+	return vgi.BindInputSchema(params)
 }
 
-func (f *BufferInputFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+func (f *BufferInputFunction) NewState(params *vgi.ProcessParams) (*struct{}, error) {
+	return &struct{}{}, nil
 }
 
-func (f *BufferInputFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
-	return nil, nil
-}
-
-func (f *BufferInputFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
+func (f *BufferInputFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *struct{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	// Buffer the batch in storage
 	if params.Storage != nil {
 		params.Storage.QueuePushBatches([]arrow.RecordBatch{batch})
@@ -50,7 +48,7 @@ func (f *BufferInputFunction) Process(ctx context.Context, params *vgi.ProcessPa
 	return out.Emit(vgi.EmptyBatch(params.OutputSchema))
 }
 
-func (f *BufferInputFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state interface{}) ([]arrow.RecordBatch, error) {
+func (f *BufferInputFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *struct{}) ([]arrow.RecordBatch, error) {
 	if params.Storage == nil {
 		return nil, nil
 	}
@@ -63,4 +61,9 @@ func (f *BufferInputFunction) Finalize(ctx context.Context, params *vgi.ProcessP
 		batches = append(batches, batch)
 	}
 	return batches, nil
+}
+
+// NewBufferInputFunction creates a BufferInputFunction wrapped for registration.
+func NewBufferInputFunction() vgi.TableInOutFunction {
+	return vgi.AsTableInOutFunction[struct{}](&BufferInputFunction{})
 }

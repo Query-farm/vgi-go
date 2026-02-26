@@ -9,12 +9,12 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // TenThousandFunction generates 10000 integers from 0 to 9999.
 type TenThousandFunction struct{}
+
+var _ vgi.TypedTableFunc[tenThousandState] = (*TenThousandFunction)(nil)
 
 func (f *TenThousandFunction) Name() string { return "ten_thousand" }
 
@@ -30,15 +30,9 @@ func (f *TenThousandFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *TenThousandFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema([]arrow.Field{
-			{Name: "n", Type: arrow.PrimitiveTypes.Int64},
-		}, nil),
-	}, nil
-}
-
-func (f *TenThousandFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+	return vgi.BindSchema(arrow.NewSchema([]arrow.Field{
+		{Name: "n", Type: arrow.PrimitiveTypes.Int64},
+	}, nil))
 }
 
 func (f *TenThousandFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
@@ -46,36 +40,24 @@ func (f *TenThousandFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCar
 }
 
 type tenThousandState struct {
-	start int64
+	vgi.BatchState
 }
 
-func (f *TenThousandFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
-	return &tenThousandState{start: 0}, nil
+func (f *TenThousandFunction) NewState(params *vgi.ProcessParams) (*tenThousandState, error) {
+	return &tenThousandState{
+		BatchState: vgi.NewBatchState(10000, 1000),
+	}, nil
 }
 
-func (f *TenThousandFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, out *vgirpc.OutputCollector) error {
-	s := state.(*tenThousandState)
-	if s.start >= 10000 {
-		return out.Finish()
-	}
+func (f *TenThousandFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *tenThousandState, out *vgirpc.OutputCollector) error {
+	return vgi.GenerateBatch(&state.BatchState, out, func(size int64) ([]arrow.Array, error) {
+		start := state.Index
+		return []arrow.Array{
+			vgi.BuildInt64Array(size, func(i int64) int64 { return start + i }),
+		}, nil
+	})
+}
 
-	end := s.start + 1000
-	if end > 10000 {
-		end = 10000
-	}
-
-	mem := memory.NewGoAllocator()
-	builder := array.NewInt64Builder(mem)
-	defer builder.Release()
-
-	for i := s.start; i < end; i++ {
-		builder.Append(i)
-	}
-
-	arr := builder.NewArray()
-	defer arr.Release()
-
-	size := end - s.start
-	s.start = end
-	return out.EmitArrays([]arrow.Array{arr}, size)
+func NewTenThousandFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[tenThousandState](&TenThousandFunction{})
 }

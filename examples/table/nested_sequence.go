@@ -26,12 +26,14 @@ var nestedSequenceFullSchema = arrow.NewSchema([]arrow.Field{
 // NestedSequenceFunction generates a sequence with nested struct and list columns.
 type NestedSequenceFunction struct{}
 
+var _ vgi.TypedTableFunc[nestedSequenceState] = (*NestedSequenceFunction)(nil)
+
 func (f *NestedSequenceFunction) Name() string { return "nested_sequence" }
 
 func (f *NestedSequenceFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description:       "Generates a sequence with nested struct and list columns",
-		Stability:         vgi.StabilityConsistent,
+		Description:        "Generates a sequence with nested struct and list columns",
+		Stability:          vgi.StabilityConsistent,
 		ProjectionPushdown: true,
 	}
 }
@@ -45,11 +47,7 @@ func (f *NestedSequenceFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *NestedSequenceFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{OutputSchema: nestedSequenceFullSchema}, nil
-}
-
-func (f *NestedSequenceFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+	return vgi.BindSchema(nestedSequenceFullSchema)
 }
 
 func (f *NestedSequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
@@ -61,61 +59,38 @@ func (f *NestedSequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.Table
 }
 
 type nestedSequenceState struct {
-	remaining    int64
-	currentIndex int64
-	batchSize    int64
-	historySize  int64
+	vgi.BatchState
+	historySize int64
 }
 
-func (f *NestedSequenceFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
+func (f *NestedSequenceFunction) NewState(params *vgi.ProcessParams) (*nestedSequenceState, error) {
 	count, _ := params.Args.GetScalarInt64(0)
-	batchSize := int64(1000)
-	if !params.Args.IsNull("batch_size") {
-		if v, err := params.Args.GetScalarInt64("batch_size"); err == nil {
-			batchSize = v
-		}
-	}
-	historySize := int64(20)
-	if !params.Args.IsNull("history_size") {
-		if v, err := params.Args.GetScalarInt64("history_size"); err == nil {
-			historySize = v
-		}
-	}
 	return &nestedSequenceState{
-		remaining:    count,
-		currentIndex: 0,
-		batchSize:    batchSize,
-		historySize:  historySize,
+		BatchState:  vgi.NewBatchState(count, vgi.OptionalInt64(params.Args, "batch_size", 1000)),
+		historySize: vgi.OptionalInt64(params.Args, "history_size", 20),
 	}, nil
 }
 
-func (f *NestedSequenceFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, out *vgirpc.OutputCollector) error {
-	s := state.(*nestedSequenceState)
-	if s.remaining <= 0 {
+func (f *NestedSequenceFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *nestedSequenceState, out *vgirpc.OutputCollector) error {
+	if state.Remaining <= 0 {
 		return out.Finish()
 	}
 
-	size := s.batchSize
-	if s.remaining < size {
-		size = s.remaining
+	size := state.BatchSize
+	if state.Remaining < size {
+		size = state.Remaining
 	}
 
 	mem := memory.NewGoAllocator()
-	projectedCols := getProjectedColumnNames(params.ProjectionIDs, nestedSequenceFullSchema)
-
-	// Build only projected columns
+	projected := vgi.ProjectedColumns(params.ProjectionIDs, nestedSequenceFullSchema)
+	start := state.Index
 	colMap := make(map[string]arrow.Array)
 
-	if _, ok := projectedCols["n"]; ok {
-		b := array.NewInt64Builder(mem)
-		for i := int64(0); i < size; i++ {
-			b.Append(s.currentIndex + i)
-		}
-		colMap["n"] = b.NewArray()
-		b.Release()
+	if projected.Contains("n") {
+		colMap["n"] = vgi.BuildInt64Array(size, func(i int64) int64 { return start + i })
 	}
 
-	if _, ok := projectedCols["metadata"]; ok {
+	if projected.Contains("metadata") {
 		structType := arrow.StructOf(
 			arrow.Field{Name: "index", Type: arrow.PrimitiveTypes.Int64},
 			arrow.Field{Name: "label", Type: arrow.BinaryTypes.String},
@@ -125,7 +100,7 @@ func (f *NestedSequenceFunction) Process(ctx context.Context, params *vgi.Proces
 		labelBuilder := sb.FieldBuilder(1).(*array.StringBuilder)
 		for i := int64(0); i < size; i++ {
 			sb.Append(true)
-			idx := s.currentIndex + i
+			idx := start + i
 			indexBuilder.Append(idx)
 			labelBuilder.Append(fmt.Sprintf("row_%d", idx))
 		}
@@ -133,17 +108,17 @@ func (f *NestedSequenceFunction) Process(ctx context.Context, params *vgi.Proces
 		sb.Release()
 	}
 
-	if _, ok := projectedCols["history"]; ok {
+	if projected.Contains("history") {
 		lb := array.NewListBuilder(mem, arrow.PrimitiveTypes.Int64)
 		valueBuilder := lb.ValueBuilder().(*array.Int64Builder)
 		for i := int64(0); i < size; i++ {
 			lb.Append(true)
-			idx := s.currentIndex + i
-			start := idx - s.historySize + 1
-			if start < 0 {
-				start = 0
+			idx := start + i
+			histStart := idx - state.historySize + 1
+			if histStart < 0 {
+				histStart = 0
 			}
-			for j := start; j <= idx; j++ {
+			for j := histStart; j <= idx; j++ {
 				valueBuilder.Append(j)
 			}
 		}
@@ -151,7 +126,6 @@ func (f *NestedSequenceFunction) Process(ctx context.Context, params *vgi.Proces
 		lb.Release()
 	}
 
-	// Build record batch with projected schema
 	cols := make([]arrow.Array, params.OutputSchema.NumFields())
 	for i, f := range params.OutputSchema.Fields() {
 		cols[i] = colMap[f.Name]
@@ -161,21 +135,11 @@ func (f *NestedSequenceFunction) Process(ctx context.Context, params *vgi.Proces
 		c.Release()
 	}
 
-	s.currentIndex += size
-	s.remaining -= size
+	state.Remaining -= size
+	state.Index += size
 	return out.Emit(batch)
 }
 
-func getProjectedColumnNames(projectionIDs []int32, fullSchema *arrow.Schema) map[string]struct{} {
-	result := make(map[string]struct{})
-	if projectionIDs != nil {
-		for _, id := range projectionIDs {
-			result[fullSchema.Field(int(id)).Name] = struct{}{}
-		}
-	} else {
-		for _, f := range fullSchema.Fields() {
-			result[f.Name] = struct{}{}
-		}
-	}
-	return result
+func NewNestedSequenceFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[nestedSequenceState](&NestedSequenceFunction{})
 }

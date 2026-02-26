@@ -13,27 +13,16 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
-// SumAllColumnsFunction computes column-wise sums across all batches.
-type SumAllColumnsFunction struct{}
-
-func (f *SumAllColumnsFunction) Name() string { return "sum_all_columns" }
-
-func (f *SumAllColumnsFunction) Metadata() vgi.FunctionMetadata {
-	return vgi.FunctionMetadata{
-		Description: "Computes column-wise sums across all batches",
-		Stability:   vgi.StabilityConsistent,
-		Categories:  []string{"aggregation", "numeric"},
-	}
+// sumColumnsArgSpecs is the shared argument specification for sum column functions.
+var sumColumnsArgSpecs = []vgi.ArgSpec{
+	{Name: "data", Position: 0, ArrowType: "table", Doc: "Input table"},
+	{Name: "logging", Position: -1, ArrowType: "boolean", Doc: "Whether to log during processing",
+		HasDefault: true, DefaultValue: "false", IsConst: true},
 }
 
-func (f *SumAllColumnsFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "data", Position: 0, ArrowType: "table", Doc: "Input table"},
-		{Name: "logging", Position: -1, ArrowType: "boolean", Doc: "Whether to log during processing", HasDefault: true, DefaultValue: "false", IsConst: true},
-	}
-}
-
-func (f *SumAllColumnsFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+// sumColumnsOnBind filters input schema to numeric columns,
+// promoting integers to Int64 and floats to Float64.
+func sumColumnsOnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
 	if params.InputSchema == nil {
 		return &vgi.BindResponse{
 			OutputSchema: arrow.NewSchema(nil, nil),
@@ -56,8 +45,27 @@ func (f *SumAllColumnsFunction) OnBind(params *vgi.BindParams) (*vgi.BindRespons
 	}, nil
 }
 
-func (f *SumAllColumnsFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+// SumAllColumnsFunction computes column-wise sums across all batches.
+type SumAllColumnsFunction struct{}
+
+var _ vgi.TypedTableInOutFunc[sumAllColumnsState] = (*SumAllColumnsFunction)(nil)
+
+func (f *SumAllColumnsFunction) Name() string { return "sum_all_columns" }
+
+func (f *SumAllColumnsFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description: "Computes column-wise sums across all batches",
+		Stability:   vgi.StabilityConsistent,
+		Categories:  []string{"aggregation", "numeric"},
+	}
+}
+
+func (f *SumAllColumnsFunction) ArgumentSpecs() []vgi.ArgSpec {
+	return sumColumnsArgSpecs
+}
+
+func (f *SumAllColumnsFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+	return sumColumnsOnBind(params)
 }
 
 type sumAllColumnsState struct {
@@ -66,7 +74,7 @@ type sumAllColumnsState struct {
 	logging   bool
 }
 
-func (f *SumAllColumnsFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
+func (f *SumAllColumnsFunction) NewState(params *vgi.ProcessParams) (*sumAllColumnsState, error) {
 	intSums := make(map[string]int64)
 	floatSums := make(map[string]float64)
 
@@ -79,53 +87,36 @@ func (f *SumAllColumnsFunction) NewState(params *vgi.ProcessParams) (interface{}
 		}
 	}
 
-	logging := false
-	if !params.Args.IsNull("logging") {
-		if v, err := params.Args.GetScalarBool("logging"); err == nil {
-			logging = v
-		}
-	}
-
 	return &sumAllColumnsState{
 		intSums:   intSums,
 		floatSums: floatSums,
-		logging:   logging,
+		logging:   vgi.OptionalBool(params.Args, "logging", false),
 	}, nil
 }
 
-func (f *SumAllColumnsFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
-	s := state.(*sumAllColumnsState)
-
-	if s.logging {
+func (f *SumAllColumnsFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *sumAllColumnsState, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
+	if state.logging {
 		out.ClientLog(vgirpc.LogInfo, "Processing batch")
 	}
 
 	// Accumulate sums from this batch
 	for _, field := range params.OutputSchema.Fields() {
-		// Find the column in the input batch
-		colIdx := -1
-		for i := 0; i < int(batch.NumCols()); i++ {
-			if batch.ColumnName(i) == field.Name {
-				colIdx = i
-				break
-			}
-		}
-		if colIdx < 0 {
+		col := vgi.FindColumn(batch, field.Name)
+		if col == nil {
 			continue
 		}
-		col := batch.Column(colIdx)
 
-		if _, ok := s.intSums[field.Name]; ok {
-			s.intSums[field.Name] += sumInt64Column(col)
+		if _, ok := state.intSums[field.Name]; ok {
+			state.intSums[field.Name] += sumInt64Column(col)
 		}
-		if _, ok := s.floatSums[field.Name]; ok {
-			s.floatSums[field.Name] += sumFloat64Column(col)
+		if _, ok := state.floatSums[field.Name]; ok {
+			state.floatSums[field.Name] += sumFloat64Column(col)
 		}
 	}
 
 	// Store accumulated sums for finalize
 	if params.Storage != nil {
-		sumBatch := buildSumBatch(params.OutputSchema, s.intSums, s.floatSums)
+		sumBatch := buildSumBatch(params.OutputSchema, state.intSums, state.floatSums)
 		data, err := vgi.SerializeRecordBatch(sumBatch)
 		if err == nil {
 			params.Storage.Put(data)
@@ -135,7 +126,7 @@ func (f *SumAllColumnsFunction) Process(ctx context.Context, params *vgi.Process
 	return out.Emit(vgi.EmptyBatch(params.OutputSchema))
 }
 
-func (f *SumAllColumnsFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state interface{}) ([]arrow.RecordBatch, error) {
+func (f *SumAllColumnsFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *sumAllColumnsState) ([]arrow.RecordBatch, error) {
 	intSums := make(map[string]int64)
 	floatSums := make(map[string]float64)
 
@@ -157,17 +148,10 @@ func (f *SumAllColumnsFunction) Finalize(ctx context.Context, params *vgi.Proces
 				continue
 			}
 			for _, field := range params.OutputSchema.Fields() {
-				colIdx := -1
-				for i := 0; i < int(batch.NumCols()); i++ {
-					if batch.ColumnName(i) == field.Name {
-						colIdx = i
-						break
-					}
-				}
-				if colIdx < 0 {
+				col := vgi.FindColumn(batch, field.Name)
+				if col == nil {
 					continue
 				}
-				col := batch.Column(colIdx)
 				if _, ok := intSums[field.Name]; ok {
 					intSums[field.Name] += sumInt64Column(col)
 				}
@@ -180,6 +164,11 @@ func (f *SumAllColumnsFunction) Finalize(ctx context.Context, params *vgi.Proces
 	}
 
 	return []arrow.RecordBatch{buildSumBatch(params.OutputSchema, intSums, floatSums)}, nil
+}
+
+// NewSumAllColumnsFunction creates a SumAllColumnsFunction wrapped for registration.
+func NewSumAllColumnsFunction() vgi.TableInOutFunction {
+	return vgi.AsTableInOutFunction[sumAllColumnsState](&SumAllColumnsFunction{})
 }
 
 func sumInt64Column(col arrow.Array) int64 {

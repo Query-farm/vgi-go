@@ -16,6 +16,8 @@ import (
 // RepeatInputsFunction duplicates each input batch N times.
 type RepeatInputsFunction struct{}
 
+var _ vgi.TypedTableInOutFunc[struct{}] = (*RepeatInputsFunction)(nil)
+
 func (f *RepeatInputsFunction) Name() string { return "repeat_inputs" }
 
 func (f *RepeatInputsFunction) Metadata() vgi.FunctionMetadata {
@@ -33,18 +35,14 @@ func (f *RepeatInputsFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *RepeatInputsFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{OutputSchema: params.InputSchema}, nil
+	return vgi.BindInputSchema(params)
 }
 
-func (f *RepeatInputsFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+func (f *RepeatInputsFunction) NewState(params *vgi.ProcessParams) (*struct{}, error) {
+	return &struct{}{}, nil
 }
 
-func (f *RepeatInputsFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
-	return nil, nil
-}
-
-func (f *RepeatInputsFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
+func (f *RepeatInputsFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *struct{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	repeatCount, err := params.Args.GetScalarInt64(0)
 	if err != nil {
 		return err
@@ -85,8 +83,13 @@ func (f *RepeatInputsFunction) Process(ctx context.Context, params *vgi.ProcessP
 	return out.Emit(result)
 }
 
-func (f *RepeatInputsFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state interface{}) ([]arrow.RecordBatch, error) {
+func (f *RepeatInputsFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *struct{}) ([]arrow.RecordBatch, error) {
 	return nil, nil
+}
+
+// NewRepeatInputsFunction creates a RepeatInputsFunction wrapped for registration.
+func NewRepeatInputsFunction() vgi.TableInOutFunction {
+	return vgi.AsTableInOutFunction[struct{}](&RepeatInputsFunction{})
 }
 
 // appendValue appends a single value from src at index i to builder.

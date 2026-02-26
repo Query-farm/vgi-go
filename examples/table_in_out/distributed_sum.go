@@ -9,14 +9,14 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // DistributedSumFunction computes distributed column-wise sums.
 // This is equivalent to SumAllColumnsFunction but demonstrates the
 // distributed aggregation pattern using storage for state persistence.
 type DistributedSumFunction struct{}
+
+var _ vgi.TypedTableInOutFunc[distributedSumState] = (*DistributedSumFunction)(nil)
 
 func (f *DistributedSumFunction) Name() string { return "sum_all_columns_simple_distributed" }
 
@@ -34,30 +34,7 @@ func (f *DistributedSumFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *DistributedSumFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	if params.InputSchema == nil {
-		return &vgi.BindResponse{
-			OutputSchema: arrow.NewSchema(nil, nil),
-		}, nil
-	}
-
-	var fields []arrow.Field
-	for _, field := range params.InputSchema.Fields() {
-		switch field.Type.ID() {
-		case arrow.INT8, arrow.INT16, arrow.INT32, arrow.INT64,
-			arrow.UINT8, arrow.UINT16, arrow.UINT32, arrow.UINT64:
-			fields = append(fields, arrow.Field{Name: field.Name, Type: arrow.PrimitiveTypes.Int64})
-		case arrow.FLOAT16, arrow.FLOAT32, arrow.FLOAT64:
-			fields = append(fields, arrow.Field{Name: field.Name, Type: arrow.PrimitiveTypes.Float64})
-		}
-	}
-
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema(fields, nil),
-	}, nil
-}
-
-func (f *DistributedSumFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+	return sumColumnsOnBind(params)
 }
 
 type distributedSumState struct {
@@ -65,7 +42,7 @@ type distributedSumState struct {
 	floatSums map[string]float64
 }
 
-func (f *DistributedSumFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
+func (f *DistributedSumFunction) NewState(params *vgi.ProcessParams) (*distributedSumState, error) {
 	intSums := make(map[string]int64)
 	floatSums := make(map[string]float64)
 
@@ -84,33 +61,24 @@ func (f *DistributedSumFunction) NewState(params *vgi.ProcessParams) (interface{
 	}, nil
 }
 
-func (f *DistributedSumFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
-	s := state.(*distributedSumState)
-
+func (f *DistributedSumFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *distributedSumState, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	for _, field := range params.OutputSchema.Fields() {
-		colIdx := -1
-		for i := 0; i < int(batch.NumCols()); i++ {
-			if batch.ColumnName(i) == field.Name {
-				colIdx = i
-				break
-			}
-		}
-		if colIdx < 0 {
+		col := vgi.FindColumn(batch, field.Name)
+		if col == nil {
 			continue
 		}
-		col := batch.Column(colIdx)
 
-		if _, ok := s.intSums[field.Name]; ok {
-			s.intSums[field.Name] += sumInt64Column(col)
+		if _, ok := state.intSums[field.Name]; ok {
+			state.intSums[field.Name] += sumInt64Column(col)
 		}
-		if _, ok := s.floatSums[field.Name]; ok {
-			s.floatSums[field.Name] += sumFloat64Column(col)
+		if _, ok := state.floatSums[field.Name]; ok {
+			state.floatSums[field.Name] += sumFloat64Column(col)
 		}
 	}
 
 	// Persist partial sums to storage
 	if params.Storage != nil {
-		sumBatch := buildDistSumBatch(params.OutputSchema, s.intSums, s.floatSums)
+		sumBatch := buildSumBatch(params.OutputSchema, state.intSums, state.floatSums)
 		data, err := vgi.SerializeRecordBatch(sumBatch)
 		if err == nil {
 			params.Storage.Put(data)
@@ -120,7 +88,7 @@ func (f *DistributedSumFunction) Process(ctx context.Context, params *vgi.Proces
 	return out.Emit(vgi.EmptyBatch(params.OutputSchema))
 }
 
-func (f *DistributedSumFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state interface{}) ([]arrow.RecordBatch, error) {
+func (f *DistributedSumFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *distributedSumState) ([]arrow.RecordBatch, error) {
 	intSums := make(map[string]int64)
 	floatSums := make(map[string]float64)
 
@@ -140,17 +108,10 @@ func (f *DistributedSumFunction) Finalize(ctx context.Context, params *vgi.Proce
 				continue
 			}
 			for _, field := range params.OutputSchema.Fields() {
-				colIdx := -1
-				for i := 0; i < int(batch.NumCols()); i++ {
-					if batch.ColumnName(i) == field.Name {
-						colIdx = i
-						break
-					}
-				}
-				if colIdx < 0 {
+				col := vgi.FindColumn(batch, field.Name)
+				if col == nil {
 					continue
 				}
-				col := batch.Column(colIdx)
 				if _, ok := intSums[field.Name]; ok {
 					intSums[field.Name] += sumInt64Column(col)
 				}
@@ -162,31 +123,10 @@ func (f *DistributedSumFunction) Finalize(ctx context.Context, params *vgi.Proce
 		}
 	}
 
-	return []arrow.RecordBatch{buildDistSumBatch(params.OutputSchema, intSums, floatSums)}, nil
+	return []arrow.RecordBatch{buildSumBatch(params.OutputSchema, intSums, floatSums)}, nil
 }
 
-func buildDistSumBatch(schema *arrow.Schema, intSums map[string]int64, floatSums map[string]float64) arrow.RecordBatch {
-	mem := memory.NewGoAllocator()
-	cols := make([]arrow.Array, schema.NumFields())
-
-	for i, field := range schema.Fields() {
-		switch field.Type.ID() {
-		case arrow.INT64:
-			b := array.NewInt64Builder(mem)
-			b.Append(intSums[field.Name])
-			cols[i] = b.NewArray()
-			b.Release()
-		case arrow.FLOAT64:
-			b := array.NewFloat64Builder(mem)
-			b.Append(floatSums[field.Name])
-			cols[i] = b.NewArray()
-			b.Release()
-		}
-	}
-
-	batch := array.NewRecordBatch(schema, cols, 1)
-	for _, c := range cols {
-		c.Release()
-	}
-	return batch
+// NewDistributedSumFunction creates a DistributedSumFunction wrapped for registration.
+func NewDistributedSumFunction() vgi.TableInOutFunction {
+	return vgi.AsTableInOutFunction[distributedSumState](&DistributedSumFunction{})
 }

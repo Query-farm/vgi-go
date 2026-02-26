@@ -10,12 +10,12 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // GeneratorExceptionFunction raises an exception after N batches for testing.
 type GeneratorExceptionFunction struct{}
+
+var _ vgi.TypedTableFunc[generatorExceptionState] = (*GeneratorExceptionFunction)(nil)
 
 func (f *GeneratorExceptionFunction) Name() string { return "generator_exception" }
 
@@ -34,15 +34,9 @@ func (f *GeneratorExceptionFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *GeneratorExceptionFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{
-		OutputSchema: arrow.NewSchema([]arrow.Field{
-			{Name: "n", Type: arrow.PrimitiveTypes.Int64},
-		}, nil),
-	}, nil
-}
-
-func (f *GeneratorExceptionFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+	return vgi.BindSchema(arrow.NewSchema([]arrow.Field{
+		{Name: "n", Type: arrow.PrimitiveTypes.Int64},
+	}, nil))
 }
 
 type generatorExceptionState struct {
@@ -50,26 +44,25 @@ type generatorExceptionState struct {
 	failAfter  int64
 }
 
-func (f *GeneratorExceptionFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
+func (f *GeneratorExceptionFunction) NewState(params *vgi.ProcessParams) (*generatorExceptionState, error) {
 	failAfter, _ := params.Args.GetScalarInt64(0)
 	return &generatorExceptionState{batchCount: 0, failAfter: failAfter}, nil
 }
 
-func (f *GeneratorExceptionFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, out *vgirpc.OutputCollector) error {
-	s := state.(*generatorExceptionState)
-
-	if s.batchCount >= s.failAfter {
-		return fmt.Errorf("Intentional failure after %d batches", s.failAfter)
+func (f *GeneratorExceptionFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *generatorExceptionState, out *vgirpc.OutputCollector) error {
+	if state.batchCount >= state.failAfter {
+		return fmt.Errorf("Intentional failure after %d batches", state.failAfter)
 	}
 
-	mem := memory.NewGoAllocator()
-	builder := array.NewInt64Builder(mem)
-	defer builder.Release()
-	builder.Append(s.batchCount)
+	idx := state.batchCount
+	state.batchCount++
 
-	arr := builder.NewArray()
+	arr := vgi.BuildInt64Array(1, func(i int64) int64 { return idx })
 	defer arr.Release()
 
-	s.batchCount++
 	return out.EmitArrays([]arrow.Array{arr}, 1)
+}
+
+func NewGeneratorExceptionFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[generatorExceptionState](&GeneratorExceptionFunction{})
 }

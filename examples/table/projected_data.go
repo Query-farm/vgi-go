@@ -11,7 +11,6 @@ import (
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 var projectedDataFullSchema = arrow.NewSchema([]arrow.Field{
@@ -24,12 +23,14 @@ var projectedDataFullSchema = arrow.NewSchema([]arrow.Field{
 // ProjectedDataFunction generates data with 4 columns, supporting projection pushdown.
 type ProjectedDataFunction struct{}
 
+var _ vgi.TypedTableFunc[projectedDataState] = (*ProjectedDataFunction)(nil)
+
 func (f *ProjectedDataFunction) Name() string { return "projected_data" }
 
 func (f *ProjectedDataFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description:       "Generates data with 4 columns, supporting projection pushdown",
-		Stability:         vgi.StabilityConsistent,
+		Description:        "Generates data with 4 columns, supporting projection pushdown",
+		Stability:          vgi.StabilityConsistent,
 		ProjectionPushdown: true,
 	}
 }
@@ -41,11 +42,7 @@ func (f *ProjectedDataFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *ProjectedDataFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{OutputSchema: projectedDataFullSchema}, nil
-}
-
-func (f *ProjectedDataFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+	return vgi.BindSchema(projectedDataFullSchema)
 }
 
 func (f *ProjectedDataFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
@@ -57,68 +54,43 @@ func (f *ProjectedDataFunction) Cardinality(params *vgi.BindParams) (*vgi.TableC
 }
 
 type projectedDataState struct {
-	remaining    int64
-	currentIndex int64
-}
-
-func (f *ProjectedDataFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	return &projectedDataState{remaining: count, currentIndex: 0}, nil
+	vgi.BatchState
 }
 
 const projectedDataBatchSize = 1000
 
-func (f *ProjectedDataFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, out *vgirpc.OutputCollector) error {
-	s := state.(*projectedDataState)
-	if s.remaining <= 0 {
+func (f *ProjectedDataFunction) NewState(params *vgi.ProcessParams) (*projectedDataState, error) {
+	count, _ := params.Args.GetScalarInt64(0)
+	return &projectedDataState{
+		BatchState: vgi.NewBatchState(count, projectedDataBatchSize),
+	}, nil
+}
+
+func (f *ProjectedDataFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *projectedDataState, out *vgirpc.OutputCollector) error {
+	if state.Remaining <= 0 {
 		return out.Finish()
 	}
 
-	size := int64(projectedDataBatchSize)
-	if s.remaining < size {
-		size = s.remaining
+	size := state.BatchSize
+	if state.Remaining < size {
+		size = state.Remaining
 	}
 
-	mem := memory.NewGoAllocator()
-	projectedCols := getProjectedColumnNames(params.ProjectionIDs, projectedDataFullSchema)
-
+	projected := vgi.ProjectedColumns(params.ProjectionIDs, projectedDataFullSchema)
+	start := state.Index
 	colMap := make(map[string]arrow.Array)
 
-	if _, ok := projectedCols["id"]; ok {
-		b := array.NewInt64Builder(mem)
-		for i := int64(0); i < size; i++ {
-			b.Append(s.currentIndex + i)
-		}
-		colMap["id"] = b.NewArray()
-		b.Release()
+	if projected.Contains("id") {
+		colMap["id"] = vgi.BuildInt64Array(size, func(i int64) int64 { return start + i })
 	}
-
-	if _, ok := projectedCols["name"]; ok {
-		b := array.NewStringBuilder(mem)
-		for i := int64(0); i < size; i++ {
-			b.Append(fmt.Sprintf("item_%d", s.currentIndex+i))
-		}
-		colMap["name"] = b.NewArray()
-		b.Release()
+	if projected.Contains("name") {
+		colMap["name"] = vgi.BuildStringArray(size, func(i int64) string { return fmt.Sprintf("item_%d", start+i) })
 	}
-
-	if _, ok := projectedCols["value"]; ok {
-		b := array.NewFloat64Builder(mem)
-		for i := int64(0); i < size; i++ {
-			b.Append(float64(s.currentIndex+i) * 1.5)
-		}
-		colMap["value"] = b.NewArray()
-		b.Release()
+	if projected.Contains("value") {
+		colMap["value"] = vgi.BuildFloat64Array(size, func(i int64) float64 { return float64(start+i) * 1.5 })
 	}
-
-	if _, ok := projectedCols["extra"]; ok {
-		b := array.NewInt64Builder(mem)
-		for i := int64(0); i < size; i++ {
-			v := s.currentIndex + i
-			b.Append(v * v)
-		}
-		colMap["extra"] = b.NewArray()
-		b.Release()
+	if projected.Contains("extra") {
+		colMap["extra"] = vgi.BuildInt64Array(size, func(i int64) int64 { v := start + i; return v * v })
 	}
 
 	cols := make([]arrow.Array, params.OutputSchema.NumFields())
@@ -130,7 +102,11 @@ func (f *ProjectedDataFunction) Process(ctx context.Context, params *vgi.Process
 		c.Release()
 	}
 
-	s.currentIndex += size
-	s.remaining -= size
+	state.Remaining -= size
+	state.Index += size
 	return out.Emit(batch)
+}
+
+func NewProjectedDataFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[projectedDataState](&ProjectedDataFunction{})
 }

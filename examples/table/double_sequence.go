@@ -9,12 +9,12 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // DoubleSequenceFunction generates a sequence of floating-point numbers.
 type DoubleSequenceFunction struct{}
+
+var _ vgi.TypedTableFunc[doubleSequenceState] = (*DoubleSequenceFunction)(nil)
 
 func (f *DoubleSequenceFunction) Name() string { return "double_sequence" }
 
@@ -38,11 +38,7 @@ var doubleSequenceOutputSchema = arrow.NewSchema([]arrow.Field{
 }, nil)
 
 func (f *DoubleSequenceFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{OutputSchema: doubleSequenceOutputSchema}, nil
-}
-
-func (f *DoubleSequenceFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	return &vgi.GlobalInitResponse{MaxWorkers: 1}, nil
+	return vgi.BindSchema(doubleSequenceOutputSchema)
 }
 
 func (f *DoubleSequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
@@ -54,57 +50,27 @@ func (f *DoubleSequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.Table
 }
 
 type doubleSequenceState struct {
-	remaining    int64
-	currentIndex int64
-	batchSize    int64
-	increment    float64
+	vgi.BatchState
+	increment float64
 }
 
-func (f *DoubleSequenceFunction) NewState(params *vgi.ProcessParams) (interface{}, error) {
+func (f *DoubleSequenceFunction) NewState(params *vgi.ProcessParams) (*doubleSequenceState, error) {
 	count, _ := params.Args.GetScalarInt64(0)
-	batchSize := int64(1000)
-	if !params.Args.IsNull("batch_size") {
-		if v, err := params.Args.GetScalarInt64("batch_size"); err == nil {
-			batchSize = v
-		}
-	}
-	increment := 1.0
-	if !params.Args.IsNull("increment") {
-		if v, err := params.Args.GetScalarFloat64("increment"); err == nil {
-			increment = v
-		}
-	}
 	return &doubleSequenceState{
-		remaining:    count,
-		currentIndex: 0,
-		batchSize:    batchSize,
-		increment:    increment,
+		BatchState: vgi.NewBatchState(count, vgi.OptionalInt64(params.Args, "batch_size", 1000)),
+		increment:  vgi.OptionalFloat64(params.Args, "increment", 1.0),
 	}, nil
 }
 
-func (f *DoubleSequenceFunction) Process(ctx context.Context, params *vgi.ProcessParams, state interface{}, out *vgirpc.OutputCollector) error {
-	s := state.(*doubleSequenceState)
-	if s.remaining <= 0 {
-		return out.Finish()
-	}
+func (f *DoubleSequenceFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *doubleSequenceState, out *vgirpc.OutputCollector) error {
+	return vgi.GenerateBatch(&state.BatchState, out, func(size int64) ([]arrow.Array, error) {
+		start := state.Index
+		return []arrow.Array{
+			vgi.BuildFloat64Array(size, func(i int64) float64 { return float64(start+i) * state.increment }),
+		}, nil
+	})
+}
 
-	size := s.batchSize
-	if s.remaining < size {
-		size = s.remaining
-	}
-
-	mem := memory.NewGoAllocator()
-	builder := array.NewFloat64Builder(mem)
-	defer builder.Release()
-
-	for i := int64(0); i < size; i++ {
-		builder.Append(float64(s.currentIndex) * s.increment)
-		s.currentIndex++
-	}
-
-	arr := builder.NewArray()
-	defer arr.Release()
-
-	s.remaining -= size
-	return out.EmitArrays([]arrow.Array{arr}, size)
+func NewDoubleSequenceFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[doubleSequenceState](&DoubleSequenceFunction{})
 }
