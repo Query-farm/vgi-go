@@ -10,27 +10,22 @@ Go implementation of the VGI (Vector Gateway Interface) protocol for DuckDB. VGI
 - `examples/table_in_out/` — Table-in-out function examples (transform + optional finalize)
 - `cmd/vgi-example-worker/` — Example worker binary that registers all example functions
 
-## Build
+## Build & Test
+
+See the `Makefile` for all available targets. Common commands:
 
 ```bash
-go build -o vgi-example-worker-go ./cmd/vgi-example-worker
+make build                                  # Build the worker binary
+make test                                   # Run all integration tests (release)
+make test BUILD_TYPE=debug                  # Run all integration tests (debug)
+make test-single TEST=test/sql/integration/scalar/add_values.test  # Single test
+make fmt                                    # Format Go source
+make vet                                    # Static analysis
 ```
 
-## Testing
+Always rebuild the worker before running tests (`make test` does this automatically).
 
-Tests live in the VGI DuckDB extension repo at `../vgi/test/sql/`. Run them with:
-
-```bash
-# All tests (release build)
-cd ../vgi && VGI_TEST_WORKER=$(pwd)/../vgi-go/vgi-example-worker-go ./build/release/test/unittest "test/*"
-
-# Single test
-cd ../vgi && VGI_TEST_WORKER=$(pwd)/../vgi-go/vgi-example-worker-go ./build/release/test/unittest "test/sql/integration/scalar/add_values.test"
-```
-
-Always rebuild the worker before running tests. Use the release build (`./build/release/`) by default. Always supply the full path of the VGI worker binary when testing.
-
-Tests use the DuckDB sqllogictest format. Refer to the documentation at https://duckdb.org/docs/stable/dev/sqllogictest/intro when debugging test files.
+Tests live in the VGI DuckDB extension repo at `../vgi/test/sql/` and use the DuckDB sqllogictest format. Refer to the documentation at https://duckdb.org/docs/stable/dev/sqllogictest/intro when debugging test files.
 
 ## Dependencies
 
