@@ -219,6 +219,8 @@ type Worker struct {
 	storages               sync.Map // map[hex execution ID string]*ExecutionStorage
 	settings               []SettingSpec
 	catalogTables          map[string][]CatalogTable // schema_name → tables
+	catalogViews           map[string][]CatalogView  // schema_name → views
+	catalogMacros          map[string][]CatalogMacro  // schema_name → macros
 	scanFunctionGetHandler ScanFunctionGetHandler
 	logLevel               slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
 	logHandler             slog.Handler // nil means default TextHandler to stderr
@@ -264,6 +266,8 @@ func NewWorker(opts ...WorkerOption) *Worker {
 		tables:        make(map[string]TableFunction),
 		tableInOuts:   make(map[string]TableInOutFunction),
 		catalogTables: make(map[string][]CatalogTable),
+		catalogViews:  make(map[string][]CatalogView),
+		catalogMacros: make(map[string][]CatalogMacro),
 		catalogName:   "example",
 	}
 	for _, opt := range opts {
@@ -290,6 +294,16 @@ func (w *Worker) RegisterTableInOut(f TableInOutFunction) {
 // RegisterCatalogTable registers a table in the given schema of the catalog.
 func (w *Worker) RegisterCatalogTable(schemaName string, table CatalogTable) {
 	w.catalogTables[schemaName] = append(w.catalogTables[schemaName], table)
+}
+
+// RegisterCatalogView registers a view in the given schema of the catalog.
+func (w *Worker) RegisterCatalogView(schemaName string, view CatalogView) {
+	w.catalogViews[schemaName] = append(w.catalogViews[schemaName], view)
+}
+
+// RegisterCatalogMacro registers a macro in the given schema of the catalog.
+func (w *Worker) RegisterCatalogMacro(schemaName string, macro CatalogMacro) {
+	w.catalogMacros[schemaName] = append(w.catalogMacros[schemaName], macro)
 }
 
 // SetScanFunctionGetHandler sets a handler for resolving scan functions

@@ -96,6 +96,50 @@ func main() {
 		}, nil),
 	})
 
+	// Views
+	w.RegisterCatalogView("main", vgi.CatalogView{
+		Name:       "first_ten",
+		Definition: "SELECT * FROM sequence(10)",
+	})
+	w.RegisterCatalogView("main", vgi.CatalogView{
+		Name:       "even_numbers",
+		Definition: "SELECT * FROM sequence(100) WHERE n % 2 = 0",
+	})
+	w.RegisterCatalogView("data", vgi.CatalogView{
+		Name:       "small_numbers",
+		Definition: "SELECT * FROM numbers WHERE value < 10",
+	})
+
+	// Macros
+	w.RegisterCatalogMacro("main", vgi.CatalogMacro{
+		Name:       "vgi_multiply",
+		MacroType:  vgi.MacroTypeScalar,
+		Parameters: []string{"x", "y"},
+		Definition: "x * y",
+	})
+
+	clampDefaults, err := vgi.BuildMacroDefaultValues([]vgi.MacroDefault{
+		{Name: "lo", Value: int64(0), Type: arrow.PrimitiveTypes.Int64},
+		{Name: "hi", Value: int64(100), Type: arrow.PrimitiveTypes.Int64},
+	})
+	if err != nil {
+		panic(fmt.Sprintf("failed to build macro defaults: %v", err))
+	}
+	w.RegisterCatalogMacro("main", vgi.CatalogMacro{
+		Name:                   "vgi_clamp",
+		MacroType:              vgi.MacroTypeScalar,
+		Parameters:             []string{"val", "lo", "hi"},
+		ParameterDefaultValues: clampDefaults,
+		Definition:             "GREATEST(lo, LEAST(hi, val))",
+	})
+
+	w.RegisterCatalogMacro("main", vgi.CatalogMacro{
+		Name:       "vgi_range_table",
+		MacroType:  vgi.MacroTypeTable,
+		Parameters: []string{"n"},
+		Definition: "SELECT * FROM range(n)",
+	})
+
 	// Handler for tables without a backing Function
 	w.SetScanFunctionGetHandler(func(schemaName, tableName string) (*vgi.ScanFunctionResult, error) {
 		if schemaName == "data" && tableName == "numbers" {

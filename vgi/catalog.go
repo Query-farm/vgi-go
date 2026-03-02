@@ -318,6 +318,44 @@ type ViewCommentSetRequestWire struct {
 	TransactionID  *[]byte `vgirpc:"transaction_id"`
 }
 
+// MacroGetRequestWire is for catalog_macro_get.
+type MacroGetRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	SchemaName    string  `vgirpc:"schema_name"`
+	Name          string  `vgirpc:"name"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// MacroCreateRequestWire is for catalog_macro_create.
+type MacroCreateRequestWire struct {
+	AttachID               []byte  `vgirpc:"attach_id"`
+	SchemaName             string  `vgirpc:"schema_name"`
+	Name                   string  `vgirpc:"name"`
+	MacroType              string  `vgirpc:"macro_type,enum"`
+	Parameters             []string `vgirpc:"parameters"`
+	Definition             string  `vgirpc:"definition"`
+	OnConflict             string  `vgirpc:"on_conflict,enum"`
+	ParameterDefaultValues *[]byte `vgirpc:"parameter_default_values"`
+	TransactionID          *[]byte `vgirpc:"transaction_id"`
+}
+
+// MacroDropRequestWire is for catalog_macro_drop.
+type MacroDropRequestWire struct {
+	AttachID       []byte  `vgirpc:"attach_id"`
+	SchemaName     string  `vgirpc:"schema_name"`
+	Name           string  `vgirpc:"name"`
+	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	TransactionID  *[]byte `vgirpc:"transaction_id"`
+}
+
+// SchemaContentsMacrosRequestWire is for schema_contents_macros.
+type SchemaContentsMacrosRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	Name          string  `vgirpc:"name"`
+	Type          string  `vgirpc:"type,enum"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
 // TableCreateRequestWire is for catalog_table_create.
 type TableCreateRequestWire struct {
 	AttachID           []byte    `vgirpc:"attach_id"`
@@ -346,6 +384,8 @@ type catalogSchemaInfo struct {
 	info      *SchemaInfo
 	functions []FunctionInfo
 	tables    []CatalogTable
+	views     []CatalogView
+	macros    []CatalogMacro
 }
 
 // NewDefaultReadOnlyCatalog creates a catalog from registered functions.
@@ -445,6 +485,36 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			cat.schemas[schemaName] = si
 		}
 		si.tables = append(si.tables, tables...)
+	}
+
+	// Populate catalog views from worker registrations
+	for schemaName, views := range w.catalogViews {
+		si, ok := cat.schemas[schemaName]
+		if !ok {
+			si = &catalogSchemaInfo{
+				info: &SchemaInfo{
+					Name:    schemaName,
+					Comment: schemaName + " schema",
+				},
+			}
+			cat.schemas[schemaName] = si
+		}
+		si.views = append(si.views, views...)
+	}
+
+	// Populate catalog macros from worker registrations
+	for schemaName, macros := range w.catalogMacros {
+		si, ok := cat.schemas[schemaName]
+		if !ok {
+			si = &catalogSchemaInfo{
+				info: &SchemaInfo{
+					Name:    schemaName,
+					Comment: schemaName + " schema",
+				},
+			}
+			cat.schemas[schemaName] = si
+		}
+		si.macros = append(si.macros, macros...)
 	}
 
 	return cat
@@ -618,7 +688,28 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_contents_views
 	vgirpc.Unary[SchemaContentsRequestWire, ItemsResponseWire](s, "catalog_schema_contents_views",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsRequestWire) (ItemsResponseWire, error) {
-			return ItemsResponseWire{Items: [][]byte{}}, nil
+			if w.catalog == nil {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			si, ok := w.catalog.schemas[req.Name]
+			if !ok || len(si.views) == 0 {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			var items [][]byte
+			for _, cv := range si.views {
+				info := &ViewInfo{
+					Name:       cv.Name,
+					SchemaName: req.Name,
+					Comment:    cv.Comment,
+					Definition: cv.Definition,
+				}
+				data, err := SerializeViewInfo(info)
+				if err != nil {
+					return ItemsResponseWire{}, err
+				}
+				items = append(items, data)
+			}
+			return ItemsResponseWire{Items: items}, nil
 		})
 
 	// catalog_schema_contents_functions
@@ -790,6 +881,28 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_view_get
 	vgirpc.Unary[ViewGetRequestWire, ItemsResponseWire](s, "catalog_view_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req ViewGetRequestWire) (ItemsResponseWire, error) {
+			if w.catalog == nil {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			si, ok := w.catalog.schemas[req.SchemaName]
+			if !ok {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			for _, cv := range si.views {
+				if cv.Name == req.Name {
+					info := &ViewInfo{
+						Name:       cv.Name,
+						SchemaName: req.SchemaName,
+						Comment:    cv.Comment,
+						Definition: cv.Definition,
+					}
+					data, err := SerializeViewInfo(info)
+					if err != nil {
+						return ItemsResponseWire{}, err
+					}
+					return ItemsResponseWire{Items: [][]byte{data}}, nil
+				}
+			}
 			return ItemsResponseWire{Items: [][]byte{}}, nil
 		})
 
@@ -815,6 +928,91 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	vgirpc.UnaryVoid[ViewCommentSetRequestWire](s, "catalog_view_comment_set",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req ViewCommentSetRequestWire) error {
 			return readOnlyErr("catalog_view_comment_set")
+		})
+
+	// catalog_macro_get
+	vgirpc.Unary[MacroGetRequestWire, ItemsResponseWire](s, "catalog_macro_get",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req MacroGetRequestWire) (ItemsResponseWire, error) {
+			if w.catalog == nil {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			si, ok := w.catalog.schemas[req.SchemaName]
+			if !ok {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			for _, cm := range si.macros {
+				if cm.Name == req.Name {
+					info := &MacroInfo{
+						Name:                   cm.Name,
+						SchemaName:             req.SchemaName,
+						Comment:                cm.Comment,
+						MacroType:              cm.MacroType,
+						Parameters:             cm.Parameters,
+						ParameterDefaultValues: cm.ParameterDefaultValues,
+						Definition:             cm.Definition,
+					}
+					data, err := SerializeMacroInfo(info)
+					if err != nil {
+						return ItemsResponseWire{}, err
+					}
+					return ItemsResponseWire{Items: [][]byte{data}}, nil
+				}
+			}
+			return ItemsResponseWire{Items: [][]byte{}}, nil
+		})
+
+	// catalog_schema_contents_macros
+	vgirpc.Unary[SchemaContentsMacrosRequestWire, ItemsResponseWire](s, "catalog_schema_contents_macros",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsMacrosRequestWire) (ItemsResponseWire, error) {
+			if w.catalog == nil {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			si, ok := w.catalog.schemas[req.Name]
+			if !ok {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+
+			var items [][]byte
+			for _, cm := range si.macros {
+				// Filter by type if requested
+				if req.Type != "" {
+					wantScalar := req.Type == "scalar_macro" || req.Type == "SCALAR_MACRO"
+					wantTable := req.Type == "table_macro" || req.Type == "TABLE_MACRO"
+					if wantScalar && cm.MacroType != MacroTypeScalar {
+						continue
+					}
+					if wantTable && cm.MacroType != MacroTypeTable {
+						continue
+					}
+				}
+				info := &MacroInfo{
+					Name:                   cm.Name,
+					SchemaName:             req.Name,
+					Comment:                cm.Comment,
+					MacroType:              cm.MacroType,
+					Parameters:             cm.Parameters,
+					ParameterDefaultValues: cm.ParameterDefaultValues,
+					Definition:             cm.Definition,
+				}
+				data, err := SerializeMacroInfo(info)
+				if err != nil {
+					return ItemsResponseWire{}, err
+				}
+				items = append(items, data)
+			}
+			return ItemsResponseWire{Items: items}, nil
+		})
+
+	// catalog_macro_create (read-only)
+	vgirpc.UnaryVoid[MacroCreateRequestWire](s, "catalog_macro_create",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req MacroCreateRequestWire) error {
+			return readOnlyErr("catalog_macro_create")
+		})
+
+	// catalog_macro_drop (read-only)
+	vgirpc.UnaryVoid[MacroDropRequestWire](s, "catalog_macro_drop",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req MacroDropRequestWire) error {
+			return readOnlyErr("catalog_macro_drop")
 		})
 
 	// catalog_create (read-only)
