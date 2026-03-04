@@ -78,6 +78,7 @@ func main() {
 	w.RegisterScalar(&scalar.BinaryPacketFunction{})
 	w.RegisterScalar(&scalar.ConditionalMessageFunction{})
 	w.RegisterScalar(&scalar.DoubleFunction{})
+	w.RegisterScalar(&scalar.HashSeedFunction{})
 	w.RegisterScalar(&scalar.MultiplyBySettingFunction{})
 	w.RegisterScalar(&scalar.MultiplyFunction{})
 	w.RegisterScalar(&scalar.NullHandlingFunction{})
