@@ -25,6 +25,9 @@ type BindParams struct {
 	AttachID []byte
 	// TransactionID is the transaction identifier.
 	TransactionID []byte
+	// ResolvedSecretsProvided is true on the second phase of a two-phase bind,
+	// indicating that scoped secrets have been resolved and are in Secrets.
+	ResolvedSecretsProvided bool
 }
 
 // BindResponse is returned by a function's OnBind method.
@@ -33,4 +36,8 @@ type BindResponse struct {
 	OutputSchema *arrow.Schema
 	// OpaqueData is optional opaque data passed to the init phase.
 	OpaqueData []byte
+	// SecretScopeRequest, when non-nil, signals a two-phase bind scope request.
+	// The extension will resolve scoped secrets and re-call bind with
+	// ResolvedSecretsProvided=true and the resolved secrets in Secrets.
+	SecretScopeRequest []SecretLookup
 }

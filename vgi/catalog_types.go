@@ -27,6 +27,7 @@ type FunctionInfo struct {
 	Categories         []string
 	ProjectionPushdown *bool
 	FilterPushdown     *bool
+	RequiredSecrets    []SecretRequirement
 }
 
 var dictType = &arrow.DictionaryType{
@@ -52,6 +53,11 @@ var functionInfoSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "filter_pushdown", Type: &arrow.BooleanType{}, Nullable: true},
 	{Name: "order_preservation", Type: dictType, Nullable: true},
 	{Name: "max_workers", Type: arrow.PrimitiveTypes.Int32, Nullable: true},
+	{Name: "required_secrets", Type: arrow.ListOf(arrow.StructOf(
+		arrow.Field{Name: "secret_type", Type: arrow.BinaryTypes.String},
+		arrow.Field{Name: "secret_name", Type: arrow.BinaryTypes.String, Nullable: true},
+		arrow.Field{Name: "scope", Type: arrow.BinaryTypes.String, Nullable: true},
+	)), Nullable: true},
 }, nil)
 
 // SerializeFunctionInfo serializes a FunctionInfo to IPC bytes.
@@ -192,6 +198,35 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	defer mwBuilder.Release()
 	mwBuilder.AppendNull()
 
+	// required_secrets
+	rsStructType := arrow.StructOf(
+		arrow.Field{Name: "secret_type", Type: arrow.BinaryTypes.String},
+		arrow.Field{Name: "secret_name", Type: arrow.BinaryTypes.String, Nullable: true},
+		arrow.Field{Name: "scope", Type: arrow.BinaryTypes.String, Nullable: true},
+	)
+	rsBuilder := array.NewListBuilder(mem, rsStructType)
+	defer rsBuilder.Release()
+	if len(info.RequiredSecrets) > 0 {
+		rsBuilder.Append(true)
+		sb := rsBuilder.ValueBuilder().(*array.StructBuilder)
+		for _, rs := range info.RequiredSecrets {
+			sb.Append(true)
+			sb.FieldBuilder(0).(*array.StringBuilder).Append(rs.SecretType)
+			if rs.SecretName != "" {
+				sb.FieldBuilder(1).(*array.StringBuilder).Append(rs.SecretName)
+			} else {
+				sb.FieldBuilder(1).(*array.StringBuilder).AppendNull()
+			}
+			if rs.Scope != "" {
+				sb.FieldBuilder(2).(*array.StringBuilder).Append(rs.Scope)
+			} else {
+				sb.FieldBuilder(2).(*array.StringBuilder).AppendNull()
+			}
+		}
+	} else {
+		rsBuilder.AppendNull()
+	}
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
@@ -209,6 +244,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		fpBuilder.NewArray(),
 		opBuilder.NewArray(),
 		mwBuilder.NewArray(),
+		rsBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

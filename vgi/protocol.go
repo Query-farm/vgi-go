@@ -20,20 +20,24 @@ import (
 
 // BindRequestWire is the wire format for bind requests.
 type BindRequestWire struct {
-	FunctionName  string  `vgirpc:"function_name"`
-	Arguments     []byte  `vgirpc:"arguments"`
-	FunctionType  string  `vgirpc:"function_type,enum"`
-	InputSchema   *[]byte `vgirpc:"input_schema"`
-	Settings      *[]byte `vgirpc:"settings"`
-	Secrets       *[]byte `vgirpc:"secrets"`
-	AttachID      *[]byte `vgirpc:"attach_id"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	FunctionName            string  `vgirpc:"function_name"`
+	Arguments               []byte  `vgirpc:"arguments"`
+	FunctionType            string  `vgirpc:"function_type,enum"`
+	InputSchema             *[]byte `vgirpc:"input_schema"`
+	Settings                *[]byte `vgirpc:"settings"`
+	Secrets                 *[]byte `vgirpc:"secrets"`
+	AttachID                *[]byte `vgirpc:"attach_id"`
+	TransactionID           *[]byte `vgirpc:"transaction_id"`
+	ResolvedSecretsProvided bool    `vgirpc:"resolved_secrets_provided"`
 }
 
 // BindResponseWire is the wire format for bind responses.
 type BindResponseWire struct {
-	OutputSchema []byte  `vgirpc:"output_schema"`
-	OpaqueData   *[]byte `vgirpc:"opaque_data"`
+	OutputSchema      *[]byte   `vgirpc:"output_schema"`
+	OpaqueData        *[]byte   `vgirpc:"opaque_data"`
+	LookupSecretTypes *[]string `vgirpc:"lookup_secret_types"`
+	LookupScopes      *[]string `vgirpc:"lookup_scopes"`
+	LookupNames       *[]string `vgirpc:"lookup_names"`
 }
 
 // InitRequestWire is the wire format for init requests.
@@ -219,13 +223,32 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		return BindResponseWire{}, err
 	}
 
+	// Two-phase bind: if the function requests scoped secret lookup, return
+	// the lookup columns instead of an output schema.
+	if bindResp.SecretScopeRequest != nil {
+		slog.Debug("bind: two-phase scope request", "function", req.FunctionName, "lookups", len(bindResp.SecretScopeRequest))
+		types := make([]string, len(bindResp.SecretScopeRequest))
+		scopes := make([]string, len(bindResp.SecretScopeRequest))
+		names := make([]string, len(bindResp.SecretScopeRequest))
+		for i, sl := range bindResp.SecretScopeRequest {
+			types[i] = sl.SecretType
+			scopes[i] = sl.Scope
+			names[i] = sl.SecretName
+		}
+		return BindResponseWire{
+			LookupSecretTypes: &types,
+			LookupScopes:      &scopes,
+			LookupNames:       &names,
+		}, nil
+	}
+
 	outputSchemaBytes, err := SerializeSchema(bindResp.OutputSchema)
 	if err != nil {
 		return BindResponseWire{}, fmt.Errorf("serializing output schema: %w", err)
 	}
 
 	resp := BindResponseWire{
-		OutputSchema: outputSchemaBytes,
+		OutputSchema: &outputSchemaBytes,
 	}
 	if len(bindResp.OpaqueData) > 0 {
 		resp.OpaqueData = &bindResp.OpaqueData
@@ -710,6 +733,8 @@ func (w *Worker) parseBindRequest(req BindRequestWire) (*BindParams, error) {
 		params.TransactionID = *req.TransactionID
 	}
 
+	params.ResolvedSecretsProvided = req.ResolvedSecretsProvided
+
 	return params, nil
 }
 
@@ -771,6 +796,10 @@ func (w *Worker) deserializeBindRequest(data []byte) (*BindRequestWire, error) {
 			if c, ok := col.(*array.Binary); ok {
 				v := c.Value(0)
 				req.TransactionID = &v
+			}
+		case "resolved_secrets_provided":
+			if c, ok := col.(*array.Boolean); ok {
+				req.ResolvedSecretsProvided = c.Value(0)
 			}
 		}
 	}

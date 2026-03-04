@@ -46,6 +46,20 @@ const (
 	NullHandlingReceiveNulls = NullHandlingSpecial
 )
 
+// SecretRequirement describes a secret type that a function needs.
+type SecretRequirement struct {
+	SecretType string
+	SecretName string // empty = not specified
+	Scope      string // empty = not specified
+}
+
+// SecretLookup describes a scoped secret lookup request for two-phase bind.
+type SecretLookup struct {
+	SecretType string
+	SecretName string
+	Scope      string
+}
+
 // FunctionMetadata holds descriptive metadata about a function.
 type FunctionMetadata struct {
 	// Description is a human-readable description.
@@ -66,6 +80,8 @@ type FunctionMetadata struct {
 	// When set, the catalog registers this concrete type instead of ANY.
 	// Leave nil for functions with dynamic return types (resolved at bind time).
 	ReturnType arrow.DataType
+	// RequiredSecrets lists secret types the function needs at bind time.
+	RequiredSecrets []SecretRequirement
 }
 
 // DefaultMetadata returns metadata with default values.

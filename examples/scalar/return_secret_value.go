@@ -24,6 +24,9 @@ func (f *ReturnSecretValueFunction) Metadata() vgi.FunctionMetadata {
 		Description: "Return a secret's value",
 		Stability:   vgi.StabilityConsistent,
 		ReturnType:  arrow.BinaryTypes.String,
+		RequiredSecrets: []vgi.SecretRequirement{
+			{SecretType: "vgi_example"},
+		},
 	}
 }
 
@@ -36,16 +39,10 @@ func (f *ReturnSecretValueFunction) OnBind(params *vgi.BindParams) (*vgi.BindRes
 }
 
 func (f *ReturnSecretValueFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
-	// Get the vgi_example_secret
 	var jsonStr string
 	if params.Secrets != nil {
-		if secret, ok := params.Secrets["vgi_example_secret"]; ok {
-			// Convert to ordered JSON
-			orderedMap := make(map[string]interface{})
-			for k, v := range secret {
-				orderedMap[k] = v
-			}
-			jsonBytes, err := marshalOrderedJSON(orderedMap)
+		if secret, ok := params.Secrets["vgi_example"]; ok {
+			jsonBytes, err := marshalOrderedJSON(secret)
 			if err == nil {
 				jsonStr = string(jsonBytes)
 			}

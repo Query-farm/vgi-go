@@ -21,6 +21,19 @@ func main() {
 
 	w := vgi.NewWorker(
 		vgi.WithCatalogName("example"),
+		vgi.WithSecretTypes(
+			vgi.SecretTypeSpec{
+				Name:        "vgi_example",
+				Description: "Example VGI secret for testing",
+				Schema: arrow.NewSchema([]arrow.Field{
+					{Name: "secret_string", Type: arrow.BinaryTypes.String, Metadata: arrow.NewMetadata([]string{"redact"}, []string{"true"})},
+					{Name: "api_key", Type: arrow.BinaryTypes.String, Metadata: arrow.NewMetadata([]string{"redact"}, []string{"true"})},
+					{Name: "port", Type: arrow.PrimitiveTypes.Int32},
+					{Name: "use_ssl", Type: &arrow.BooleanType{}},
+					{Name: "timeout", Type: arrow.PrimitiveTypes.Float64},
+				}, nil),
+			},
+		),
 		vgi.WithSettings(
 			vgi.SettingSpec{
 				Name:         "vgi_verbose_mode",
@@ -83,6 +96,8 @@ func main() {
 	w.RegisterTable(table.NewNestedSequenceFunction())
 	w.RegisterTable(table.NewPartitionedSequenceFunction())
 	w.RegisterTable(table.NewProjectedDataFunction())
+	w.RegisterTable(table.NewScopedSecretDemoFunction())
+	w.RegisterTable(table.NewSecretDemoFunction())
 	w.RegisterTable(table.NewSequenceFunction())
 	w.RegisterTable(table.NewSettingsAwareFunction())
 	w.RegisterTable(table.NewStructSettingsFunction())

@@ -12,4 +12,6 @@ func init() {
 	vgirpc.RegisterStateType(&FinalizeProducerState{})
 	vgirpc.RegisterStateType(InitRecipe{})
 	vgirpc.RegisterStateType(map[string]interface{}{})
+	vgirpc.RegisterStateType(SecretRequirement{})
+	vgirpc.RegisterStateType(SecretLookup{})
 }

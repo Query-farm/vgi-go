@@ -42,6 +42,7 @@ type CatalogAttachResultWire struct {
 	AttachIDRequired     bool            `vgirpc:"attach_id_required"`
 	DefaultSchema        string          `vgirpc:"default_schema"`
 	Settings             SerializedItems `vgirpc:"settings"`
+	SecretTypes          SerializedItems `vgirpc:"secret_types"`
 }
 
 // CatalogVersionRequestWire is the wire type for catalog_version.
@@ -407,15 +408,16 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 	// Helper to build FunctionInfo from any function type
 	buildFunctionInfo := func(name string, ft FunctionType, meta FunctionMetadata, specs []ArgSpec) FunctionInfo {
 		fi := FunctionInfo{
-			Name:         name,
-			SchemaName:   "main",
-			FunctionType: ft,
-			Stability:    meta.Stability,
-			NullHandling: meta.NullHandling,
-			Description:  meta.Description,
-			Categories:   meta.Categories,
-			ArgSchema:    BuildArgSchema(specs),
-			OutputSchema: arrow.NewSchema(nil, nil), // empty, resolved at bind time
+			Name:            name,
+			SchemaName:      "main",
+			FunctionType:    ft,
+			Stability:       meta.Stability,
+			NullHandling:    meta.NullHandling,
+			Description:     meta.Description,
+			Categories:      meta.Categories,
+			ArgSchema:       BuildArgSchema(specs),
+			OutputSchema:    arrow.NewSchema(nil, nil), // empty, resolved at bind time
+			RequiredSecrets: meta.RequiredSecrets,
 		}
 		if meta.ProjectionPushdown {
 			v := true
@@ -572,6 +574,20 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				serializedSettings = [][]byte{}
 			}
 
+			// Serialize secret types
+			var serializedSecretTypes [][]byte
+			for _, spec := range w.secretTypes {
+				data, err := serializeSecretTypeSpec(spec)
+				if err != nil {
+					slog.Error("failed to serialize secret type", "name", spec.Name, "err", err)
+					continue
+				}
+				serializedSecretTypes = append(serializedSecretTypes, data)
+			}
+			if serializedSecretTypes == nil {
+				serializedSecretTypes = [][]byte{}
+			}
+
 			return CatalogAttachResultWire{
 				AttachID:             attachID,
 				SupportsTransactions: false,
@@ -581,6 +597,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				AttachIDRequired:     false,
 				DefaultSchema:        "main",
 				Settings:             serializedSettings,
+				SecretTypes:          serializedSecretTypes,
 			}, nil
 		})
 

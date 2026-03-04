@@ -106,6 +106,13 @@ func (h *storageCleanupHook) OnDispatchEnd(ctx context.Context, token vgirpc.Hoo
 	h.pendingKeys = append(h.pendingKeys, tracker.keys...)
 }
 
+// SecretTypeSpec describes a DuckDB secret type registered by the worker.
+type SecretTypeSpec struct {
+	Name        string
+	Description string
+	Schema      *arrow.Schema // parameter schema; use field metadata {"redact":"true"} for sensitive fields
+}
+
 // SettingSpec describes a DuckDB custom setting registered by the worker.
 type SettingSpec struct {
 	Name         string
@@ -192,6 +199,57 @@ func serializeSettingSpec(spec SettingSpec) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// serializeSecretTypeSpec serializes a SecretTypeSpec to Arrow IPC bytes.
+// Format: RecordBatch with schema {name: string, description: string, parameters_schema: binary}
+func serializeSecretTypeSpec(spec SecretTypeSpec) ([]byte, error) {
+	if spec.Schema == nil {
+		return nil, fmt.Errorf("secret type %q: Schema must not be nil", spec.Name)
+	}
+	mem := memory.NewGoAllocator()
+	secretTypeSchema := arrow.NewSchema([]arrow.Field{
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: false},
+		{Name: "description", Type: arrow.BinaryTypes.String, Nullable: false},
+		{Name: "parameters_schema", Type: arrow.BinaryTypes.Binary, Nullable: false},
+	}, nil)
+
+	// Serialize the parameter schema
+	paramSchemaBytes, err := SerializeSchema(spec.Schema)
+	if err != nil {
+		return nil, fmt.Errorf("serializing secret type schema: %w", err)
+	}
+
+	nameBuilder := array.NewStringBuilder(mem)
+	defer nameBuilder.Release()
+	nameBuilder.Append(spec.Name)
+	nameArr := nameBuilder.NewArray()
+	defer nameArr.Release()
+
+	descBuilder := array.NewStringBuilder(mem)
+	defer descBuilder.Release()
+	descBuilder.Append(spec.Description)
+	descArr := descBuilder.NewArray()
+	defer descArr.Release()
+
+	schemaBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	defer schemaBuilder.Release()
+	schemaBuilder.Append(paramSchemaBytes)
+	schemaArr := schemaBuilder.NewArray()
+	defer schemaArr.Release()
+
+	batch := array.NewRecordBatch(secretTypeSchema,
+		[]arrow.Array{nameArr, descArr, schemaArr}, 1)
+
+	var buf bytes.Buffer
+	w := ipc.NewWriter(&buf, ipc.WithSchema(secretTypeSchema))
+	if err := w.Write(batch); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 // buildDefaultValueBatch creates a 1-row batch with the default value.
 func buildDefaultValueBatch(mem memory.Allocator, schema *arrow.Schema, dt arrow.DataType, val interface{}) (arrow.RecordBatch, error) {
 	b := array.NewBuilder(mem, dt)
@@ -232,6 +290,7 @@ type Worker struct {
 	catalogViews           map[string][]CatalogView  // schema_name → views
 	catalogMacros          map[string][]CatalogMacro // schema_name → macros
 	scanFunctionGetHandler ScanFunctionGetHandler
+	secretTypes            []SecretTypeSpec
 	logLevel               slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
 	logHandler             slog.Handler // nil means default TextHandler to stderr
 }
@@ -250,6 +309,13 @@ func WithCatalogName(name string) WorkerOption {
 func WithSettings(settings ...SettingSpec) WorkerOption {
 	return func(w *Worker) {
 		w.settings = append(w.settings, settings...)
+	}
+}
+
+// WithSecretTypes registers secret types that will be sent to DuckDB during catalog_attach.
+func WithSecretTypes(types ...SecretTypeSpec) WorkerOption {
+	return func(w *Worker) {
+		w.secretTypes = append(w.secretTypes, types...)
 	}
 }
 
