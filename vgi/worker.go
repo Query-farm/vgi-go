@@ -9,8 +9,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -53,6 +57,7 @@ type storageCleanupHook struct {
 	worker      *Worker
 	pendingKeys []string // keys from previous dispatch, candidates for cleanup
 	staleKeys   []string // snapshot of pendingKeys at current dispatch start
+	isHTTP      bool     // when true, skip storage cleanup (no reliable stream-end signal)
 }
 
 func (h *storageCleanupHook) OnDispatchStart(ctx context.Context, info vgirpc.DispatchInfo) (context.Context, vgirpc.HookToken) {
@@ -69,6 +74,11 @@ func (h *storageCleanupHook) OnDispatchStart(ctx context.Context, info vgirpc.Di
 }
 
 func (h *storageCleanupHook) OnDispatchEnd(ctx context.Context, token vgirpc.HookToken, info vgirpc.DispatchInfo, stats *vgirpc.CallStatistics, err error) {
+	if h.isHTTP {
+		// In HTTP mode there is no reliable stream-end signal — each request
+		// is independent, so we skip the deferred cleanup heuristic.
+		return
+	}
 	tracker, ok := token.(*storageTracker)
 	if !ok || tracker == nil {
 		return
@@ -220,7 +230,7 @@ type Worker struct {
 	settings               []SettingSpec
 	catalogTables          map[string][]CatalogTable // schema_name → tables
 	catalogViews           map[string][]CatalogView  // schema_name → views
-	catalogMacros          map[string][]CatalogMacro  // schema_name → macros
+	catalogMacros          map[string][]CatalogMacro // schema_name → macros
 	scanFunctionGetHandler ScanFunctionGetHandler
 	logLevel               slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
 	logHandler             slog.Handler // nil means default TextHandler to stderr
@@ -312,8 +322,9 @@ func (w *Worker) SetScanFunctionGetHandler(h ScanFunctionGetHandler) {
 	w.scanFunctionGetHandler = h
 }
 
-// RunStdio runs the worker serving RPC over stdin/stdout.
-func (w *Worker) RunStdio() {
+// buildServer creates and configures the vgirpc.Server with all handlers
+// registered. Shared between RunStdio and RunHttp.
+func (w *Worker) buildServer(isHTTP bool) *vgirpc.Server {
 	// Configure structured logging.
 	// logLevel zero value is slog.LevelInfo (0) — Info by default is intentional.
 	handler := w.logHandler
@@ -326,7 +337,7 @@ func (w *Worker) RunStdio() {
 	w.catalog = NewDefaultReadOnlyCatalog(w.catalogName, w)
 
 	s := vgirpc.NewServer()
-	s.SetDispatchHook(&storageCleanupHook{worker: w})
+	s.SetDispatchHook(&storageCleanupHook{worker: w, isHTTP: isHTTP})
 
 	// Register bind (unary)
 	vgirpc.Unary[BindRequestWire, BindResponseWire](s, "bind", w.handleBind)
@@ -345,7 +356,48 @@ func (w *Worker) RunStdio() {
 	// Register all catalog methods
 	w.registerCatalogMethods(s)
 
+	return s
+}
+
+// RunStdio runs the worker serving RPC over stdin/stdout.
+func (w *Worker) RunStdio() {
+	s := w.buildServer(false)
 	s.RunStdio()
+}
+
+// RunHttp runs the worker serving RPC over HTTP. It listens on the given
+// address (e.g. "127.0.0.1:0" for a random port) and prints "PORT:<n>" to
+// stdout so callers can discover the assigned port.
+func (w *Worker) RunHttp(addr string) error {
+	s := w.buildServer(true)
+	hs := vgirpc.NewHttpServer(s)
+	hs.SetRehydrateFunc(w.rehydrateState)
+	hs.SetProducerBatchLimit(100)
+
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	fmt.Printf("PORT:%d\n", port)
+	os.Stdout.Sync()
+
+	srv := &http.Server{Handler: hs}
+
+	// Handle SIGTERM/SIGINT for clean shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigCh
+		srv.Shutdown(context.Background())
+	}()
+
+	err = srv.Serve(listener)
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
 }
 
 // newExecutionID generates a UUID-based execution ID.

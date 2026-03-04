@@ -67,8 +67,9 @@ type CardinalityRequestWire struct {
 
 // ScalarExchangeState implements ExchangeState for scalar functions.
 type ScalarExchangeState struct {
-	fn     ScalarFunction
-	params *ProcessParams
+	Recipe InitRecipe     // exported, serialized
+	fn     ScalarFunction // transient
+	params *ProcessParams // transient
 }
 
 func (s *ScalarExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
@@ -81,16 +82,18 @@ func (s *ScalarExchangeState) Exchange(ctx context.Context, input arrow.RecordBa
 
 // TableProducerState implements ProducerState for table functions.
 type TableProducerState struct {
-	fn             TableFunction
-	params         *ProcessParams
-	state          interface{}
-	autoApply      *PushdownFilters
-	autoProjectIDs []int32 // non-nil when framework must project after emit
+	Recipe         InitRecipe       // exported, serialized
+	UserStateBytes []byte           // exported, gob-serialized user state
+	AutoProjectIDs []int32          // exported
+	fn             TableFunction    // transient
+	params         *ProcessParams   // transient
+	state          interface{}      // transient (reconstructed from UserStateBytes)
+	autoApply      *PushdownFilters // transient
 }
 
 func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
-	if s.autoApply != nil || s.autoProjectIDs != nil {
-		if s.autoProjectIDs != nil {
+	if s.autoApply != nil || s.AutoProjectIDs != nil {
+		if s.AutoProjectIDs != nil {
 			// Tell OutputCollector to use the full schema for EmitArrays/EmitMap
 			// so functions that emit all columns can build valid batches.
 			// The interceptor below will project down before the wire write.
@@ -98,8 +101,8 @@ func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputColl
 		}
 		out.EmitInterceptor = func(batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 			result := batch
-			if s.autoProjectIDs != nil {
-				result = projectBatch(result, s.autoProjectIDs)
+			if s.AutoProjectIDs != nil {
+				result = projectBatch(result, s.AutoProjectIDs)
 			}
 			if s.autoApply != nil {
 				return s.autoApply.Apply(ctx, result)
@@ -124,10 +127,12 @@ func projectBatch(batch arrow.RecordBatch, ids []int32) arrow.RecordBatch {
 
 // TableInOutExchangeState implements ExchangeState for table-in-out INPUT phase.
 type TableInOutExchangeState struct {
-	fn        TableInOutFunction
-	params    *ProcessParams
-	state     interface{}
-	autoApply *PushdownFilters
+	Recipe         InitRecipe         // exported, serialized
+	UserStateBytes []byte             // exported, gob-serialized user state
+	fn             TableInOutFunction // transient
+	params         *ProcessParams     // transient
+	state          interface{}        // transient
+	autoApply      *PushdownFilters   // transient
 }
 
 func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
@@ -141,18 +146,20 @@ func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.Reco
 
 // FinalizeProducerState implements ProducerState for table-in-out FINALIZE phase.
 type FinalizeProducerState struct {
-	batches []arrow.RecordBatch
-	index   int
+	Recipe   InitRecipe          // exported, serialized
+	BatchIPC [][]byte            // exported, serialized finalize batch IPC bytes
+	BatchIdx int                 // exported, current emission position
+	batches  []arrow.RecordBatch // transient (deserialized from BatchIPC)
 }
 
 func (s *FinalizeProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
-	if s.index >= len(s.batches) {
+	if s.BatchIdx >= len(s.batches) {
 		s.batches = nil
 		return out.Finish()
 	}
-	batch := s.batches[s.index]
-	s.batches[s.index] = nil // release reference after emission
-	s.index++
+	batch := s.batches[s.BatchIdx]
+	s.batches[s.BatchIdx] = nil // release reference after emission
+	s.BatchIdx++
 	return out.Emit(batch)
 }
 
@@ -332,10 +339,27 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		PushdownFilters: initParams.PushdownFilters,
 	}
 
+	// Build InitRecipe for HTTP state serialization
+	recipe := InitRecipe{
+		BindCallIPC:     req.BindCall,
+		OutputSchemaIPC: req.OutputSchema,
+		FunctionName:    bindReq.FunctionName,
+		FunctionType:    bindReq.FunctionType,
+		ProjectionIDs:   initParams.ProjectionIDs,
+		ExecutionID:     initParams.ExecutionID,
+		BindOpaqueData:  initParams.BindOpaqueData,
+		InitOpaqueData:  initParams.InitOpaqueData,
+		Phase:           phase,
+		IsSecondary:     initParams.IsSecondary,
+	}
+	if req.PushdownFilters != nil {
+		recipe.PushdownFilterIPC = *req.PushdownFilters
+	}
+
 	slog.Debug("init: dispatching", "type", fmt.Sprintf("%T", fn))
 	switch f := fn.(type) {
 	case ScalarFunction:
-		result, err := w.initScalar(ctx, f, initParams, processParams, projectedSchema)
+		result, err := w.initScalar(ctx, f, initParams, processParams, projectedSchema, &recipe)
 		if err != nil {
 			slog.Debug("init: scalar init failed", "err", err)
 		} else {
@@ -343,7 +367,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		}
 		return result, err
 	case TableFunction:
-		result, err := w.initTable(ctx, f, initParams, processParams, projectedSchema, autoProjectIDs)
+		result, err := w.initTable(ctx, f, initParams, processParams, projectedSchema, autoProjectIDs, &recipe)
 		if err != nil {
 			slog.Debug("init: table init failed", "err", err)
 		} else {
@@ -351,7 +375,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		}
 		return result, err
 	case TableInOutFunction:
-		result, err := w.initTableInOut(ctx, f, initParams, processParams, projectedSchema, phase)
+		result, err := w.initTableInOut(ctx, f, initParams, processParams, projectedSchema, phase, &recipe)
 		if err != nil {
 			slog.Debug("init: table-in-out init failed", "err", err)
 		} else {
@@ -363,7 +387,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	}
 }
 
-func (w *Worker) initScalar(ctx context.Context, fn ScalarFunction, initParams *InitParams, processParams *ProcessParams, outputSchema *arrow.Schema) (*vgirpc.StreamResult, error) {
+func (w *Worker) initScalar(ctx context.Context, fn ScalarFunction, initParams *InitParams, processParams *ProcessParams, outputSchema *arrow.Schema, recipe *InitRecipe) (*vgirpc.StreamResult, error) {
 	// Scalar functions don't have an init phase — use default response
 	resp := &GlobalInitResponse{
 		MaxWorkers: 1,
@@ -374,6 +398,7 @@ func (w *Worker) initScalar(ctx context.Context, fn ScalarFunction, initParams *
 		resp.ExecutionID = initParams.ExecutionID
 	}
 	processParams.ExecutionID = resp.ExecutionID
+	recipe.ExecutionID = resp.ExecutionID
 	storage, err := w.getOrCreateStorage(ctx, resp.ExecutionID)
 	if err != nil {
 		return nil, err
@@ -386,6 +411,7 @@ func (w *Worker) initScalar(ctx context.Context, fn ScalarFunction, initParams *
 	}
 
 	state := &ScalarExchangeState{
+		Recipe: *recipe,
 		fn:     fn,
 		params: processParams,
 	}
@@ -398,7 +424,7 @@ func (w *Worker) initScalar(ctx context.Context, fn ScalarFunction, initParams *
 	}, nil
 }
 
-func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *InitParams, processParams *ProcessParams, outputSchema *arrow.Schema, autoProjectIDs []int32) (*vgirpc.StreamResult, error) {
+func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *InitParams, processParams *ProcessParams, outputSchema *arrow.Schema, autoProjectIDs []int32, recipe *InitRecipe) (*vgirpc.StreamResult, error) {
 	// Pre-create storage so OnInit can use it
 	if initParams.ExecutionID == nil {
 		initParams.ExecutionID = newExecutionID()
@@ -433,6 +459,8 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 		}
 	}
 	processParams.ExecutionID = resp.ExecutionID
+	recipe.ExecutionID = resp.ExecutionID
+	recipe.InitOpaqueData = resp.OpaqueData
 	processParams.InitOpaqueData = resp.OpaqueData
 	processStorage, err := w.getOrCreateStorage(ctx, resp.ExecutionID)
 	if err != nil {
@@ -445,6 +473,12 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 		return nil, err
 	}
 
+	// Gob-encode user state for HTTP serialization
+	userStateBytes, err := gobEncode(userState)
+	if err != nil {
+		return nil, fmt.Errorf("encoding user state: %w", err)
+	}
+
 	header := &GlobalInitResponseWire{
 		ExecutionID: resp.ExecutionID,
 		MaxWorkers:  resp.MaxWorkers,
@@ -454,10 +488,12 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 	}
 
 	state := &TableProducerState{
+		Recipe:         *recipe,
+		UserStateBytes: userStateBytes,
+		AutoProjectIDs: autoProjectIDs,
 		fn:             fn,
 		params:         processParams,
 		state:          userState,
-		autoProjectIDs: autoProjectIDs,
 	}
 
 	// Set up auto-apply if the function opts in and filters are present
@@ -475,7 +511,7 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 	}, nil
 }
 
-func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, initParams *InitParams, processParams *ProcessParams, outputSchema *arrow.Schema, phase string) (*vgirpc.StreamResult, error) {
+func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, initParams *InitParams, processParams *ProcessParams, outputSchema *arrow.Schema, phase string, recipe *InitRecipe) (*vgirpc.StreamResult, error) {
 	// Pre-create storage so OnInit can use it
 	if initParams.ExecutionID == nil {
 		initParams.ExecutionID = newExecutionID()
@@ -510,6 +546,8 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 		}
 	}
 	processParams.ExecutionID = resp.ExecutionID
+	recipe.ExecutionID = resp.ExecutionID
+	recipe.InitOpaqueData = resp.OpaqueData
 	processParams.InitOpaqueData = resp.OpaqueData
 	processStorage, err := w.getOrCreateStorage(ctx, resp.ExecutionID)
 	if err != nil {
@@ -536,8 +574,20 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 			return nil, err
 		}
 
+		// Serialize each finalize batch to IPC bytes
+		var batchIPC [][]byte
+		for _, b := range batches {
+			data, serErr := SerializeRecordBatch(b)
+			if serErr != nil {
+				return nil, fmt.Errorf("serializing finalize batch: %w", serErr)
+			}
+			batchIPC = append(batchIPC, data)
+		}
+
 		state := &FinalizeProducerState{
-			batches: batches,
+			Recipe:   *recipe,
+			BatchIPC: batchIPC,
+			batches:  batches,
 		}
 
 		return &vgirpc.StreamResult{
@@ -553,10 +603,18 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 		return nil, err
 	}
 
+	// Gob-encode user state for HTTP serialization
+	userStateBytes, err := gobEncode(userState)
+	if err != nil {
+		return nil, fmt.Errorf("encoding user state: %w", err)
+	}
+
 	state := &TableInOutExchangeState{
-		fn:     fn,
-		params: processParams,
-		state:  userState,
+		Recipe:         *recipe,
+		UserStateBytes: userStateBytes,
+		fn:             fn,
+		params:         processParams,
+		state:          userState,
 	}
 
 	// Set up auto-apply if the function opts in and filters are present

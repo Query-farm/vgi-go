@@ -16,9 +16,11 @@ See the `Makefile` for all available targets. Common commands:
 
 ```bash
 make build                                  # Build the worker binary
-make test                                   # Run all integration tests (release)
-make test BUILD_TYPE=debug                  # Run all integration tests (debug)
+make test                                   # Run all integration tests (release, stdio)
+make test BUILD_TYPE=debug                  # Run all integration tests (debug, stdio)
 make test-single TEST=test/sql/integration/scalar/add_values.test  # Single test
+make test-http                              # Run all tests over HTTP transport
+make test-all                               # Run both stdio and HTTP tests
 make fmt                                    # Format Go source
 make vet                                    # Static analysis
 ```
@@ -26,6 +28,16 @@ make vet                                    # Static analysis
 Always rebuild the worker before running tests (`make test` does this automatically).
 
 Tests live in the VGI DuckDB extension repo at `../vgi/test/sql/` and use the DuckDB sqllogictest format. Refer to the documentation at https://duckdb.org/docs/stable/dev/sqllogictest/intro when debugging test files.
+
+### HTTP tests
+
+`make test-http` runs each test in its own HTTP worker process. A fresh worker is started per test using `--http` mode, the port is discovered via a FIFO, and the worker is killed after the test completes. Tests listed in `HTTP_XFAIL_TESTS` in the Makefile are expected failures (reported as XFAIL). If an expected failure starts passing, it is reported as XPASS so you can remove it from the list. Unexpected failures rerun automatically with the debug binary for diagnostics.
+
+### Transport modes
+
+The worker supports two transport modes:
+- **Stdio** (default): `./vgi-example-worker-go` — communicates over stdin/stdout
+- **HTTP**: `./vgi-example-worker-go --http` — listens on a random port, prints `PORT:<n>` to stdout
 
 ## Dependencies
 

@@ -35,17 +35,17 @@ func (f *ExceptionProcessFunction) OnBind(params *vgi.BindParams) (*vgi.BindResp
 }
 
 type exceptionProcessState struct {
-	batchCount int
+	BatchCount int
 }
 
 func (f *ExceptionProcessFunction) NewState(params *vgi.ProcessParams) (*exceptionProcessState, error) {
-	return &exceptionProcessState{batchCount: 0}, nil
+	return &exceptionProcessState{BatchCount: 0}, nil
 }
 
 func (f *ExceptionProcessFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *exceptionProcessState, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
-	state.batchCount++
-	if state.batchCount%2 == 0 {
-		return fmt.Errorf("Intentional exception on batch %d", state.batchCount)
+	state.BatchCount++
+	if state.BatchCount%2 == 0 {
+		return fmt.Errorf("Intentional exception on batch %d", state.BatchCount)
 	}
 	return out.Emit(vgi.EmptyBatch(params.OutputSchema))
 }

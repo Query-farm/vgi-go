@@ -5,6 +5,7 @@ package vgi
 
 import (
 	"context"
+	"encoding/gob"
 	"fmt"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
@@ -40,6 +41,7 @@ type TypedTableInOutFunc[S any] interface {
 //	    return vgi.AsTableInOutFunction[struct{}](&EchoFunction{})
 //	}
 func AsTableInOutFunction[S any](f TypedTableInOutFunc[S]) TableInOutFunction {
+	gob.Register(new(S))
 	base := &typedTableInOutAdapter[S]{inner: f}
 
 	if init, ok := any(f).(OnIniter); ok {

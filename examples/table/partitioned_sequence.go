@@ -78,22 +78,22 @@ func (f *PartitionedSequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.
 }
 
 type partitionedSequenceState struct {
-	currentStart int64
-	currentEnd   int64
-	currentIdx   int64
-	hasChunk     bool
-	increment    int64
+	CurrentStart int64
+	CurrentEnd   int64
+	CurrentIdx   int64
+	HasChunk     bool
+	Increment    int64
 }
 
 func (f *PartitionedSequenceFunction) NewState(params *vgi.ProcessParams) (*partitionedSequenceState, error) {
 	return &partitionedSequenceState{
-		increment: vgi.OptionalInt64(params.Args, "increment", 1),
+		Increment: vgi.OptionalInt64(params.Args, "increment", 1),
 	}, nil
 }
 
 func (f *PartitionedSequenceFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *partitionedSequenceState, out *vgirpc.OutputCollector) error {
 	// If no current chunk or finished, pop next from queue
-	if !state.hasChunk || state.currentIdx >= state.currentEnd {
+	if !state.HasChunk || state.CurrentIdx >= state.CurrentEnd {
 		if params.Storage == nil {
 			return out.Finish()
 		}
@@ -104,25 +104,25 @@ func (f *PartitionedSequenceFunction) Process(ctx context.Context, params *vgi.P
 		if workData == nil {
 			return out.Finish()
 		}
-		state.currentStart = int64(binary.BigEndian.Uint64(workData[0:8]))
-		state.currentEnd = int64(binary.BigEndian.Uint64(workData[8:16]))
-		state.currentIdx = state.currentStart
-		state.hasChunk = true
+		state.CurrentStart = int64(binary.BigEndian.Uint64(workData[0:8]))
+		state.CurrentEnd = int64(binary.BigEndian.Uint64(workData[8:16]))
+		state.CurrentIdx = state.CurrentStart
+		state.HasChunk = true
 	}
 
-	batchEnd := state.currentIdx + partitionBatchSize
-	if batchEnd > state.currentEnd {
-		batchEnd = state.currentEnd
+	batchEnd := state.CurrentIdx + partitionBatchSize
+	if batchEnd > state.CurrentEnd {
+		batchEnd = state.CurrentEnd
 	}
 
-	start := state.currentIdx
+	start := state.CurrentIdx
 	size := batchEnd - start
 	arr := vgi.BuildInt64Array(size, func(i int64) int64 {
-		return (start + i) * state.increment
+		return (start + i) * state.Increment
 	})
 	defer arr.Release()
 
-	state.currentIdx = batchEnd
+	state.CurrentIdx = batchEnd
 	return out.EmitArrays([]arrow.Array{arr}, size)
 }
 

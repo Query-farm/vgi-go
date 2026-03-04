@@ -40,22 +40,22 @@ func (f *GeneratorExceptionFunction) OnBind(params *vgi.BindParams) (*vgi.BindRe
 }
 
 type generatorExceptionState struct {
-	batchCount int64
-	failAfter  int64
+	BatchCount int64
+	FailAfter  int64
 }
 
 func (f *GeneratorExceptionFunction) NewState(params *vgi.ProcessParams) (*generatorExceptionState, error) {
 	failAfter, _ := params.Args.GetScalarInt64(0)
-	return &generatorExceptionState{batchCount: 0, failAfter: failAfter}, nil
+	return &generatorExceptionState{BatchCount: 0, FailAfter: failAfter}, nil
 }
 
 func (f *GeneratorExceptionFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *generatorExceptionState, out *vgirpc.OutputCollector) error {
-	if state.batchCount >= state.failAfter {
-		return fmt.Errorf("Intentional failure after %d batches", state.failAfter)
+	if state.BatchCount >= state.FailAfter {
+		return fmt.Errorf("Intentional failure after %d batches", state.FailAfter)
 	}
 
-	idx := state.batchCount
-	state.batchCount++
+	idx := state.BatchCount
+	state.BatchCount++
 
 	arr := vgi.BuildInt64Array(1, func(i int64) int64 { return idx })
 	defer arr.Release()

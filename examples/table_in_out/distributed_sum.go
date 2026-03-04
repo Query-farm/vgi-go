@@ -38,8 +38,8 @@ func (f *DistributedSumFunction) OnBind(params *vgi.BindParams) (*vgi.BindRespon
 }
 
 type distributedSumState struct {
-	intSums   map[string]int64
-	floatSums map[string]float64
+	IntSums   map[string]int64
+	FloatSums map[string]float64
 }
 
 func (f *DistributedSumFunction) NewState(params *vgi.ProcessParams) (*distributedSumState, error) {
@@ -56,8 +56,8 @@ func (f *DistributedSumFunction) NewState(params *vgi.ProcessParams) (*distribut
 	}
 
 	return &distributedSumState{
-		intSums:   intSums,
-		floatSums: floatSums,
+		IntSums:   intSums,
+		FloatSums: floatSums,
 	}, nil
 }
 
@@ -68,17 +68,17 @@ func (f *DistributedSumFunction) Process(ctx context.Context, params *vgi.Proces
 			continue
 		}
 
-		if _, ok := state.intSums[field.Name]; ok {
-			state.intSums[field.Name] += sumInt64Column(col)
+		if _, ok := state.IntSums[field.Name]; ok {
+			state.IntSums[field.Name] += sumInt64Column(col)
 		}
-		if _, ok := state.floatSums[field.Name]; ok {
-			state.floatSums[field.Name] += sumFloat64Column(col)
+		if _, ok := state.FloatSums[field.Name]; ok {
+			state.FloatSums[field.Name] += sumFloat64Column(col)
 		}
 	}
 
 	// Persist partial sums to storage
 	if params.Storage != nil {
-		sumBatch := buildSumBatch(params.OutputSchema, state.intSums, state.floatSums)
+		sumBatch := buildSumBatch(params.OutputSchema, state.IntSums, state.FloatSums)
 		data, err := vgi.SerializeRecordBatch(sumBatch)
 		if err != nil {
 			return err

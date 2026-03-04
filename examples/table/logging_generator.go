@@ -39,27 +39,27 @@ func (f *LoggingGeneratorFunction) OnBind(params *vgi.BindParams) (*vgi.BindResp
 }
 
 type loggingGeneratorState struct {
-	index int64
-	count int64
+	Index int64
+	Count int64
 }
 
 func (f *LoggingGeneratorFunction) NewState(params *vgi.ProcessParams) (*loggingGeneratorState, error) {
 	count, _ := params.Args.GetScalarInt64(0)
-	return &loggingGeneratorState{index: 0, count: count}, nil
+	return &loggingGeneratorState{Index: 0, Count: count}, nil
 }
 
 func (f *LoggingGeneratorFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *loggingGeneratorState, out *vgirpc.OutputCollector) error {
-	if state.index == 0 {
-		out.ClientLog(vgirpc.LogInfo, fmt.Sprintf("Starting generation of %d values", state.count))
+	if state.Index == 0 {
+		out.ClientLog(vgirpc.LogInfo, fmt.Sprintf("Starting generation of %d values", state.Count))
 	}
 
-	if state.index >= state.count {
+	if state.Index >= state.Count {
 		out.ClientLog(vgirpc.LogInfo, "Generation complete")
 		return out.Finish()
 	}
 
-	idx := state.index
-	state.index++
+	idx := state.Index
+	state.Index++
 
 	arr := vgi.BuildInt64Array(1, func(i int64) int64 { return idx })
 	defer arr.Release()

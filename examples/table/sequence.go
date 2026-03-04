@@ -55,14 +55,14 @@ func (f *SequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardin
 
 type sequenceState struct {
 	vgi.BatchState
-	increment int64
+	Increment int64
 }
 
 func (f *SequenceFunction) NewState(params *vgi.ProcessParams) (*sequenceState, error) {
 	count, _ := params.Args.GetScalarInt64(0)
 	return &sequenceState{
 		BatchState: vgi.NewBatchState(count, vgi.OptionalInt64(params.Args, "batch_size", 1000)),
-		increment:  vgi.OptionalInt64(params.Args, "increment", 1),
+		Increment:  vgi.OptionalInt64(params.Args, "increment", 1),
 	}, nil
 }
 
@@ -70,7 +70,7 @@ func (f *SequenceFunction) Process(ctx context.Context, params *vgi.ProcessParam
 	return vgi.GenerateBatch(&state.BatchState, out, func(size int64) ([]arrow.Array, error) {
 		start := state.Index
 		return []arrow.Array{
-			vgi.BuildInt64Array(size, func(i int64) int64 { return (start + i) * state.increment }),
+			vgi.BuildInt64Array(size, func(i int64) int64 { return (start + i) * state.Increment }),
 		}, nil
 	})
 }

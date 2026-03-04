@@ -62,14 +62,14 @@ func (f *NestedSequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.Table
 
 type nestedSequenceState struct {
 	vgi.BatchState
-	historySize int64
+	HistorySize int64
 }
 
 func (f *NestedSequenceFunction) NewState(params *vgi.ProcessParams) (*nestedSequenceState, error) {
 	count, _ := params.Args.GetScalarInt64(0)
 	return &nestedSequenceState{
 		BatchState:  vgi.NewBatchState(count, vgi.OptionalInt64(params.Args, "batch_size", 1000)),
-		historySize: vgi.OptionalInt64(params.Args, "history_size", 20),
+		HistorySize: vgi.OptionalInt64(params.Args, "history_size", 20),
 	}, nil
 }
 
@@ -108,7 +108,7 @@ func (f *NestedSequenceFunction) Process(ctx context.Context, params *vgi.Proces
 			for i := int64(0); i < size; i++ {
 				lb.Append(true)
 				idx := start + i
-				histStart := idx - state.historySize + 1
+				histStart := idx - state.HistorySize + 1
 				if histStart < 0 {
 					histStart = 0
 				}

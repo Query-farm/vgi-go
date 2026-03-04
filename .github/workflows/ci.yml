@@ -7,12 +7,9 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  lint:
+    name: Lint & Unit Tests
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ['1.24']
-
     steps:
       - uses: actions/checkout@v4
 
@@ -25,10 +22,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
-
-      - name: Verify dependencies
-        run: go mod verify
+          go-version: '1.24'
 
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
@@ -39,5 +33,65 @@ jobs:
       - name: Build
         run: make build
 
-      - name: Test
+      - name: Unit tests
         run: go test ./...
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout vgi-rpc-go
+        uses: actions/checkout@v4
+        with:
+          repository: Query-farm/vgi-rpc-go
+          path: ../vgi-rpc-go
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout VGI extension
+        uses: actions/checkout@v4
+        with:
+          repository: Query-farm/vgi
+          path: ../vgi
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Get VGI extension cache key
+        id: vgi-ext
+        run: |
+          VGI_DIR="${{ github.workspace }}/../vgi"
+          echo "sha=$(git -C "$VGI_DIR" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "duckdb-sha=$(git -C "$VGI_DIR/duckdb" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache DuckDB extension build
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../vgi/build
+          key: duckdb-ext-${{ runner.os }}-${{ steps.vgi-ext.outputs.sha }}-${{ steps.vgi-ext.outputs.duckdb-sha }}
+          restore-keys: |
+            duckdb-ext-${{ runner.os }}-${{ steps.vgi-ext.outputs.sha }}-
+            duckdb-ext-${{ runner.os }}-
+
+      - name: Build VGI extension
+        working-directory: ${{ github.workspace }}/../vgi
+        run: GEN=ninja make release
+
+      - name: Build Go worker
+        run: make build
+
+      - name: Integration tests (stdio)
+        run: make test
+
+      - name: Integration tests (HTTP)
+        run: make test-http

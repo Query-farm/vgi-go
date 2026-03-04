@@ -290,6 +290,17 @@ func extractScalarValue(col arrow.Array, idx int) interface{} {
 	case *array.Dictionary:
 		dict := c.Dictionary().(*array.String)
 		return dict.Value(c.GetValueIndex(idx))
+	case *array.Struct:
+		structType := c.DataType().(*arrow.StructType)
+		m := make(map[string]interface{})
+		for fi := 0; fi < structType.NumFields(); fi++ {
+			fieldName := structType.Field(fi).Name
+			fieldArr := c.Field(fi)
+			if !fieldArr.IsNull(idx) {
+				m[fieldName] = extractScalarValue(fieldArr, idx)
+			}
+		}
+		return m
 	default:
 		slog.Debug("extractScalarValue: unhandled array type", "type", fmt.Sprintf("%T", col))
 		return nil

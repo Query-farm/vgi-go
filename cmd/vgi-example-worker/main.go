@@ -4,7 +4,9 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"log"
 
 	"github.com/Query-farm/vgi-go/examples/scalar"
 	"github.com/Query-farm/vgi-go/examples/table"
@@ -14,6 +16,9 @@ import (
 )
 
 func main() {
+	httpMode := flag.Bool("http", false, "Run as HTTP server instead of stdio")
+	flag.Parse()
+
 	w := vgi.NewWorker(
 		vgi.WithCatalogName("example"),
 		vgi.WithSettings(
@@ -34,6 +39,22 @@ func main() {
 				Description:  "Value multiplier",
 				Type:         arrow.PrimitiveTypes.Int64,
 				DefaultValue: int64(1),
+			},
+			vgi.SettingSpec{
+				Name:         "threshold",
+				Description:  "Filter threshold",
+				Type:         arrow.PrimitiveTypes.Int64,
+				DefaultValue: int64(0),
+			},
+			vgi.SettingSpec{
+				Name:        "config",
+				Description: "Sequence configuration struct",
+				Type: arrow.StructOf(
+					arrow.Field{Name: "start", Type: arrow.PrimitiveTypes.Int64},
+					arrow.Field{Name: "step", Type: arrow.PrimitiveTypes.Int64},
+					arrow.Field{Name: "label", Type: arrow.BinaryTypes.String},
+				),
+				DefaultValue: nil,
 			},
 		),
 	)
@@ -64,6 +85,7 @@ func main() {
 	w.RegisterTable(table.NewProjectedDataFunction())
 	w.RegisterTable(table.NewSequenceFunction())
 	w.RegisterTable(table.NewSettingsAwareFunction())
+	w.RegisterTable(table.NewStructSettingsFunction())
 	w.RegisterTable(table.NewTenThousandFunction())
 
 	// Table-in-out functions
@@ -72,6 +94,7 @@ func main() {
 	w.RegisterTableInOut(table_in_out.NewEchoFunction())
 	w.RegisterTableInOut(table_in_out.NewExceptionFinalizeFunction())
 	w.RegisterTableInOut(table_in_out.NewExceptionProcessFunction())
+	w.RegisterTableInOut(table_in_out.NewFilterBySettingFunction())
 	w.RegisterTableInOut(table_in_out.NewRepeatInputsFunction())
 	w.RegisterTableInOut(table_in_out.NewSumAllColumnsFunction())
 
@@ -153,5 +176,11 @@ func main() {
 		return nil, fmt.Errorf("no scan function for %s.%s", schemaName, tableName)
 	})
 
-	w.RunStdio()
+	if *httpMode {
+		if err := w.RunHttp("127.0.0.1:0"); err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		w.RunStdio()
+	}
 }

@@ -5,6 +5,7 @@ package vgi
 
 import (
 	"context"
+	"encoding/gob"
 	"fmt"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
@@ -55,6 +56,7 @@ type CardinalityEstimator interface {
 //	    return vgi.AsTableFunction[sequenceState](&SequenceFunction{})
 //	}
 func AsTableFunction[S any](f TypedTableFunc[S]) TableFunction {
+	gob.Register(new(S))
 	base := &typedTableAdapter[S]{inner: f}
 
 	if init, ok := any(f).(OnIniter); ok {

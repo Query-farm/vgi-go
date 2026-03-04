@@ -60,20 +60,20 @@ func (f *NamedParamsEchoFunction) Cardinality(params *vgi.BindParams) (*vgi.Tabl
 
 type namedParamsEchoState struct {
 	vgi.BatchState
-	greeting   string
-	multiplier int64
-	scale      float64
-	enabled    bool
+	Greeting   string
+	Multiplier int64
+	Scale      float64
+	Enabled    bool
 }
 
 func (f *NamedParamsEchoFunction) NewState(params *vgi.ProcessParams) (*namedParamsEchoState, error) {
 	count, _ := params.Args.GetScalarInt64(0)
 	return &namedParamsEchoState{
 		BatchState: vgi.NewBatchState(count, 1000),
-		greeting:   vgi.OptionalString(params.Args, "greeting", "hello"),
-		multiplier: vgi.OptionalInt64(params.Args, "multiplier", 1),
-		scale:      vgi.OptionalFloat64(params.Args, "scale", 1.0),
-		enabled:    vgi.OptionalBool(params.Args, "enabled", true),
+		Greeting:   vgi.OptionalString(params.Args, "greeting", "hello"),
+		Multiplier: vgi.OptionalInt64(params.Args, "multiplier", 1),
+		Scale:      vgi.OptionalFloat64(params.Args, "scale", 1.0),
+		Enabled:    vgi.OptionalBool(params.Args, "enabled", true),
 	}, nil
 }
 
@@ -82,10 +82,10 @@ func (f *NamedParamsEchoFunction) Process(ctx context.Context, params *vgi.Proce
 		start := state.Index
 		return []arrow.Array{
 			vgi.BuildInt64Array(size, func(i int64) int64 { return start + i }),
-			vgi.BuildStringArray(size, func(i int64) string { return state.greeting }),
-			vgi.BuildInt64Array(size, func(i int64) int64 { return (start + i) * state.multiplier }),
-			vgi.BuildFloat64Array(size, func(i int64) float64 { return float64(start+i) * state.scale }),
-			vgi.BuildBooleanArray(size, func(i int64) bool { return state.enabled }),
+			vgi.BuildStringArray(size, func(i int64) string { return state.Greeting }),
+			vgi.BuildInt64Array(size, func(i int64) int64 { return (start + i) * state.Multiplier }),
+			vgi.BuildFloat64Array(size, func(i int64) float64 { return float64(start+i) * state.Scale }),
+			vgi.BuildBooleanArray(size, func(i int64) bool { return state.Enabled }),
 		}, nil
 	})
 }

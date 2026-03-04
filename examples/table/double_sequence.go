@@ -51,14 +51,14 @@ func (f *DoubleSequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.Table
 
 type doubleSequenceState struct {
 	vgi.BatchState
-	increment float64
+	Increment float64
 }
 
 func (f *DoubleSequenceFunction) NewState(params *vgi.ProcessParams) (*doubleSequenceState, error) {
 	count, _ := params.Args.GetScalarInt64(0)
 	return &doubleSequenceState{
 		BatchState: vgi.NewBatchState(count, vgi.OptionalInt64(params.Args, "batch_size", 1000)),
-		increment:  vgi.OptionalFloat64(params.Args, "increment", 1.0),
+		Increment:  vgi.OptionalFloat64(params.Args, "increment", 1.0),
 	}, nil
 }
 
@@ -66,7 +66,7 @@ func (f *DoubleSequenceFunction) Process(ctx context.Context, params *vgi.Proces
 	return vgi.GenerateBatch(&state.BatchState, out, func(size int64) ([]arrow.Array, error) {
 		start := state.Index
 		return []arrow.Array{
-			vgi.BuildFloat64Array(size, func(i int64) float64 { return float64(start+i) * state.increment }),
+			vgi.BuildFloat64Array(size, func(i int64) float64 { return float64(start+i) * state.Increment }),
 		}, nil
 	})
 }

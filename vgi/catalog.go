@@ -328,15 +328,15 @@ type MacroGetRequestWire struct {
 
 // MacroCreateRequestWire is for catalog_macro_create.
 type MacroCreateRequestWire struct {
-	AttachID               []byte  `vgirpc:"attach_id"`
-	SchemaName             string  `vgirpc:"schema_name"`
-	Name                   string  `vgirpc:"name"`
-	MacroType              string  `vgirpc:"macro_type,enum"`
+	AttachID               []byte   `vgirpc:"attach_id"`
+	SchemaName             string   `vgirpc:"schema_name"`
+	Name                   string   `vgirpc:"name"`
+	MacroType              string   `vgirpc:"macro_type,enum"`
 	Parameters             []string `vgirpc:"parameters"`
-	Definition             string  `vgirpc:"definition"`
-	OnConflict             string  `vgirpc:"on_conflict,enum"`
-	ParameterDefaultValues *[]byte `vgirpc:"parameter_default_values"`
-	TransactionID          *[]byte `vgirpc:"transaction_id"`
+	Definition             string   `vgirpc:"definition"`
+	OnConflict             string   `vgirpc:"on_conflict,enum"`
+	ParameterDefaultValues *[]byte  `vgirpc:"parameter_default_values"`
+	TransactionID          *[]byte  `vgirpc:"transaction_id"`
 }
 
 // MacroDropRequestWire is for catalog_macro_drop.

@@ -69,9 +69,9 @@ func (f *SumAllColumnsFunction) OnBind(params *vgi.BindParams) (*vgi.BindRespons
 }
 
 type sumAllColumnsState struct {
-	intSums   map[string]int64
-	floatSums map[string]float64
-	logging   bool
+	IntSums   map[string]int64
+	FloatSums map[string]float64
+	Logging   bool
 }
 
 func (f *SumAllColumnsFunction) NewState(params *vgi.ProcessParams) (*sumAllColumnsState, error) {
@@ -88,14 +88,14 @@ func (f *SumAllColumnsFunction) NewState(params *vgi.ProcessParams) (*sumAllColu
 	}
 
 	return &sumAllColumnsState{
-		intSums:   intSums,
-		floatSums: floatSums,
-		logging:   vgi.OptionalBool(params.Args, "logging", false),
+		IntSums:   intSums,
+		FloatSums: floatSums,
+		Logging:   vgi.OptionalBool(params.Args, "logging", false),
 	}, nil
 }
 
 func (f *SumAllColumnsFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *sumAllColumnsState, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
-	if state.logging {
+	if state.Logging {
 		out.ClientLog(vgirpc.LogInfo, fmt.Sprintf("Processing batch with %d rows", batch.NumRows()))
 	}
 
@@ -106,17 +106,17 @@ func (f *SumAllColumnsFunction) Process(ctx context.Context, params *vgi.Process
 			continue
 		}
 
-		if _, ok := state.intSums[field.Name]; ok {
-			state.intSums[field.Name] += sumInt64Column(col)
+		if _, ok := state.IntSums[field.Name]; ok {
+			state.IntSums[field.Name] += sumInt64Column(col)
 		}
-		if _, ok := state.floatSums[field.Name]; ok {
-			state.floatSums[field.Name] += sumFloat64Column(col)
+		if _, ok := state.FloatSums[field.Name]; ok {
+			state.FloatSums[field.Name] += sumFloat64Column(col)
 		}
 	}
 
 	// Store accumulated sums for finalize
 	if params.Storage != nil {
-		sumBatch := buildSumBatch(params.OutputSchema, state.intSums, state.floatSums)
+		sumBatch := buildSumBatch(params.OutputSchema, state.IntSums, state.FloatSums)
 		data, err := vgi.SerializeRecordBatch(sumBatch)
 		if err != nil {
 			return err
