@@ -258,3 +258,61 @@ func (f *MakeSeriesCsvFunction) Process(ctx context.Context, params *vgi.Process
 func NewMakeSeriesCsvFunction() vgi.TableFunction {
 	return vgi.AsTableFunction[makeSeriesCsvState](&MakeSeriesCsvFunction{})
 }
+
+// ---------------------------------------------------------------------------
+// make_series(step) — generate 10 float values with given step size
+// ---------------------------------------------------------------------------
+
+var makeSeriesFloatOutputSchema = arrow.NewSchema([]arrow.Field{
+	{Name: "value", Type: arrow.PrimitiveTypes.Float64},
+}, nil)
+
+type MakeSeriesFloatStepFunction struct{}
+
+type makeSeriesFloatState struct {
+	vgi.BatchState
+	Step float64
+}
+
+var _ vgi.TypedTableFunc[makeSeriesFloatState] = (*MakeSeriesFloatStepFunction)(nil)
+
+func (f *MakeSeriesFloatStepFunction) Name() string { return "make_series" }
+
+func (f *MakeSeriesFloatStepFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description: "Generate 10 float values with given step size",
+		Stability:   vgi.StabilityConsistent,
+	}
+}
+
+func (f *MakeSeriesFloatStepFunction) ArgumentSpecs() []vgi.ArgSpec {
+	return []vgi.ArgSpec{
+		{Name: "step", Position: 0, ArrowType: "double", Doc: "Step size between values", IsConst: true},
+	}
+}
+
+func (f *MakeSeriesFloatStepFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+	return vgi.BindSchema(makeSeriesFloatOutputSchema)
+}
+
+func (f *MakeSeriesFloatStepFunction) NewState(params *vgi.ProcessParams) (*makeSeriesFloatState, error) {
+	step, _ := params.Args.GetScalarFloat64(0)
+	return &makeSeriesFloatState{
+		BatchState: vgi.NewBatchState(10, 1024),
+		Step:       step,
+	}, nil
+}
+
+func (f *MakeSeriesFloatStepFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *makeSeriesFloatState, out *vgirpc.OutputCollector) error {
+	return vgi.GenerateBatch(&state.BatchState, out, func(size int64) ([]arrow.Array, error) {
+		offset := state.Index
+		step := state.Step
+		return []arrow.Array{
+			vgi.BuildFloat64Array(size, func(i int64) float64 { return float64(offset+i) * step }),
+		}, nil
+	})
+}
+
+func NewMakeSeriesFloatStepFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[makeSeriesFloatState](&MakeSeriesFloatStepFunction{})
+}
