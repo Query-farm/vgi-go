@@ -96,6 +96,12 @@ func GetFloat64Value(col arrow.Array, i int) float64 {
 		return float64(c.Value(i))
 	case *array.Uint8:
 		return float64(c.Value(i))
+	case *array.Decimal128:
+		dt := c.DataType().(*arrow.Decimal128Type)
+		return c.Value(i).ToFloat64(dt.Scale)
+	case *array.Decimal256:
+		dt := c.DataType().(*arrow.Decimal256Type)
+		return c.Value(i).ToFloat64(dt.Scale)
 	default:
 		return 0
 	}

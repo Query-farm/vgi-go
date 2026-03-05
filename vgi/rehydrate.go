@@ -49,7 +49,7 @@ func (w *Worker) rehydrateState(state interface{}, method string) error {
 }
 
 func (w *Worker) rehydrateScalar(s *ScalarExchangeState) error {
-	fn, err := w.resolveFunction(s.Recipe.FunctionName, FunctionType(s.Recipe.FunctionType))
+	fn, params, err := w.rebuildProcessParams(&s.Recipe)
 	if err != nil {
 		return err
 	}
@@ -57,27 +57,19 @@ func (w *Worker) rehydrateScalar(s *ScalarExchangeState) error {
 	if !ok {
 		return fmt.Errorf("resolved function %q is not a ScalarFunction", s.Recipe.FunctionName)
 	}
-	params, err := w.rebuildProcessParams(&s.Recipe)
-	if err != nil {
-		return err
-	}
 	s.fn = scalarFn
 	s.params = params
 	return nil
 }
 
 func (w *Worker) rehydrateTableProducer(s *TableProducerState) error {
-	fn, err := w.resolveFunction(s.Recipe.FunctionName, FunctionType(s.Recipe.FunctionType))
+	fn, params, err := w.rebuildProcessParams(&s.Recipe)
 	if err != nil {
 		return err
 	}
 	tableFn, ok := fn.(TableFunction)
 	if !ok {
 		return fmt.Errorf("resolved function %q is not a TableFunction", s.Recipe.FunctionName)
-	}
-	params, err := w.rebuildProcessParams(&s.Recipe)
-	if err != nil {
-		return err
 	}
 	s.fn = tableFn
 	s.params = params
@@ -113,17 +105,13 @@ func (w *Worker) rehydrateTableProducer(s *TableProducerState) error {
 }
 
 func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
-	fn, err := w.resolveFunction(s.Recipe.FunctionName, FunctionType(s.Recipe.FunctionType))
+	fn, params, err := w.rebuildProcessParams(&s.Recipe)
 	if err != nil {
 		return err
 	}
 	tioFn, ok := fn.(TableInOutFunction)
 	if !ok {
 		return fmt.Errorf("resolved function %q is not a TableInOutFunction", s.Recipe.FunctionName)
-	}
-	params, err := w.rebuildProcessParams(&s.Recipe)
-	if err != nil {
-		return err
 	}
 	s.fn = tioFn
 	s.params = params
@@ -172,31 +160,32 @@ func (w *Worker) rehydrateFinalize(s *FinalizeProducerState) error {
 }
 
 // rebuildProcessParams reconstructs ProcessParams from an InitRecipe.
-// This mirrors the logic in handleInit but uses the serialized IPC data.
-func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (*ProcessParams, error) {
+// It also returns the resolved function (via overload resolution) to avoid
+// a redundant second resolution by the caller.
+func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *ProcessParams, error) {
 	// Deserialize the bind call
 	bindReq, err := w.deserializeBindRequest(recipe.BindCallIPC)
 	if err != nil {
-		return nil, fmt.Errorf("deserializing bind_call: %w", err)
+		return nil, nil, fmt.Errorf("deserializing bind_call: %w", err)
 	}
 
 	// Parse bind params for argument access
 	bindParams, err := w.parseBindRequest(*bindReq)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// Remap positional args
-	fn, err := w.resolveFunction(recipe.FunctionName, FunctionType(recipe.FunctionType))
+	// Resolve function with overload-aware resolution
+	fn, err := w.resolveFunctionWithOverload(recipe.FunctionName, FunctionType(recipe.FunctionType), bindParams.Args, bindParams.InputSchema)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	bindParams.Args.RemapPositionalArgs(w.getArgSpecs(fn))
 
 	// Parse output schema
 	outputSchema, err := DeserializeSchema(recipe.OutputSchemaIPC)
 	if err != nil {
-		return nil, fmt.Errorf("deserializing output_schema: %w", err)
+		return nil, nil, fmt.Errorf("deserializing output_schema: %w", err)
 	}
 
 	// Apply projection
@@ -231,9 +220,9 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (*ProcessParams, error
 	ctx := context.Background()
 	storage, err := w.getOrCreateStorage(ctx, recipe.ExecutionID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	params.Storage = storage
 
-	return params, nil
+	return fn, params, nil
 }

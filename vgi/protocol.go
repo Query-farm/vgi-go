@@ -189,7 +189,7 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		"named", len(bindParams.Args.Named),
 	)
 
-	fn, err := w.resolveFunction(req.FunctionName, FunctionType(req.FunctionType))
+	fn, err := w.resolveFunctionWithOverload(req.FunctionName, FunctionType(req.FunctionType), bindParams.Args, bindParams.InputSchema)
 	if err != nil {
 		slog.Debug("bind: resolve function failed", "function", req.FunctionName, "err", err)
 		return BindResponseWire{}, err
@@ -280,19 +280,19 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	}
 	slog.Debug("init: output schema", "fields", outputSchema.NumFields())
 
-	// Resolve the function
-	fn, err := w.resolveFunction(bindReq.FunctionName, FunctionType(bindReq.FunctionType))
-	if err != nil {
-		slog.Debug("init: resolve function failed", "function", bindReq.FunctionName, "err", err)
-		return nil, err
-	}
-	slog.Debug("init: resolved function", "type", fmt.Sprintf("%T", fn))
-
 	// Parse bind params for argument access
 	bindParams, err := w.parseBindRequest(*bindReq)
 	if err != nil {
 		return nil, err
 	}
+
+	// Resolve the function with overload resolution
+	fn, err := w.resolveFunctionWithOverload(bindReq.FunctionName, FunctionType(bindReq.FunctionType), bindParams.Args, bindParams.InputSchema)
+	if err != nil {
+		slog.Debug("init: resolve function failed", "function", bindReq.FunctionName, "err", err)
+		return nil, err
+	}
+	slog.Debug("init: resolved function", "type", fmt.Sprintf("%T", fn))
 
 	// Remap positional args to original ArgSpec positions
 	bindParams.Args.RemapPositionalArgs(w.getArgSpecs(fn))
@@ -663,7 +663,12 @@ func (w *Worker) handleCardinality(ctx context.Context, callCtx *vgirpc.CallCont
 		return TableCardinality{}, fmt.Errorf("deserializing bind_call: %w", err)
 	}
 
-	fn, err := w.resolveFunction(bindReq.FunctionName, FunctionType(bindReq.FunctionType))
+	bindParams, err := w.parseBindRequest(*bindReq)
+	if err != nil {
+		return TableCardinality{}, err
+	}
+
+	fn, err := w.resolveFunctionWithOverload(bindReq.FunctionName, FunctionType(bindReq.FunctionType), bindParams.Args, bindParams.InputSchema)
 	if err != nil {
 		return TableCardinality{}, err
 	}
@@ -671,11 +676,6 @@ func (w *Worker) handleCardinality(ctx context.Context, callCtx *vgirpc.CallCont
 	tableFn, ok := fn.(TableFunctionWithCardinality)
 	if !ok {
 		return TableCardinality{Estimate: -1, Max: -1}, nil
-	}
-
-	bindParams, err := w.parseBindRequest(*bindReq)
-	if err != nil {
-		return TableCardinality{}, err
 	}
 
 	card, err := tableFn.Cardinality(bindParams)
@@ -822,38 +822,40 @@ func normalizeFunctionType(ft FunctionType) FunctionType {
 }
 
 // resolveFunction looks up a function by name and type.
+// When multiple overloads exist, returns the first one (used for rehydration
+// where the bind call will re-resolve with proper overloading).
 func (w *Worker) resolveFunction(name string, ft FunctionType) (interface{}, error) {
 	ft = normalizeFunctionType(ft)
 	// Search in all registries
 	switch ft {
 	case FunctionTypeScalar:
-		if fn, ok := w.scalars[name]; ok {
-			return fn, nil
+		if fns, ok := w.scalars[name]; ok && len(fns) > 0 {
+			return fns[0], nil
 		}
 	case FunctionTypeTable:
-		if fn, ok := w.tables[name]; ok {
-			return fn, nil
+		if fns, ok := w.tables[name]; ok && len(fns) > 0 {
+			return fns[0], nil
 		}
 		// Table-in-out functions are also registered as "table" type
-		if fn, ok := w.tableInOuts[name]; ok {
-			return fn, nil
+		if fns, ok := w.tableInOuts[name]; ok && len(fns) > 0 {
+			return fns[0], nil
 		}
 	case FunctionTypeAggregate:
 		// Table-in-out functions can be called as aggregate
-		if fn, ok := w.tableInOuts[name]; ok {
-			return fn, nil
+		if fns, ok := w.tableInOuts[name]; ok && len(fns) > 0 {
+			return fns[0], nil
 		}
 	}
 
 	// Try all registries
-	if fn, ok := w.scalars[name]; ok {
-		return fn, nil
+	if fns, ok := w.scalars[name]; ok && len(fns) > 0 {
+		return fns[0], nil
 	}
-	if fn, ok := w.tables[name]; ok {
-		return fn, nil
+	if fns, ok := w.tables[name]; ok && len(fns) > 0 {
+		return fns[0], nil
 	}
-	if fn, ok := w.tableInOuts[name]; ok {
-		return fn, nil
+	if fns, ok := w.tableInOuts[name]; ok && len(fns) > 0 {
+		return fns[0], nil
 	}
 
 	return nil, &vgirpc.RpcError{

@@ -279,9 +279,9 @@ func buildDefaultValueBatch(mem memory.Allocator, schema *arrow.Schema, dt arrow
 
 // Worker is the main VGI worker that hosts functions and serves RPC.
 type Worker struct {
-	scalars                map[string]ScalarFunction
-	tables                 map[string]TableFunction
-	tableInOuts            map[string]TableInOutFunction
+	scalars                map[string][]ScalarFunction
+	tables                 map[string][]TableFunction
+	tableInOuts            map[string][]TableInOutFunction
 	catalogName            string
 	catalog                *DefaultReadOnlyCatalog
 	storages               sync.Map // map[hex execution ID string]*ExecutionStorage
@@ -338,9 +338,9 @@ func WithLogHandler(h slog.Handler) WorkerOption {
 // NewWorker creates a new VGI worker.
 func NewWorker(opts ...WorkerOption) *Worker {
 	w := &Worker{
-		scalars:       make(map[string]ScalarFunction),
-		tables:        make(map[string]TableFunction),
-		tableInOuts:   make(map[string]TableInOutFunction),
+		scalars:       make(map[string][]ScalarFunction),
+		tables:        make(map[string][]TableFunction),
+		tableInOuts:   make(map[string][]TableInOutFunction),
 		catalogTables: make(map[string][]CatalogTable),
 		catalogViews:  make(map[string][]CatalogView),
 		catalogMacros: make(map[string][]CatalogMacro),
@@ -354,17 +354,17 @@ func NewWorker(opts ...WorkerOption) *Worker {
 
 // RegisterScalar registers a scalar function.
 func (w *Worker) RegisterScalar(f ScalarFunction) {
-	w.scalars[f.Name()] = f
+	w.scalars[f.Name()] = append(w.scalars[f.Name()], f)
 }
 
 // RegisterTable registers a table function.
 func (w *Worker) RegisterTable(f TableFunction) {
-	w.tables[f.Name()] = f
+	w.tables[f.Name()] = append(w.tables[f.Name()], f)
 }
 
 // RegisterTableInOut registers a table-in-out function.
 func (w *Worker) RegisterTableInOut(f TableInOutFunction) {
-	w.tableInOuts[f.Name()] = f
+	w.tableInOuts[f.Name()] = append(w.tableInOuts[f.Name()], f)
 }
 
 // RegisterCatalogTable registers a table in the given schema of the catalog.

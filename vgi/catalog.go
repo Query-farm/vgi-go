@@ -438,29 +438,35 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		)},
 	}, nil)
 
-	for name, fn := range w.scalars {
-		meta := fn.Metadata()
-		fi := buildFunctionInfo(name, FunctionTypeScalar, meta, fn.ArgumentSpecs())
-		if meta.ReturnType != nil {
-			fi.OutputSchema = arrow.NewSchema([]arrow.Field{
-				{Name: "result", Type: meta.ReturnType},
-			}, nil)
-		} else {
-			fi.OutputSchema = dynamicOutputSchema
+	for name, fns := range w.scalars {
+		for _, fn := range fns {
+			meta := fn.Metadata()
+			fi := buildFunctionInfo(name, FunctionTypeScalar, meta, fn.ArgumentSpecs())
+			if meta.ReturnType != nil {
+				fi.OutputSchema = arrow.NewSchema([]arrow.Field{
+					{Name: "result", Type: meta.ReturnType},
+				}, nil)
+			} else {
+				fi.OutputSchema = dynamicOutputSchema
+			}
+			mainSchema.functions = append(mainSchema.functions, fi)
 		}
-		mainSchema.functions = append(mainSchema.functions, fi)
 	}
 
-	for name, fn := range w.tables {
-		meta := fn.Metadata()
-		fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs())
-		mainSchema.functions = append(mainSchema.functions, fi)
+	for name, fns := range w.tables {
+		for _, fn := range fns {
+			meta := fn.Metadata()
+			fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs())
+			mainSchema.functions = append(mainSchema.functions, fi)
+		}
 	}
 
-	for name, fn := range w.tableInOuts {
-		meta := fn.Metadata()
-		fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs()) // table-in-out registers as "table"
-		mainSchema.functions = append(mainSchema.functions, fi)
+	for name, fns := range w.tableInOuts {
+		for _, fn := range fns {
+			meta := fn.Metadata()
+			fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs()) // table-in-out registers as "table"
+			mainSchema.functions = append(mainSchema.functions, fi)
+		}
 	}
 
 	cat.schemas["main"] = mainSchema
