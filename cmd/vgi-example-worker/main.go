@@ -130,6 +130,7 @@ func main() {
 	w.RegisterTable(table.NewPartitionedSequenceFunction())
 	w.RegisterTable(table.NewProjectedDataFunction())
 	w.RegisterTable(table.NewRepeatValueIntFunction())
+	w.RegisterTable(table.NewRowIdSequenceFunction())
 	w.RegisterTable(table.NewRepeatValueStrFunction())
 	w.RegisterTable(table.NewScopedSecretDemoFunction())
 	w.RegisterTable(table.NewSecretDemoFunction())
@@ -166,6 +167,58 @@ func main() {
 		Comment: "First 100 integers (demonstrates explicit columns)",
 		Columns: arrow.NewSchema([]arrow.Field{
 			{Name: "value", Type: arrow.PrimitiveTypes.Int64},
+		}, nil),
+	})
+
+	// Row ID tables: row_id column at different positions and with different types
+	rowIDMeta := arrow.NewMetadata([]string{"is_row_id"}, []string{""})
+	rowIDStructType := arrow.StructOf(
+		arrow.Field{Name: "a", Type: arrow.PrimitiveTypes.Int64},
+		arrow.Field{Name: "b", Type: arrow.BinaryTypes.String},
+	)
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "rowid_first",
+		Comment: "Table with row_id at column index 0",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "row_id", Type: arrow.PrimitiveTypes.Int64, Metadata: rowIDMeta},
+			{Name: "name", Type: arrow.BinaryTypes.String},
+			{Name: "value", Type: arrow.BinaryTypes.String},
+		}, nil),
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "rowid_middle",
+		Comment: "Table with row_id at column index 1",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "name", Type: arrow.BinaryTypes.String},
+			{Name: "row_id", Type: arrow.PrimitiveTypes.Int64, Metadata: rowIDMeta},
+			{Name: "value", Type: arrow.BinaryTypes.String},
+		}, nil),
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "rowid_last",
+		Comment: "Table with row_id at column index 2",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "name", Type: arrow.BinaryTypes.String},
+			{Name: "value", Type: arrow.BinaryTypes.String},
+			{Name: "row_id", Type: arrow.PrimitiveTypes.Int64, Metadata: rowIDMeta},
+		}, nil),
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "rowid_string",
+		Comment: "Table with string-typed row_id",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "row_id", Type: arrow.BinaryTypes.String, Metadata: rowIDMeta},
+			{Name: "name", Type: arrow.BinaryTypes.String},
+			{Name: "value", Type: arrow.BinaryTypes.String},
+		}, nil),
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "rowid_struct",
+		Comment: "Table with struct-typed row_id",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "row_id", Type: rowIDStructType, Metadata: rowIDMeta},
+			{Name: "name", Type: arrow.BinaryTypes.String},
+			{Name: "value", Type: arrow.BinaryTypes.String},
 		}, nil),
 	})
 
@@ -214,6 +267,13 @@ func main() {
 	})
 
 	// Handler for tables without a backing Function
+	rowIDTables := map[string]map[string]string{
+		"rowid_first":  {"layout": "first", "row_id_type": "int64"},
+		"rowid_middle": {"layout": "middle", "row_id_type": "int64"},
+		"rowid_last":   {"layout": "last", "row_id_type": "int64"},
+		"rowid_string": {"layout": "first", "row_id_type": "string"},
+		"rowid_struct": {"layout": "first", "row_id_type": "struct"},
+	}
 	w.SetScanFunctionGetHandler(func(schemaName, tableName string) (*vgi.ScanFunctionResult, error) {
 		if schemaName == "data" && tableName == "numbers" {
 			return &vgi.ScanFunctionResult{
@@ -222,6 +282,20 @@ func main() {
 					{Value: int64(100), Type: arrow.PrimitiveTypes.Int64},
 				},
 			}, nil
+		}
+		if schemaName == "data" {
+			if opts, ok := rowIDTables[tableName]; ok {
+				return &vgi.ScanFunctionResult{
+					FunctionName: "rowid_sequence",
+					PositionalArguments: []vgi.ScanArg{
+						{Value: int64(20), Type: arrow.PrimitiveTypes.Int64},
+					},
+					NamedArguments: map[string]vgi.ScanArg{
+						"layout":      {Value: opts["layout"], Type: arrow.BinaryTypes.String},
+						"row_id_type": {Value: opts["row_id_type"], Type: arrow.BinaryTypes.String},
+					},
+				}, nil
+			}
 		}
 		return nil, fmt.Errorf("no scan function for %s.%s", schemaName, tableName)
 	})
