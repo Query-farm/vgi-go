@@ -193,3 +193,65 @@ func (f *ProjectsScanFunction) Process(ctx context.Context, params *vgi.ProcessP
 func NewProjectsScanFunction() vgi.TableFunction {
 	return vgi.AsTableFunction[staticDone](&ProjectsScanFunction{})
 }
+
+// ---------------------------------------------------------------------------
+// products_scan
+// ---------------------------------------------------------------------------
+
+var ProductsSchema = arrow.NewSchema([]arrow.Field{
+	{Name: "id", Type: arrow.PrimitiveTypes.Int64},
+	{Name: "name", Type: arrow.BinaryTypes.String},
+	{Name: "quantity", Type: arrow.PrimitiveTypes.Int64},
+	{Name: "price", Type: arrow.PrimitiveTypes.Float64},
+}, nil)
+
+type ProductsScanFunction struct{}
+
+var _ vgi.TypedTableFunc[staticDone] = (*ProductsScanFunction)(nil)
+
+func (f *ProductsScanFunction) Name() string { return "products_scan" }
+
+func (f *ProductsScanFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description: "Returns product data",
+		Stability:   vgi.StabilityConsistent,
+		Categories:  []string{"generator", "testing"},
+	}
+}
+
+func (f *ProductsScanFunction) ArgumentSpecs() []vgi.ArgSpec { return nil }
+
+func (f *ProductsScanFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+	return vgi.BindSchema(ProductsSchema)
+}
+
+func (f *ProductsScanFunction) NewState(params *vgi.ProcessParams) (*staticDone, error) {
+	return &staticDone{}, nil
+}
+
+func (f *ProductsScanFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *staticDone, out *vgirpc.OutputCollector) error {
+	if state.Done {
+		out.Finish()
+		return nil
+	}
+	state.Done = true
+
+	ids := vgi.BuildInt64Array(3, func(i int64) int64 { return i + 1 })
+	names := vgi.BuildStringArray(3, func(i int64) string {
+		return []string{"Widget", "Gadget", "Doohickey"}[i]
+	})
+	quantities := vgi.BuildInt64Array(3, func(i int64) int64 {
+		return []int64{100, 50, 200}[i]
+	})
+	prices := vgi.BuildFloat64Array(3, func(i int64) float64 {
+		return []float64{9.99, 24.99, 4.99}[i]
+	})
+
+	batch := array.NewRecordBatch(ProductsSchema, []arrow.Array{ids, names, quantities, prices}, 3)
+	out.Emit(batch)
+	return nil
+}
+
+func NewProductsScanFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[staticDone](&ProductsScanFunction{})
+}

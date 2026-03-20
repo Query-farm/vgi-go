@@ -6,12 +6,18 @@ package vgi
 import (
 	"bytes"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
+
+// Sql represents a raw SQL expression that should be passed through verbatim
+// (e.g. current_timestamp, nextval('seq')).
+type Sql string
 
 // CatalogTable describes a table to register in the catalog.
 type CatalogTable struct {
@@ -36,6 +42,9 @@ type CatalogTable struct {
 	PrimaryKey [][]string
 	// ForeignKey lists foreign key definitions.
 	ForeignKey []ForeignKeyConstraint
+	// Defaults maps column names to their default values.
+	// Supported types: Sql (raw SQL), string, int/int64/int32, float64/float32, bool, nil.
+	Defaults map[string]any
 	// SupportsTimeTravel indicates this table supports AT (VERSION/TIMESTAMP) queries.
 	SupportsTimeTravel bool
 }
@@ -227,4 +236,72 @@ func appendValue(b array.Builder, val interface{}) {
 	default:
 		b.AppendNull()
 	}
+}
+
+// defaultToSQL converts a Go default value to a SQL expression string.
+func defaultToSQL(value any) string {
+	switch v := value.(type) {
+	case Sql:
+		return string(v)
+	case string:
+		return "'" + strings.ReplaceAll(v, "'", "''") + "'"
+	case bool:
+		if v {
+			return "true"
+		}
+		return "false"
+	case int:
+		return strconv.Itoa(v)
+	case int32:
+		return strconv.FormatInt(int64(v), 10)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case float32:
+		return strconv.FormatFloat(float64(v), 'f', -1, 32)
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case nil:
+		return "NULL"
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// applyDefaults adds "default" metadata to Arrow schema fields for columns
+// that have default values defined. Existing field metadata is preserved.
+func applyDefaults(schema *arrow.Schema, defaults map[string]any) (*arrow.Schema, error) {
+	if len(defaults) == 0 {
+		return schema, nil
+	}
+
+	fields := make([]arrow.Field, schema.NumFields())
+	for i := 0; i < schema.NumFields(); i++ {
+		fields[i] = schema.Field(i)
+	}
+
+	for colName, defVal := range defaults {
+		idx := -1
+		for i, f := range fields {
+			if f.Name == colName {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return nil, fmt.Errorf("default references non-existent column %q", colName)
+		}
+
+		sqlExpr := defaultToSQL(defVal)
+
+		// Merge with existing metadata
+		existing := fields[idx].Metadata
+		keys := existing.Keys()
+		vals := existing.Values()
+		keys = append(keys, "default")
+		vals = append(vals, sqlExpr)
+		fields[idx].Metadata = arrow.NewMetadata(keys, vals)
+	}
+
+	md := schema.Metadata()
+	return arrow.NewSchema(fields, &md), nil
 }

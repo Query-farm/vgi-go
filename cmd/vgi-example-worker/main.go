@@ -146,6 +146,7 @@ func main() {
 	w.RegisterTable(table.NewVersionedDataFunction())
 	w.RegisterTable(table.NewDepartmentsScanFunction())
 	w.RegisterTable(table.NewEmployeesScanFunction())
+	w.RegisterTable(table.NewProductsScanFunction())
 	w.RegisterTable(table.NewProjectsScanFunction())
 	w.RegisterTable(table.NewVersionedConstraintsScanFunction())
 
@@ -252,6 +253,7 @@ func main() {
 		PrimaryKey: [][]string{{"id"}},
 		Unique:     [][]string{{"name"}},
 		Check:      []string{"budget >= 0"},
+		Defaults:   map[string]any{"budget": int64(0)},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:       "employees",
@@ -273,6 +275,14 @@ func main() {
 		ForeignKey: []vgi.ForeignKeyConstraint{
 			{Columns: []string{"department_id"}, ReferencedTable: "departments", ReferencedColumns: []string{"id"}},
 		},
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:       "products",
+		Comment:    "Product table with column defaults",
+		Columns:    table.ProductsSchema,
+		NotNull:    []string{"id"},
+		PrimaryKey: [][]string{{"id"}},
+		Defaults:   map[string]any{"quantity": int64(0), "name": "unknown", "price": float64(9.99)},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:               "versioned_constraints",
@@ -411,6 +421,8 @@ func main() {
 				return &vgi.ScanFunctionResult{FunctionName: "departments_scan"}, nil
 			case "employees":
 				return &vgi.ScanFunctionResult{FunctionName: "employees_scan"}, nil
+			case "products":
+				return &vgi.ScanFunctionResult{FunctionName: "products_scan"}, nil
 			case "projects":
 				return &vgi.ScanFunctionResult{FunctionName: "projects_scan"}, nil
 			}

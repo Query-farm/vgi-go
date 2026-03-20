@@ -1140,6 +1140,15 @@ func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]b
 		columns = resp.OutputSchema
 	}
 
+	// Apply column defaults as Arrow field metadata
+	if len(ct.Defaults) > 0 && columns != nil {
+		var err error
+		columns, err = applyDefaults(columns, ct.Defaults)
+		if err != nil {
+			return nil, fmt.Errorf("applying defaults for table %s: %w", ct.Name, err)
+		}
+	}
+
 	// Resolve constraint column indices from names
 	notNull := resolveColumnIndices(columns, ct.NotNull)
 	unique := resolveColumnGroupIndices(columns, ct.Unique)
