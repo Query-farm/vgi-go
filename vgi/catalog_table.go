@@ -32,8 +32,24 @@ type CatalogTable struct {
 	Unique [][]string
 	// Check lists check constraint expressions.
 	Check []string
+	// PrimaryKey lists groups of column names for PRIMARY KEY constraints.
+	PrimaryKey [][]string
+	// ForeignKey lists foreign key definitions.
+	ForeignKey []ForeignKeyConstraint
 	// SupportsTimeTravel indicates this table supports AT (VERSION/TIMESTAMP) queries.
 	SupportsTimeTravel bool
+}
+
+// ForeignKeyConstraint describes a foreign key relationship.
+type ForeignKeyConstraint struct {
+	// Columns are the column names in this table.
+	Columns []string
+	// ReferencedTable is the name of the referenced table.
+	ReferencedTable string
+	// ReferencedColumns are the column names in the referenced table.
+	ReferencedColumns []string
+	// ReferencedSchema is the schema of the referenced table (empty = same schema).
+	ReferencedSchema string
 }
 
 // CatalogTableArg describes a single argument for a function-backed table.

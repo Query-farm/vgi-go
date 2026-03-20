@@ -1085,6 +1085,44 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 		})
 }
 
+// resolveColumnIndices maps column names to their indices in the schema.
+func resolveColumnIndices(columns *arrow.Schema, names []string) []int32 {
+	if columns == nil {
+		return nil
+	}
+	var indices []int32
+	for _, colName := range names {
+		for i := 0; i < columns.NumFields(); i++ {
+			if columns.Field(i).Name == colName {
+				indices = append(indices, int32(i))
+				break
+			}
+		}
+	}
+	return indices
+}
+
+// resolveColumnGroupIndices maps groups of column names to groups of indices.
+func resolveColumnGroupIndices(columns *arrow.Schema, groups [][]string) [][]int32 {
+	if columns == nil || len(groups) == 0 {
+		return nil
+	}
+	result := make([][]int32, 0, len(groups))
+	for _, group := range groups {
+		var indices []int32
+		for _, colName := range group {
+			for i := 0; i < columns.NumFields(); i++ {
+				if columns.Field(i).Name == colName {
+					indices = append(indices, int32(i))
+					break
+				}
+			}
+		}
+		result = append(result, indices)
+	}
+	return result
+}
+
 // serializeCatalogTable converts a CatalogTable into serialized TableInfo bytes.
 func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]byte, error) {
 	// Resolve columns: if Function is set but Columns is nil, derive via OnBind
@@ -1102,47 +1140,96 @@ func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]b
 		columns = resp.OutputSchema
 	}
 
-	// Resolve NOT NULL constraint indices from column names
-	var notNull []int32
-	if columns != nil {
-		for _, colName := range ct.NotNull {
-			for i := 0; i < columns.NumFields(); i++ {
-				if columns.Field(i).Name == colName {
-					notNull = append(notNull, int32(i))
-					break
-				}
-			}
-		}
-	}
+	// Resolve constraint column indices from names
+	notNull := resolveColumnIndices(columns, ct.NotNull)
+	unique := resolveColumnGroupIndices(columns, ct.Unique)
+	primaryKey := resolveColumnGroupIndices(columns, ct.PrimaryKey)
 
-	// Resolve UNIQUE constraint indices from column name groups
-	var unique [][]int32
-	if columns != nil {
-		for _, group := range ct.Unique {
-			var indices []int32
-			for _, colName := range group {
-				for i := 0; i < columns.NumFields(); i++ {
-					if columns.Field(i).Name == colName {
-						indices = append(indices, int32(i))
-						break
-					}
-				}
-			}
-			unique = append(unique, indices)
+	// Serialize FOREIGN KEY constraints
+	var foreignKeys [][]byte
+	for _, fk := range ct.ForeignKey {
+		fkBytes, err := serializeForeignKey(schemaName, &fk)
+		if err != nil {
+			return nil, fmt.Errorf("serializing foreign key for table %s: %w", ct.Name, err)
 		}
+		foreignKeys = append(foreignKeys, fkBytes)
 	}
 
 	info := &TableInfo{
-		Name:               ct.Name,
-		SchemaName:         schemaName,
-		Comment:            ct.Comment,
-		Columns:            columns,
-		NotNullConstraints: notNull,
-		UniqueConstraints:  unique,
-		CheckConstraints:   ct.Check,
+		Name:                  ct.Name,
+		SchemaName:            schemaName,
+		Comment:               ct.Comment,
+		Columns:               columns,
+		NotNullConstraints:    notNull,
+		UniqueConstraints:     unique,
+		CheckConstraints:      ct.Check,
+		PrimaryKeyConstraints: primaryKey,
+		ForeignKeyConstraints: foreignKeys,
 	}
 
 	return SerializeTableInfo(info)
+}
+
+// fkSchema is the wire format for a single foreign key constraint.
+var fkSchema = arrow.NewSchema([]arrow.Field{
+	{Name: "fk_columns", Type: arrow.ListOf(arrow.BinaryTypes.String)},
+	{Name: "pk_columns", Type: arrow.ListOf(arrow.BinaryTypes.String)},
+	{Name: "referenced_table", Type: arrow.BinaryTypes.String},
+	{Name: "referenced_schema", Type: arrow.BinaryTypes.String},
+}, nil)
+
+// serializeForeignKey serializes a ForeignKeyConstraint to IPC bytes.
+func serializeForeignKey(schemaName string, fk *ForeignKeyConstraint) ([]byte, error) {
+	mem := memory.NewGoAllocator()
+
+	// fk_columns
+	fkColBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer fkColBuilder.Release()
+	fkColBuilder.Append(true)
+	fkVB := fkColBuilder.ValueBuilder().(*array.StringBuilder)
+	for _, col := range fk.Columns {
+		fkVB.Append(col)
+	}
+
+	// pk_columns
+	pkColBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer pkColBuilder.Release()
+	pkColBuilder.Append(true)
+	pkVB := pkColBuilder.ValueBuilder().(*array.StringBuilder)
+	for _, col := range fk.ReferencedColumns {
+		pkVB.Append(col)
+	}
+
+	// referenced_table
+	refTableBuilder := array.NewStringBuilder(mem)
+	defer refTableBuilder.Release()
+	refTableBuilder.Append(fk.ReferencedTable)
+
+	// referenced_schema
+	refSchemaBuilder := array.NewStringBuilder(mem)
+	defer refSchemaBuilder.Release()
+	refSchema := fk.ReferencedSchema
+	if refSchema == "" {
+		refSchema = schemaName
+	}
+	refSchemaBuilder.Append(refSchema)
+
+	cols := []arrow.Array{
+		fkColBuilder.NewArray(),
+		pkColBuilder.NewArray(),
+		refTableBuilder.NewArray(),
+		refSchemaBuilder.NewArray(),
+	}
+	defer func() {
+		for _, c := range cols {
+			c.Release()
+		}
+	}()
+
+	batch := array.NewRecordBatch(fkSchema, cols, 1)
+	defer batch.Release()
+
+	return SerializeRecordBatch(batch)
 }
 
 // buildScanResultFromTable creates a ScanFunctionResult from a function-backed CatalogTable.

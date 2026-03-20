@@ -144,6 +144,10 @@ func main() {
 	w.RegisterTable(table.NewStructSettingsFunction())
 	w.RegisterTable(table.NewTenThousandFunction())
 	w.RegisterTable(table.NewVersionedDataFunction())
+	w.RegisterTable(table.NewDepartmentsScanFunction())
+	w.RegisterTable(table.NewEmployeesScanFunction())
+	w.RegisterTable(table.NewProjectsScanFunction())
+	w.RegisterTable(table.NewVersionedConstraintsScanFunction())
 
 	// Table-in-out functions
 	w.RegisterTableInOut(table_in_out.NewBufferInputFunction())
@@ -239,6 +243,50 @@ func main() {
 		}, nil),
 	})
 
+	// Constraint example tables
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:       "departments",
+		Comment:    "Department reference table with constraints",
+		Columns:    table.DepartmentsSchema,
+		NotNull:    []string{"id", "name"},
+		PrimaryKey: [][]string{{"id"}},
+		Unique:     [][]string{{"name"}},
+		Check:      []string{"budget >= 0"},
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:       "employees",
+		Comment:    "Employee table with FK to departments",
+		Columns:    table.EmployeesSchema,
+		NotNull:    []string{"id", "name", "email"},
+		PrimaryKey: [][]string{{"id"}},
+		Unique:     [][]string{{"email"}},
+		ForeignKey: []vgi.ForeignKeyConstraint{
+			{Columns: []string{"department_id"}, ReferencedTable: "departments", ReferencedColumns: []string{"id"}},
+		},
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:       "projects",
+		Comment:    "Project table with composite PK and FK",
+		Columns:    table.ProjectsSchema,
+		NotNull:    []string{"department_id", "project_code", "title"},
+		PrimaryKey: [][]string{{"department_id", "project_code"}},
+		ForeignKey: []vgi.ForeignKeyConstraint{
+			{Columns: []string{"department_id"}, ReferencedTable: "departments", ReferencedColumns: []string{"id"}},
+		},
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:               "versioned_constraints",
+		Columns:            table.VersionedConstraintsSchemas[3],
+		Comment:            "Versioned table with constraint evolution",
+		SupportsTimeTravel: true,
+		NotNull:            []string{"id", "name"},
+		PrimaryKey:         [][]string{{"id"}},
+		Unique:             [][]string{{"email"}},
+		ForeignKey: []vgi.ForeignKeyConstraint{
+			{Columns: []string{"department_id"}, ReferencedTable: "departments", ReferencedColumns: []string{"id"}},
+		},
+	})
+
 	// Views
 	w.RegisterCatalogView("main", vgi.CatalogView{
 		Name:       "first_ten",
@@ -298,6 +346,19 @@ func main() {
 			}
 			return vgi.SerializeTableInfo(info)
 		}
+		if schemaName == "data" && tableName == "versioned_constraints" && atUnit != nil && *atUnit != "" {
+			version, err := table.ResolveVersionedConstraintsVersion(atUnit, atValue)
+			if err != nil {
+				return nil, err
+			}
+			info := &vgi.TableInfo{
+				Name:       tableName,
+				SchemaName: schemaName,
+				Comment:    "Versioned table with constraint evolution",
+				Columns:    table.VersionedConstraintsSchema(version),
+			}
+			return vgi.SerializeTableInfo(info)
+		}
 		return nil, nil // fall through to default
 	})
 
@@ -324,9 +385,35 @@ func main() {
 			}, nil
 		}
 
+		// Handle versioned_constraints time travel
+		if schemaName == "data" && tableName == "versioned_constraints" {
+			version, err := table.ResolveVersionedConstraintsVersion(atUnit, atValue)
+			if err != nil {
+				return nil, err
+			}
+			return &vgi.ScanFunctionResult{
+				FunctionName: "versioned_constraints_scan",
+				PositionalArguments: []vgi.ScanArg{
+					{Value: version, Type: arrow.PrimitiveTypes.Int64},
+				},
+			}, nil
+		}
+
 		// Reject AT clause on tables that don't support time travel
 		if atUnit != nil && *atUnit != "" {
 			return nil, fmt.Errorf("Table '%s.%s' does not support time travel queries", schemaName, tableName)
+		}
+
+		// Handle static constraint tables
+		if schemaName == "data" {
+			switch tableName {
+			case "departments":
+				return &vgi.ScanFunctionResult{FunctionName: "departments_scan"}, nil
+			case "employees":
+				return &vgi.ScanFunctionResult{FunctionName: "employees_scan"}, nil
+			case "projects":
+				return &vgi.ScanFunctionResult{FunctionName: "projects_scan"}, nil
+			}
 		}
 
 		if schemaName == "data" && tableName == "numbers" {

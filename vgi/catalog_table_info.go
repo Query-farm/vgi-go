@@ -14,14 +14,16 @@ import (
 
 // TableInfo describes a table in the catalog for wire serialization.
 type TableInfo struct {
-	Name               string
-	SchemaName         string
-	Comment            string
-	Tags               map[string]string
-	Columns            *arrow.Schema // serialized as IPC schema bytes
-	NotNullConstraints []int32
-	UniqueConstraints  [][]int32
-	CheckConstraints   []string
+	Name                  string
+	SchemaName            string
+	Comment               string
+	Tags                  map[string]string
+	Columns               *arrow.Schema // serialized as IPC schema bytes
+	NotNullConstraints    []int32
+	UniqueConstraints     [][]int32
+	CheckConstraints      []string
+	PrimaryKeyConstraints [][]int32
+	ForeignKeyConstraints [][]byte // each []byte is an IPC-serialized FK RecordBatch
 }
 
 // Field order matches Python MRO: CatalogObject(comment,tags) + CatalogSchemaObject(name,schema_name) + TableInfo fields
@@ -34,6 +36,8 @@ var tableInfoSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "not_null_constraints", Type: arrow.ListOf(arrow.PrimitiveTypes.Int32)},
 	{Name: "unique_constraints", Type: arrow.ListOf(arrow.ListOf(arrow.PrimitiveTypes.Int32))},
 	{Name: "check_constraints", Type: arrow.ListOf(arrow.BinaryTypes.String)},
+	{Name: "primary_key_constraints", Type: arrow.ListOf(arrow.ListOf(arrow.PrimitiveTypes.Int32))},
+	{Name: "foreign_key_constraints", Type: arrow.ListOf(arrow.BinaryTypes.Binary)},
 }, nil)
 
 // SerializeTableInfo serializes a TableInfo to IPC bytes.
@@ -122,6 +126,32 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		}
 	}
 
+	// primary_key_constraints (list of list of int32)
+	pkBuilder := array.NewListBuilder(mem, arrow.ListOf(arrow.PrimitiveTypes.Int32))
+	defer pkBuilder.Release()
+	pkBuilder.Append(true)
+	if len(info.PrimaryKeyConstraints) > 0 {
+		innerListBuilder := pkBuilder.ValueBuilder().(*array.ListBuilder)
+		for _, group := range info.PrimaryKeyConstraints {
+			innerListBuilder.Append(true)
+			innerVB := innerListBuilder.ValueBuilder().(*array.Int32Builder)
+			for _, idx := range group {
+				innerVB.Append(idx)
+			}
+		}
+	}
+
+	// foreign_key_constraints (list of binary)
+	fkBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.Binary)
+	defer fkBuilder.Release()
+	fkBuilder.Append(true)
+	if len(info.ForeignKeyConstraints) > 0 {
+		vb := fkBuilder.ValueBuilder().(*array.BinaryBuilder)
+		for _, fkBytes := range info.ForeignKeyConstraints {
+			vb.Append(fkBytes)
+		}
+	}
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
@@ -131,6 +161,8 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		notNullBuilder.NewArray(),
 		uniqueBuilder.NewArray(),
 		checkBuilder.NewArray(),
+		pkBuilder.NewArray(),
+		fkBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {
