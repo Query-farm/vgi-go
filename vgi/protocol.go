@@ -77,6 +77,7 @@ type ScalarExchangeState struct {
 }
 
 func (s *ScalarExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
+	s.params.Auth = callCtx.Auth
 	result, err := s.fn.Process(ctx, s.params, input)
 	if err != nil {
 		return err
@@ -96,6 +97,7 @@ type TableProducerState struct {
 }
 
 func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
+	s.params.Auth = callCtx.Auth
 	if s.autoApply != nil || s.AutoProjectIDs != nil {
 		if s.AutoProjectIDs != nil {
 			// Tell OutputCollector to use the full schema for EmitArrays/EmitMap
@@ -140,6 +142,7 @@ type TableInOutExchangeState struct {
 }
 
 func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
+	s.params.Auth = callCtx.Auth
 	if s.autoApply != nil {
 		out.EmitInterceptor = func(batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 			return s.autoApply.Apply(ctx, batch)
@@ -184,6 +187,7 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		slog.Debug("bind: parse failed", "err", err)
 		return BindResponseWire{}, err
 	}
+	bindParams.Auth = callCtx.Auth
 	slog.Debug("bind: parsed args",
 		"positional", len(bindParams.Args.Positional),
 		"named", len(bindParams.Args.Named),
@@ -667,6 +671,7 @@ func (w *Worker) handleCardinality(ctx context.Context, callCtx *vgirpc.CallCont
 	if err != nil {
 		return TableCardinality{}, err
 	}
+	bindParams.Auth = callCtx.Auth
 
 	fn, err := w.resolveFunctionWithOverload(bindReq.FunctionName, FunctionType(bindReq.FunctionType), bindParams.Args, bindParams.InputSchema)
 	if err != nil {

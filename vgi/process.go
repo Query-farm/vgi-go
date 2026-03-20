@@ -3,7 +3,10 @@
 
 package vgi
 
-import "github.com/apache/arrow-go/v18/arrow"
+import (
+	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/apache/arrow-go/v18/arrow"
+)
 
 // ProcessParams holds the parameters available during the process phase.
 type ProcessParams struct {
@@ -29,4 +32,7 @@ type ProcessParams struct {
 	PushdownFilters arrow.RecordBatch
 	// Storage provides shared execution storage for cross-phase data.
 	Storage *ExecutionStorage
+	// Auth is the authentication context for the current request.
+	// Always non-nil; unauthenticated requests receive vgirpc.Anonymous().
+	Auth *vgirpc.AuthContext
 }

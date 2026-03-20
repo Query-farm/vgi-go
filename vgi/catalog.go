@@ -145,6 +145,8 @@ type TableGetRequestWire struct {
 	AttachID      []byte  `vgirpc:"attach_id"`
 	SchemaName    string  `vgirpc:"schema_name"`
 	Name          string  `vgirpc:"name"`
+	AtUnit        *string `vgirpc:"at_unit"`
+	AtValue       *string `vgirpc:"at_value"`
 	TransactionID *[]byte `vgirpc:"transaction_id"`
 }
 
@@ -594,10 +596,26 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				serializedSecretTypes = [][]byte{}
 			}
 
+			// Auto-derive time travel support from registered tables.
+			supportsTimeTravel := false
+			if w.catalog != nil {
+				for _, si := range w.catalog.schemas {
+					for _, t := range si.tables {
+						if t.SupportsTimeTravel {
+							supportsTimeTravel = true
+							break
+						}
+					}
+					if supportsTimeTravel {
+						break
+					}
+				}
+			}
+
 			return CatalogAttachResultWire{
 				AttachID:             attachID,
 				SupportsTransactions: false,
-				SupportsTimeTravel:   false,
+				SupportsTimeTravel:   supportsTimeTravel,
 				CatalogVersionFrozen: true,
 				CatalogVersion:       version,
 				AttachIDRequired:     false,
@@ -775,6 +793,20 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_get
 	vgirpc.Unary[TableGetRequestWire, ItemsResponseWire](s, "catalog_table_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableGetRequestWire) (ItemsResponseWire, error) {
+			// Delegate to the custom handler first (e.g. for time-travel version-specific schemas)
+			if w.tableGetHandler != nil {
+				data, err := w.tableGetHandler(req.SchemaName, req.Name, req.AtUnit, req.AtValue)
+				if err != nil {
+					return ItemsResponseWire{}, &vgirpc.RpcError{
+						Type:    "ValueError",
+						Message: err.Error(),
+					}
+				}
+				if data != nil {
+					return ItemsResponseWire{Items: [][]byte{data}}, nil
+				}
+			}
+
 			if w.catalog == nil {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
@@ -812,7 +844,9 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			slog.Debug("catalog: scan function get", "schema", req.SchemaName, "table", req.Name)
 
 			// Check for a registered catalog table with a backing function
-			if w.catalog != nil {
+			// (skip if AT params are present — let the handler deal with time travel)
+			hasAt := req.AtUnit != nil && *req.AtUnit != ""
+			if !hasAt && w.catalog != nil {
 				if si, ok := w.catalog.schemas[req.SchemaName]; ok {
 					for i := range si.tables {
 						if si.tables[i].Name == req.Name && si.tables[i].Function != nil {
@@ -825,7 +859,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 
 			// Delegate to the handler if set
 			if w.scanFunctionGetHandler != nil {
-				result, err := w.scanFunctionGetHandler(req.SchemaName, req.Name)
+				result, err := w.scanFunctionGetHandler(req.SchemaName, req.Name, req.AtUnit, req.AtValue)
 				if err != nil {
 					return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{
 						Type:    "ValueError",

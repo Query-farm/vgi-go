@@ -32,6 +32,8 @@ type CatalogTable struct {
 	Unique [][]string
 	// Check lists check constraint expressions.
 	Check []string
+	// SupportsTimeTravel indicates this table supports AT (VERSION/TIMESTAMP) queries.
+	SupportsTimeTravel bool
 }
 
 // CatalogTableArg describes a single argument for a function-backed table.
@@ -48,7 +50,13 @@ type CatalogTableArg struct {
 
 // ScanFunctionGetHandler is a callback for resolving table scan functions
 // that are not backed by a registered CatalogTable with a Function field.
-type ScanFunctionGetHandler func(schemaName, tableName string) (*ScanFunctionResult, error)
+// atUnit and atValue carry time-travel AT clause parameters (both nil when absent).
+type ScanFunctionGetHandler func(schemaName, tableName string, atUnit, atValue *string) (*ScanFunctionResult, error)
+
+// TableGetHandler is a callback for customizing catalog_table_get responses,
+// e.g. to return version-specific schemas for time-travel queries.
+// Return nil to fall through to the default table lookup.
+type TableGetHandler func(schemaName, tableName string, atUnit, atValue *string) ([]byte, error)
 
 // ScanFunctionResult describes the function to call when scanning a catalog table.
 type ScanFunctionResult struct {

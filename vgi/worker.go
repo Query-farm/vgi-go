@@ -290,6 +290,9 @@ type Worker struct {
 	catalogViews           map[string][]CatalogView  // schema_name → views
 	catalogMacros          map[string][]CatalogMacro // schema_name → macros
 	scanFunctionGetHandler ScanFunctionGetHandler
+	tableGetHandler        TableGetHandler
+	authenticateFunc       vgirpc.AuthenticateFunc
+	oauthMetadata          *vgirpc.OAuthResourceMetadata
 	secretTypes            []SecretTypeSpec
 	logLevel               slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
 	logHandler             slog.Handler // nil means default TextHandler to stderr
@@ -388,6 +391,27 @@ func (w *Worker) SetScanFunctionGetHandler(h ScanFunctionGetHandler) {
 	w.scanFunctionGetHandler = h
 }
 
+// SetTableGetHandler sets a handler for customizing catalog_table_get responses.
+// Return non-nil bytes to override the default lookup; return nil to fall through.
+func (w *Worker) SetTableGetHandler(h TableGetHandler) {
+	w.tableGetHandler = h
+}
+
+// SetAuthenticate sets an authentication callback for HTTP mode.
+// When set, every HTTP request is validated and the resulting AuthContext
+// is available via ProcessParams.Auth and BindParams.Auth.
+func (w *Worker) SetAuthenticate(fn vgirpc.AuthenticateFunc) {
+	w.authenticateFunc = fn
+}
+
+// SetOAuthResourceMetadata configures OAuth Protected Resource Metadata
+// (RFC 9728) for HTTP mode. When set, the server exposes a well-known
+// endpoint and includes a WWW-Authenticate header on 401 responses.
+func (w *Worker) SetOAuthResourceMetadata(m *vgirpc.OAuthResourceMetadata) {
+	w.oauthMetadata = m
+}
+
+
 // buildServer creates and configures the vgirpc.Server with all handlers
 // registered. Shared between RunStdio and RunHttp.
 func (w *Worker) buildServer(isHTTP bool) *vgirpc.Server {
@@ -439,6 +463,12 @@ func (w *Worker) RunHttp(addr string) error {
 	hs := vgirpc.NewHttpServer(s)
 	hs.SetRehydrateFunc(w.rehydrateState)
 	hs.SetProducerBatchLimit(100)
+	if w.authenticateFunc != nil {
+		hs.SetAuthenticate(w.authenticateFunc)
+	}
+	if w.oauthMetadata != nil {
+		hs.SetOAuthResourceMetadata(w.oauthMetadata)
+	}
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {

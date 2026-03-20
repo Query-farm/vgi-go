@@ -4,6 +4,7 @@
 package vgi
 
 import (
+	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
@@ -28,6 +29,9 @@ type BindParams struct {
 	// ResolvedSecretsProvided is true on the second phase of a two-phase bind,
 	// indicating that scoped secrets have been resolved and are in Secrets.
 	ResolvedSecretsProvided bool
+	// Auth is the authentication context for the current request.
+	// Always non-nil; unauthenticated requests receive vgirpc.Anonymous().
+	Auth *vgirpc.AuthContext
 }
 
 // BindResponse is returned by a function's OnBind method.

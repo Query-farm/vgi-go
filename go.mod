@@ -6,18 +6,24 @@ replace github.com/apache/arrow-go/v18 => github.com/rustyconover/arrow-go/v18 v
 
 replace github.com/Query-farm/vgi-rpc => ../vgi-rpc-go
 
+replace github.com/Query-farm/vgi-rpc/vgirpc/jwtauth => ../vgi-rpc-go/vgirpc/jwtauth
+
 require (
-	github.com/Query-farm/vgi-rpc v0.0.0-00010101000000-000000000000
+	github.com/Query-farm/vgi-rpc v0.0.0
+	github.com/Query-farm/vgi-rpc/vgirpc/jwtauth v0.0.0-00010101000000-000000000000
 	github.com/apache/arrow-go/v18 v18.2.0
 	github.com/google/uuid v1.6.0
 	modernc.org/sqlite v1.46.1
 )
 
 require (
+	github.com/MicahParks/jwkset v0.5.19 // indirect
+	github.com/MicahParks/keyfunc/v3 v3.3.5 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/apache/thrift v0.22.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/klauspost/asmfmt v1.3.2 // indirect
@@ -35,6 +41,7 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260209163413-e7419c687ee4 // indirect
+	golang.org/x/time v0.5.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	modernc.org/libc v1.67.6 // indirect
