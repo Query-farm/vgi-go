@@ -127,6 +127,70 @@ func (pf *PushdownFilters) GetColumnValues(name string) arrow.Array {
 	return nil
 }
 
+// Repr returns a Python-style repr of the filter set, matching the vgi-python
+// PushdownFilters.__repr__ output. Useful for diagnostic display (e.g., the
+// dynamic_filter_echo example) and stable regression testing. Format:
+//
+//	PushdownFilters([])                              when empty
+//	PushdownFilters([Filter1, Filter2, ...])         otherwise
+func (pf *PushdownFilters) Repr() string {
+	if pf == nil || len(pf.Filters) == 0 {
+		return "PushdownFilters([])"
+	}
+	parts := make([]string, len(pf.Filters))
+	for i, f := range pf.Filters {
+		parts[i] = reprFilter(f)
+	}
+	return "PushdownFilters([" + strings.Join(parts, ", ") + "])"
+}
+
+func reprFilter(f Filter) string {
+	switch ft := f.(type) {
+	case *ConstantFilter:
+		return fmt.Sprintf("ConstantFilter(%s %s %v)", ft.columnName, ft.Op.Symbol(), scalarToGo(ft.Value))
+	case *IsNullFilter:
+		return fmt.Sprintf("IsNullFilter(%s IS NULL)", ft.columnName)
+	case *IsNotNullFilter:
+		return fmt.Sprintf("IsNotNullFilter(%s IS NOT NULL)", ft.columnName)
+	case *InFilter:
+		vals := arrayToGoSlice(ft.Values)
+		n := len(vals)
+		var preview string
+		if n > 5 {
+			head := make([]string, 0, 3)
+			for i := 0; i < 3 && i < n; i++ {
+				head = append(head, fmt.Sprintf("%v", vals[i]))
+			}
+			preview = fmt.Sprintf("[%s]...(%d total)", strings.Join(head, ", "), n)
+		} else {
+			parts := make([]string, n)
+			for i, v := range vals {
+				parts[i] = fmt.Sprintf("%v", v)
+			}
+			preview = "[" + strings.Join(parts, ", ") + "]"
+		}
+		return fmt.Sprintf("InFilter(%s IN %s)", ft.columnName, preview)
+	case *AndFilter:
+		parts := make([]string, len(ft.Children))
+		for i, c := range ft.Children {
+			parts[i] = reprFilter(c)
+		}
+		return "AndFilter(" + strings.Join(parts, " AND ") + ")"
+	case *OrFilter:
+		parts := make([]string, len(ft.Children))
+		for i, c := range ft.Children {
+			parts[i] = reprFilter(c)
+		}
+		return "OrFilter(" + strings.Join(parts, " OR ") + ")"
+	case *StructFilter:
+		return fmt.Sprintf("StructFilter(%s.%s: %s)", ft.columnName, ft.ChildName, reprFilter(ft.ChildFilter))
+	case *ExpressionFilter:
+		return fmt.Sprintf("ExpressionFilter(%s)", ft.columnName)
+	default:
+		return fmt.Sprintf("%T(%s)", f, f.ColumnName())
+	}
+}
+
 // ToSQL converts filters to a SQL WHERE clause with parameters.
 // The quoteIdentifier function is used to quote column names (default: double quotes).
 // The placeholder is the parameter placeholder style ("?", "%s", etc.).

@@ -144,6 +144,7 @@ func main() {
 	// Writable catalog (in-memory, per-process state).
 	w.RegisterWritableCatalog(vgi.NewWritableCatalog("writable"))
 	w.RegisterTable(table.NewDoubleSequenceFunction())
+	w.RegisterTable(table.NewDynamicFilterEchoFunction())
 	w.RegisterTable(table.NewGeneratorExceptionFunction())
 	w.RegisterTable(table.NewLoggingGeneratorFunction())
 	w.RegisterTable(table.NewMakePairsIntFunction())

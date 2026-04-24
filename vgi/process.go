@@ -33,6 +33,13 @@ type ProcessParams struct {
 	// JoinKeys maps keys_column name -> Arrow array carrying the join keys
 	// referenced by FilterJoinKeys entries in PushdownFilters.
 	JoinKeys map[string]arrow.Array
+	// CurrentPushdownFilters is the filter state for the *current* Produce
+	// tick. It starts at the init-time pushdown filters and is replaced
+	// whenever DuckDB's dynamic filter tightens (DynamicFilter pushdown).
+	// Functions that want to react to filter updates per batch should read
+	// this field; functions that only care about static filters should use
+	// PushdownFilters.
+	CurrentPushdownFilters *PushdownFilters
 	// OrderByHint, when non-nil, carries an ORDER BY + LIMIT pushdown hint.
 	OrderByHint *OrderByHint
 	// TableSampleHint, when non-nil, carries a TABLESAMPLE pushdown hint.

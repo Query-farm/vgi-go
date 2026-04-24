@@ -5,6 +5,7 @@ package vgi
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 
@@ -105,6 +106,10 @@ type TableProducerState struct {
 
 func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
 	s.params.Auth = callCtx.Auth
+	// Decode any dynamic filter update carried on this tick's custom metadata.
+	// DuckDB's dynamic-filter pushdown ships a fresh, tightened filter batch
+	// per tick under the vgi_pushdown_filters key (base64-encoded IPC stream).
+	applyTickFilters(s.params, callCtx.InputMetadata)
 	if s.autoApply != nil || s.AutoProjectIDs != nil {
 		if s.AutoProjectIDs != nil {
 			// Tell OutputCollector to use the full schema for EmitArrays/EmitMap
@@ -117,13 +122,56 @@ func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputColl
 			if s.AutoProjectIDs != nil {
 				result = projectBatch(result, s.AutoProjectIDs)
 			}
-			if s.autoApply != nil {
-				return s.autoApply.Apply(ctx, result)
+			applied := s.autoApply
+			if s.params.CurrentPushdownFilters != nil {
+				applied = s.params.CurrentPushdownFilters
+			}
+			if applied != nil {
+				return applied.Apply(ctx, result)
 			}
 			return result, nil
 		}
 	}
 	return s.fn.Process(ctx, s.params, s.state, out)
+}
+
+// applyTickFilters checks the tick-level custom metadata for a dynamic filter
+// update and, if present, replaces params.CurrentPushdownFilters with the
+// freshly decoded filter state. Silent on decode errors — the previous filter
+// state is retained (DuckDB falls back to client-side filtering).
+func applyTickFilters(params *ProcessParams, meta arrow.Metadata) {
+	if meta.Len() == 0 {
+		// First tick after init: seed CurrentPushdownFilters from the static
+		// PushdownFilters so handlers see a consistent view.
+		if params.CurrentPushdownFilters == nil && params.PushdownFilters != nil {
+			if pf, err := DeserializeFilters(params.PushdownFilters, params.JoinKeys); err == nil {
+				params.CurrentPushdownFilters = pf
+			}
+		}
+		return
+	}
+	idx := meta.FindKey("vgi_pushdown_filters")
+	if idx < 0 {
+		return
+	}
+	encoded := meta.Values()[idx]
+	if encoded == "" {
+		// Empty string signals "no dynamic filter yet" — keep the static one.
+		return
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return
+	}
+	batch, err := DeserializeRecordBatch(raw)
+	if err != nil {
+		return
+	}
+	pf, err := DeserializeFilters(batch, params.JoinKeys)
+	if err != nil {
+		return
+	}
+	params.CurrentPushdownFilters = pf
 }
 
 // projectBatch selects only the columns at the given indices from a RecordBatch.
