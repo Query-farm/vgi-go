@@ -12,3 +12,4 @@ vgi-example-worker-go
 
 # Temporary/stray files
 2
+.claude/
