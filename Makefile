@@ -20,6 +20,15 @@ BINARY       := vgi-example-worker-go
 # Go package containing the worker entrypoint.
 CMD          := ./cmd/vgi-example-worker
 
+# Versioned-example worker binaries + packages (mirror vgi-python's
+# vgi-example-versioned-worker / vgi-example-versioned-tables-worker so the
+# require-env VGI_VERSIONED_WORKER / VGI_VERSIONED_TABLES_WORKER test files
+# run against the Go SDK too).
+VERSIONED_BINARY        := vgi-example-versioned-worker-go
+VERSIONED_CMD           := ./cmd/vgi-example-versioned-worker
+VERSIONED_TABLES_BINARY := vgi-example-versioned-tables-worker-go
+VERSIONED_TABLES_CMD    := ./cmd/vgi-example-versioned-tables-worker
+
 # Path to the sibling DuckDB VGI extension repo (contains tests).
 VGI_EXT_DIR  := ../vgi
 
@@ -35,8 +44,10 @@ TEST_TIMEOUT ?= 60
 UNITTEST     := $(VGI_EXT_DIR)/build/$(BUILD_TYPE)/test/unittest
 DEBUG_BIN    := $(VGI_EXT_DIR)/build/debug/test/unittest
 
-# Absolute path to the worker binary, passed to the test runner.
-WORKER_PATH  := $(CURDIR)/$(BINARY)
+# Absolute path to the worker binaries, passed to the test runner.
+WORKER_PATH                  := $(CURDIR)/$(BINARY)
+VERSIONED_WORKER_PATH        := $(CURDIR)/$(VERSIONED_BINARY)
+VERSIONED_TABLES_WORKER_PATH := $(CURDIR)/$(VERSIONED_TABLES_BINARY)
 
 # Test directory inside the extension repo.
 TEST_DIR     := $(VGI_EXT_DIR)/test/sql
@@ -51,13 +62,15 @@ HTTP_XFAIL_TESTS :=
 
 .PHONY: build clean fmt vet test test-single test-http test-all
 
-# Compile the example worker binary.
+# Compile the example worker binaries.
 build:
 	go build -o $(BINARY) $(CMD)
+	go build -o $(VERSIONED_BINARY) $(VERSIONED_CMD)
+	go build -o $(VERSIONED_TABLES_BINARY) $(VERSIONED_TABLES_CMD)
 
-# Remove the built binary.
+# Remove built binaries.
 clean:
-	rm -f $(BINARY)
+	rm -f $(BINARY) $(VERSIONED_BINARY) $(VERSIONED_TABLES_BINARY)
 
 # Format all Go source files.
 fmt:
@@ -68,15 +81,27 @@ vet:
 	go vet ./...
 
 # Run the full integration test suite.
-# Rebuilds the worker first to ensure tests use the latest code.
+# Rebuilds the workers first to ensure tests use the latest code.
+# Versioned-worker env vars make require-env-gated tests in
+# test/sql/integration/attach/versioning*.test and versioned_tables*.test
+# run against the Go workers too. The ~writable glob excludes the
+# writable-catalog tests (opt-in via VGI_WORKER_ENABLE_WRITABLE).
 test: build
-	cd $(VGI_EXT_DIR) && VGI_TEST_WORKER=$(WORKER_PATH) $(UNITTEST) "test/*"
+	cd $(VGI_EXT_DIR) && \
+	    VGI_TEST_WORKER=$(WORKER_PATH) \
+	    VGI_VERSIONED_WORKER=$(VERSIONED_WORKER_PATH) \
+	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
+	    $(UNITTEST) "test/*" "~test/sql/integration/writable/*"
 
 # Run a single integration test file.
 # Example:
 #   make test-single TEST=test/sql/integration/scalar/add_values.test
 test-single: build
-	cd $(VGI_EXT_DIR) && VGI_TEST_WORKER=$(WORKER_PATH) $(UNITTEST) "$(TEST)"
+	cd $(VGI_EXT_DIR) && \
+	    VGI_TEST_WORKER=$(WORKER_PATH) \
+	    VGI_VERSIONED_WORKER=$(VERSIONED_WORKER_PATH) \
+	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
+	    $(UNITTEST) "$(TEST)"
 
 # Run the full integration test suite over HTTP transport.
 # Each test starts a fresh HTTP worker, discovers the port, runs the test,
