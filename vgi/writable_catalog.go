@@ -27,6 +27,8 @@ type WritableCatalog struct {
 	version  int64
 	// schemas keyed by schema name (lower-case canonical form).
 	schemas map[string]*writableSchema
+	// store persists schemas/tables/rows across worker processes.
+	store *writableStore
 }
 
 type writableSchema struct {
@@ -53,14 +55,18 @@ type writableTable struct {
 }
 
 // NewWritableCatalog builds an empty writable catalog with one default
-// schema "main".
+// schema "main". The catalog uses a SQLite-backed store so DuckDB-spawned
+// worker subprocesses see the same state.
 func NewWritableCatalog(name string) *WritableCatalog {
 	c := &WritableCatalog{
 		Name:    name,
 		version: 1,
 		schemas: map[string]*writableSchema{},
+		store:   newWritableStore(),
 	}
 	c.schemas["main"] = &writableSchema{name: "main", tables: map[string]*writableTable{}}
+	// Ensure "main" is persisted so other processes can see it.
+	_ = c.store.schemaUpsert(name, "main", "")
 	return c
 }
 

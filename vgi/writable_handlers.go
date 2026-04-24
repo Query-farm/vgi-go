@@ -75,50 +75,49 @@ func parseOnConflict(s string) onConflictAction {
 }
 
 func (w *Worker) writableSchemaCreate(c *WritableCatalog, name string, onConflict onConflictAction, comment *string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	key := strings.ToLower(name)
-	if existing, ok := c.schemas[key]; ok {
+	exists, err := c.store.schemaExists(c.Name, name)
+	if err != nil {
+		return err
+	}
+	if exists {
 		switch onConflict {
 		case onConflictReplace:
-			existing.tables = map[string]*writableTable{}
-			if comment != nil {
-				existing.comment = *comment
-			}
-			c.version++
-			return nil
+			// Treat REPLACE as upsert (don't drop existing tables — match
+			// vgi-python's CREATE OR REPLACE SCHEMA semantics).
 		case onConflictIgnore:
 			return nil
 		default:
 			return fmt.Errorf("schema %q already exists", name)
 		}
 	}
-	s := &writableSchema{name: name, tables: map[string]*writableTable{}}
+	cmt := ""
 	if comment != nil {
-		s.comment = *comment
+		cmt = *comment
 	}
-	c.schemas[key] = s
-	c.version++
-	return nil
+	return c.store.schemaUpsert(c.Name, name, cmt)
 }
 
 func (w *Worker) writableSchemaDrop(c *WritableCatalog, name string, ignoreNotFound, cascade bool) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	key := strings.ToLower(name)
-	s, ok := c.schemas[key]
-	if !ok {
+	exists, err := c.store.schemaExists(c.Name, name)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		if ignoreNotFound {
 			return nil
 		}
 		return fmt.Errorf("schema %q does not exist", name)
 	}
-	if !cascade && len(s.tables) > 0 {
-		return fmt.Errorf("schema %q is not empty (use CASCADE)", name)
+	if !cascade {
+		ts, err := c.store.tableList(c.Name, name)
+		if err != nil {
+			return err
+		}
+		if len(ts) > 0 {
+			return fmt.Errorf("schema %q is not empty (use CASCADE)", name)
+		}
 	}
-	delete(c.schemas, key)
-	c.version++
-	return nil
+	return c.store.schemaDrop(c.Name, name, cascade)
 }
 
 func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestWire) error {
@@ -130,18 +129,23 @@ func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestW
 		return fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	sKey := strings.ToLower(req.SchemaName)
-	s, ok := c.schemas[sKey]
-	if !ok {
+	exists, err := c.store.schemaExists(c.Name, req.SchemaName)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		return fmt.Errorf("schema %q does not exist", req.SchemaName)
 	}
-	tKey := strings.ToLower(req.Name)
-	if _, ok := s.tables[tKey]; ok {
+	existing, err := c.store.tableLoad(c.Name, req.SchemaName, req.Name)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
 		switch parseOnConflict(req.OnConflict) {
 		case onConflictReplace:
-			delete(s.tables, tKey)
+			if err := c.store.tableDrop(c.Name, req.SchemaName, req.Name); err != nil {
+				return err
+			}
 		case onConflictIgnore:
 			return nil
 		default:
@@ -159,31 +163,21 @@ func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestW
 		defaults:      defaultsFromSchemaMetadata(schema),
 		columnComment: map[string]string{},
 	}
-	s.tables[tKey] = t
-	c.version++
-	return nil
+	return c.store.tableUpsert(c.Name, req.SchemaName, t)
 }
 
 func (w *Worker) writableTableDrop(c *WritableCatalog, schemaName, name string, ignoreNotFound, cascade bool) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	s, ok := c.schemas[strings.ToLower(schemaName)]
-	if !ok {
-		if ignoreNotFound {
-			return nil
-		}
-		return fmt.Errorf("schema %q does not exist", schemaName)
+	existing, err := c.store.tableLoad(c.Name, schemaName, name)
+	if err != nil {
+		return err
 	}
-	tKey := strings.ToLower(name)
-	if _, ok := s.tables[tKey]; !ok {
+	if existing == nil {
 		if ignoreNotFound {
 			return nil
 		}
 		return fmt.Errorf("table %q.%q does not exist", schemaName, name)
 	}
-	delete(s.tables, tKey)
-	c.version++
-	return nil
+	return c.store.tableDrop(c.Name, schemaName, name)
 }
 
 func columnsByIndex(schema *arrow.Schema, idx []int32) []string {
@@ -297,11 +291,13 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 // ============================================================================
 
 func (w *Worker) writableSchemas(c *WritableCatalog) ([][]byte, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([][]byte, 0, len(c.schemas))
-	for _, s := range c.schemas {
-		info := &SchemaInfo{Name: s.name, Comment: s.comment, AttachID: c.attachID}
+	list, err := c.store.schemaList(c.Name)
+	if err != nil {
+		return nil, err
+	}
+	out := make([][]byte, 0, len(list))
+	for _, s := range list {
+		info := &SchemaInfo{Name: s.Name, Comment: s.Comment, AttachID: c.attachID}
 		data, err := SerializeSchemaInfo(info)
 		if err != nil {
 			return nil, err
@@ -312,13 +308,14 @@ func (w *Worker) writableSchemas(c *WritableCatalog) ([][]byte, error) {
 }
 
 func (w *Worker) writableSchemaGet(c *WritableCatalog, name string) ([][]byte, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	s, ok := c.schemas[strings.ToLower(name)]
-	if !ok {
+	exists, err := c.store.schemaExists(c.Name, name)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
 		return nil, nil
 	}
-	info := &SchemaInfo{Name: s.name, Comment: s.comment, AttachID: c.attachID}
+	info := &SchemaInfo{Name: name, AttachID: c.attachID}
 	data, err := SerializeSchemaInfo(info)
 	if err != nil {
 		return nil, err
@@ -327,14 +324,19 @@ func (w *Worker) writableSchemaGet(c *WritableCatalog, name string) ([][]byte, e
 }
 
 func (w *Worker) writableSchemaContentsTables(c *WritableCatalog, schemaName string) ([][]byte, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	s, ok := c.schemas[strings.ToLower(schemaName)]
-	if !ok {
-		return [][]byte{}, nil
+	names, err := c.store.tableList(c.Name, schemaName)
+	if err != nil {
+		return nil, err
 	}
-	out := make([][]byte, 0, len(s.tables))
-	for _, t := range s.tables {
+	out := make([][]byte, 0, len(names))
+	for _, name := range names {
+		t, err := c.store.tableLoad(c.Name, schemaName, name)
+		if err != nil {
+			return nil, err
+		}
+		if t == nil {
+			continue
+		}
 		info, err := tableInfoFromWritable(t, schemaName)
 		if err != nil {
 			return nil, err
@@ -349,14 +351,11 @@ func (w *Worker) writableSchemaContentsTables(c *WritableCatalog, schemaName str
 }
 
 func (w *Worker) writableTableGet(c *WritableCatalog, schemaName, tableName string) ([][]byte, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	s, ok := c.schemas[strings.ToLower(schemaName)]
-	if !ok {
-		return nil, nil
+	t, err := c.store.tableLoad(c.Name, schemaName, tableName)
+	if err != nil {
+		return nil, err
 	}
-	t, ok := s.tables[strings.ToLower(tableName)]
-	if !ok {
+	if t == nil {
 		return nil, nil
 	}
 	info, err := tableInfoFromWritable(t, schemaName)

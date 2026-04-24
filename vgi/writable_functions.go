@@ -6,7 +6,6 @@ package vgi
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -37,17 +36,15 @@ func (w *Worker) registerWritableFunctions() {
 }
 
 // findWritableTable looks up a (schema, table) across all writable catalogs.
+// Reads from the SQLite store so DuckDB-spawned worker subprocesses see the
+// same state as the process that ran CREATE TABLE.
 func (w *Worker) findWritableTable(schemaName, tableName string) (*WritableCatalog, *writableTable, error) {
 	for _, c := range w.extraCatalogs {
-		c.mu.Lock()
-		s, ok := c.schemas[strings.ToLower(schemaName)]
-		if !ok {
-			c.mu.Unlock()
-			continue
+		t, err := c.store.tableLoad(c.Name, schemaName, tableName)
+		if err != nil {
+			return nil, nil, err
 		}
-		t, ok := s.tables[strings.ToLower(tableName)]
-		c.mu.Unlock()
-		if ok {
+		if t != nil {
 			return c, t, nil
 		}
 	}
@@ -93,11 +90,15 @@ func (f *writableScanFn) OnBind(params *BindParams) (*BindResponse, error) {
 func (f *writableScanFn) Cardinality(params *BindParams) (*TableCardinality, error) {
 	schemaName, _ := params.Args.GetScalarString(0)
 	tableName, _ := params.Args.GetScalarString(1)
-	_, t, err := f.w.findWritableTable(schemaName, tableName)
+	c, _, err := f.w.findWritableTable(schemaName, tableName)
 	if err != nil {
 		return &TableCardinality{Estimate: 0}, nil
 	}
-	return &TableCardinality{Estimate: int64(len(t.rows)), Max: int64(len(t.rows))}, nil
+	n, err := c.store.rowsCount(c.Name, schemaName, tableName)
+	if err != nil {
+		return &TableCardinality{Estimate: 0}, nil
+	}
+	return &TableCardinality{Estimate: n, Max: n}, nil
 }
 
 type writableScanState struct {
@@ -115,21 +116,16 @@ func (f *writableScanFn) Process(ctx context.Context, params *ProcessParams, sta
 	}
 	schemaName, _ := params.Args.GetScalarString(0)
 	tableName, _ := params.Args.GetScalarString(1)
-	_, t, err := f.w.findWritableTable(schemaName, tableName)
+	c, t, err := f.w.findWritableTable(schemaName, tableName)
 	if err != nil {
 		return err
 	}
-	rowsCopy := make([]map[string]interface{}, len(t.rows))
-	for i, r := range t.rows {
-		rc := make(map[string]interface{}, len(r)+1)
-		for k, v := range r {
-			rc[k] = v
-		}
-		rc[rowIDFieldName] = int64(i)
-		rowsCopy[i] = rc
+	rows, err := c.store.rowsScan(c.Name, schemaName, tableName)
+	if err != nil {
+		return err
 	}
 	state.Emitted = true
-	if len(rowsCopy) == 0 {
+	if len(rows) == 0 {
 		out.Finish()
 		return nil
 	}
@@ -138,7 +134,7 @@ func (f *writableScanFn) Process(ctx context.Context, params *ProcessParams, sta
 	if outSchema == nil {
 		outSchema = withSynthesizedRowID(t.schema)
 	}
-	batch, err := rowsToBatch(outSchema, rowsCopy)
+	batch, err := rowsToBatch(outSchema, rows)
 	if err != nil {
 		return err
 	}
@@ -216,7 +212,7 @@ func (f *writableInsertFn) NewState(p *ProcessParams) (interface{}, error) {
 }
 func (f *writableInsertFn) Process(ctx context.Context, p *ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	st := state.(*writableMutateState)
-	_, t, err := f.w.findWritableTable(st.SchemaName, st.TableName)
+	c, _, err := f.w.findWritableTable(st.SchemaName, st.TableName)
 	if err != nil {
 		return err
 	}
@@ -224,7 +220,9 @@ func (f *writableInsertFn) Process(ctx context.Context, p *ProcessParams, state 
 	if err != nil {
 		return err
 	}
-	t.rows = append(t.rows, rows...)
+	if _, err := c.store.rowsAppend(c.Name, st.SchemaName, st.TableName, rows); err != nil {
+		return err
+	}
 	st.Count += int64(len(rows))
 	result := writableCountBatch("rows_inserted", int64(len(rows)))
 	defer result.Release()
@@ -255,7 +253,7 @@ func (f *writableUpdateFn) NewState(p *ProcessParams) (interface{}, error) {
 }
 func (f *writableUpdateFn) Process(ctx context.Context, p *ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	st := state.(*writableMutateState)
-	_, t, err := f.w.findWritableTable(st.SchemaName, st.TableName)
+	c, _, err := f.w.findWritableTable(st.SchemaName, st.TableName)
 	if err != nil {
 		return err
 	}
@@ -263,23 +261,9 @@ func (f *writableUpdateFn) Process(ctx context.Context, p *ProcessParams, state 
 	if err != nil {
 		return err
 	}
-	updated := int64(0)
-	for _, u := range updates {
-		ridV, ok := u["__row_id"]
-		if !ok {
-			continue
-		}
-		rid := toInt64(ridV)
-		if rid < 0 || int(rid) >= len(t.rows) {
-			continue
-		}
-		for k, v := range u {
-			if k == "__row_id" {
-				continue
-			}
-			t.rows[rid][k] = v
-		}
-		updated++
+	updated, err := c.store.rowsUpdate(c.Name, st.SchemaName, st.TableName, updates)
+	if err != nil {
+		return err
 	}
 	st.Count += updated
 	result := writableCountBatch("rows_updated", updated)
@@ -311,7 +295,7 @@ func (f *writableDeleteFn) NewState(p *ProcessParams) (interface{}, error) {
 }
 func (f *writableDeleteFn) Process(ctx context.Context, p *ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	st := state.(*writableMutateState)
-	_, t, err := f.w.findWritableTable(st.SchemaName, st.TableName)
+	c, _, err := f.w.findWritableTable(st.SchemaName, st.TableName)
 	if err != nil {
 		return err
 	}
@@ -319,23 +303,15 @@ func (f *writableDeleteFn) Process(ctx context.Context, p *ProcessParams, state 
 	if err != nil {
 		return err
 	}
-	rids := make(map[int64]bool, len(rows))
+	rids := make([]int64, 0, len(rows))
 	for _, r := range rows {
-		if v, ok := r["__row_id"]; ok {
-			rids[toInt64(v)] = true
+		if v, ok := r[rowIDFieldName]; ok {
+			rids = append(rids, toInt64(v))
 		}
 	}
-	deleted := int64(0)
-	if len(rids) > 0 {
-		kept := make([]map[string]interface{}, 0, len(t.rows))
-		for i, r := range t.rows {
-			if rids[int64(i)] {
-				continue
-			}
-			kept = append(kept, r)
-		}
-		deleted = int64(len(t.rows) - len(kept))
-		t.rows = kept
+	deleted, err := c.store.rowsDelete(c.Name, st.SchemaName, st.TableName, rids)
+	if err != nil {
+		return err
 	}
 	st.Count += deleted
 	result := writableCountBatch("rows_deleted", deleted)
