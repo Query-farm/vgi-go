@@ -434,6 +434,10 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			v := true
 			fi.FilterPushdown = &v
 		}
+		if meta.SamplingPushdown {
+			v := true
+			fi.SamplingPushdown = &v
+		}
 		return fi
 	}
 

@@ -355,7 +355,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		initParams.OrderByHint = hint
 	}
 	if req.TablesamplePercentage != nil && *req.TablesamplePercentage >= 0 {
-		hint := &TableSampleHint{Percentage: *req.TablesamplePercentage}
+		hint := &TableSampleHint{Percentage: *req.TablesamplePercentage, Seed: -1}
 		if req.TablesampleSeed != nil {
 			hint.Seed = *req.TablesampleSeed
 		}

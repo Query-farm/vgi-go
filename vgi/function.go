@@ -72,6 +72,8 @@ type FunctionMetadata struct {
 	ProjectionPushdown bool
 	// FilterPushdown indicates support for filter pushdown.
 	FilterPushdown bool
+	// SamplingPushdown indicates support for TABLESAMPLE SYSTEM pushdown.
+	SamplingPushdown bool
 	// AutoApplyFilters indicates the framework should auto-apply pushdown filters.
 	AutoApplyFilters bool
 	// Categories is a list of classification tags for the function.
