@@ -13,6 +13,7 @@ import (
 func init() {
 	// gob requires concrete types be registered so the encoder can persist
 	// them through interface{} state slots.
+	gob.Register(&stubState{})
 	gob.Register(&CountState{})
 	gob.Register(&SumState{})
 	gob.Register(&AvgState{})

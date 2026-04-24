@@ -247,9 +247,19 @@ func (PercentileFunction) Combine(source, target interface{}, _ *vgi.AggregatePr
 
 func (PercentileFunction) Finalize(gids []int64, states map[int64]interface{}, p *vgi.AggregateProcessParams) (arrow.RecordBatch, error) {
 	pct := 0.5
-	if p.Args != nil && len(p.Args.Positional) > 1 {
-		if v, ok := scalarFloatFromArr(p.Args.Positional[1]); ok {
-			pct = v
+	if p.Args != nil {
+		// The const param `p` is the only entry the framework stashes for
+		// aggregate_bind args (column inputs go via input_schema, not args).
+		// It may land at Positional[0] (only const) or Positional[1] (const
+		// at original SQL position).
+		for _, a := range p.Args.Positional {
+			if a == nil {
+				continue
+			}
+			if v, ok := scalarFloatFromArr(a); ok {
+				pct = v
+				break
+			}
 		}
 	}
 	mem := memory.NewGoAllocator()
@@ -263,7 +273,7 @@ func (PercentileFunction) Finalize(gids []int64, states map[int64]interface{}, p
 		}
 		sorted := append([]float64{}, s.Values...)
 		sort.Float64s(sorted)
-		idx := int(pct * float64(len(sorted)-1))
+		idx := int(pct * float64(len(sorted)))
 		if idx < 0 {
 			idx = 0
 		}
@@ -394,7 +404,9 @@ func (GenericSumFunction) ArgumentSpecs() []vgi.ArgSpec {
 
 func (GenericSumFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {
 	dt := arrow.DataType(arrow.PrimitiveTypes.Float64)
-	if p.Args != nil && len(p.Args.Positional) > 0 && p.Args.Positional[0] != nil {
+	if p.InputSchema != nil && p.InputSchema.NumFields() > 0 {
+		dt = p.InputSchema.Field(0).Type
+	} else if p.Args != nil && len(p.Args.Positional) > 0 && p.Args.Positional[0] != nil {
 		dt = p.Args.Positional[0].DataType()
 	}
 	return vgi.BindSchema(arrow.NewSchema([]arrow.Field{
@@ -431,34 +443,70 @@ func (GenericSumFunction) Combine(source, target interface{}, _ *vgi.AggregatePr
 func (GenericSumFunction) Finalize(gids []int64, states map[int64]interface{}, p *vgi.AggregateProcessParams) (arrow.RecordBatch, error) {
 	mem := memory.NewGoAllocator()
 	dt := p.OutputSchema.Field(0).Type
+	values := make([]interface{}, 0, len(gids))
+	for _, gid := range gids {
+		if s, ok := states[gid].(*GenericSumState); ok {
+			values = append(values, s.Total)
+		} else {
+			values = append(values, nil)
+		}
+	}
+	col, err := buildGenericSumColumn(mem, dt, values)
+	if err != nil {
+		return nil, err
+	}
+	defer col.Release()
+	return array.NewRecordBatch(p.OutputSchema, []arrow.Array{col}, int64(len(gids))), nil
+}
+
+func buildGenericSumColumn(mem memory.Allocator, dt arrow.DataType, values []interface{}) (arrow.Array, error) {
 	switch dt.ID() {
 	case arrow.INT64:
 		b := array.NewInt64Builder(mem)
 		defer b.Release()
-		for _, gid := range gids {
-			if s, ok := states[gid].(*GenericSumState); ok {
-				b.Append(int64(s.Total))
-			} else {
+		for _, v := range values {
+			if v == nil {
 				b.AppendNull()
+			} else {
+				b.Append(int64(v.(float64)))
 			}
 		}
-		col := b.NewArray()
-		defer col.Release()
-		return array.NewRecordBatch(p.OutputSchema, []arrow.Array{col}, int64(len(gids))), nil
-	default:
+		return b.NewArray(), nil
+	case arrow.INT32:
+		b := array.NewInt32Builder(mem)
+		defer b.Release()
+		for _, v := range values {
+			if v == nil {
+				b.AppendNull()
+			} else {
+				b.Append(int32(v.(float64)))
+			}
+		}
+		return b.NewArray(), nil
+	case arrow.FLOAT64:
 		b := array.NewFloat64Builder(mem)
 		defer b.Release()
-		for _, gid := range gids {
-			if s, ok := states[gid].(*GenericSumState); ok {
-				b.Append(s.Total)
-			} else {
+		for _, v := range values {
+			if v == nil {
 				b.AppendNull()
+			} else {
+				b.Append(v.(float64))
 			}
 		}
-		col := b.NewArray()
-		defer col.Release()
-		return array.NewRecordBatch(p.OutputSchema, []arrow.Array{col}, int64(len(gids))), nil
+		return b.NewArray(), nil
+	case arrow.FLOAT32:
+		b := array.NewFloat32Builder(mem)
+		defer b.Release()
+		for _, v := range values {
+			if v == nil {
+				b.AppendNull()
+			} else {
+				b.Append(float32(v.(float64)))
+			}
+		}
+		return b.NewArray(), nil
 	}
+	return nil, fmt.Errorf("vgi_generic_sum: unsupported output type %s", dt)
 }
 
 // ============================================================================
@@ -471,12 +519,32 @@ func scalarFloat(arr arrow.Array, i int) float64 {
 		return float64(a.Value(i))
 	case *array.Int32:
 		return float64(a.Value(i))
+	case *array.Int16:
+		return float64(a.Value(i))
+	case *array.Int8:
+		return float64(a.Value(i))
+	case *array.Uint64:
+		return float64(a.Value(i))
+	case *array.Uint32:
+		return float64(a.Value(i))
 	case *array.Float64:
 		return a.Value(i)
 	case *array.Float32:
 		return float64(a.Value(i))
+	case *array.Decimal128:
+		dt := a.DataType().(*arrow.Decimal128Type)
+		v := a.Value(i)
+		return float64(v.LowBits()) / pow10(int(dt.Scale))
 	}
 	return 0
+}
+
+func pow10(n int) float64 {
+	r := 1.0
+	for i := 0; i < n; i++ {
+		r *= 10
+	}
+	return r
 }
 
 func scalarFloatFromArr(arr arrow.Array) (float64, bool) {

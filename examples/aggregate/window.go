@@ -68,6 +68,31 @@ func (WindowSumFunction) Window(rid int64, subframes [][2]int64, partition *vgi.
 
 type WindowMedianFunction struct{ AvgFunction }
 
+func (WindowMedianFunction) ArgumentSpecs() []vgi.ArgSpec {
+	return []vgi.ArgSpec{
+		{Name: "value", Position: 0, ArrowType: "double", Doc: "Numeric column"},
+	}
+}
+
+// Override Update so non-window calls (DuckDB invokes both update and window
+// callbacks for SUPPORTS_WINDOW aggregates) accept a DOUBLE column instead
+// of AvgFunction's int64-only path.
+func (WindowMedianFunction) Update(states map[int64]interface{}, gids *vgi.Int64Slice, columns []arrow.Array, _ *vgi.AggregateProcessParams) error {
+	if len(columns) == 0 {
+		return nil
+	}
+	col := columns[0]
+	for i := 0; i < gids.Len(); i++ {
+		if col.IsNull(i) {
+			continue
+		}
+		s := vgi.EnsureState(states, gids.At(i), func() *AvgState { return &AvgState{} })
+		s.Total += scalarFloat(col, i)
+		s.Count++
+	}
+	return nil
+}
+
 var _ vgi.AggregateWindowFunction = (*WindowMedianFunction)(nil)
 
 func (WindowMedianFunction) Name() string { return "vgi_window_median" }
