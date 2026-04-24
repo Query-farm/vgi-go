@@ -47,6 +47,9 @@ type CatalogTable struct {
 	// Defaults maps column names to their default values.
 	// Supported types: Sql (raw SQL), string, int/int64/int32, float64/float32, bool, nil.
 	Defaults map[string]any
+	// Generated maps column names to SQL expressions for generated (virtual)
+	// columns. Encoded as `generated_expression` Arrow field metadata.
+	Generated map[string]string
 	// SupportsTimeTravel indicates this table supports AT (VERSION/TIMESTAMP) queries.
 	SupportsTimeTravel bool
 }
@@ -262,6 +265,39 @@ func defaultToSQL(value any) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+// applyGenerated adds "generated_expression" metadata to Arrow schema fields
+// for generated/virtual columns. Existing field metadata is preserved.
+func applyGenerated(schema *arrow.Schema, generated map[string]string) (*arrow.Schema, error) {
+	if len(generated) == 0 {
+		return schema, nil
+	}
+
+	fields := make([]arrow.Field, schema.NumFields())
+	for i := 0; i < schema.NumFields(); i++ {
+		fields[i] = schema.Field(i)
+	}
+
+	for colName, expr := range generated {
+		idx := -1
+		for i, f := range fields {
+			if f.Name == colName {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return nil, fmt.Errorf("generated references non-existent column %q", colName)
+		}
+		existing := fields[idx].Metadata
+		keys := append(existing.Keys(), "generated_expression")
+		vals := append(existing.Values(), expr)
+		fields[idx].Metadata = arrow.NewMetadata(keys, vals)
+	}
+
+	md := schema.Metadata()
+	return arrow.NewSchema(fields, &md), nil
 }
 
 // applyDefaults adds "default" metadata to Arrow schema fields for columns

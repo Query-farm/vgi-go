@@ -192,6 +192,22 @@ func main() {
 		}, nil),
 	})
 
+	// Generated-column example: physical column `n` from sequence(10),
+	// with `doubled` and `label` materialized by DuckDB from SQL expressions.
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "generated_sequence",
+		Comment: "Table with generated columns backed by sequence(10)",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "n", Type: arrow.PrimitiveTypes.Int64},
+			{Name: "doubled", Type: arrow.PrimitiveTypes.Int64},
+			{Name: "label", Type: arrow.BinaryTypes.String},
+		}, nil),
+		Generated: map[string]string{
+			"doubled": "n * 2",
+			"label":   "'item_' || CAST(n AS VARCHAR)",
+		},
+	})
+
 	// Row ID tables: row_id column at different positions and with different types
 	rowIDMeta := arrow.NewMetadata([]string{"is_row_id"}, []string{""})
 	rowIDStructType := arrow.StructOf(
@@ -433,6 +449,14 @@ func main() {
 				FunctionName: "sequence",
 				PositionalArguments: []vgi.ScanArg{
 					{Value: int64(100), Type: arrow.PrimitiveTypes.Int64},
+				},
+			}, nil
+		}
+		if schemaName == "data" && tableName == "generated_sequence" {
+			return &vgi.ScanFunctionResult{
+				FunctionName: "sequence",
+				PositionalArguments: []vgi.ScanArg{
+					{Value: int64(10), Type: arrow.PrimitiveTypes.Int64},
 				},
 			}, nil
 		}

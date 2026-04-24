@@ -1160,6 +1160,15 @@ func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]b
 		}
 	}
 
+	// Apply generated-column expressions as Arrow field metadata
+	if len(ct.Generated) > 0 && columns != nil {
+		var err error
+		columns, err = applyGenerated(columns, ct.Generated)
+		if err != nil {
+			return nil, fmt.Errorf("applying generated columns for table %s: %w", ct.Name, err)
+		}
+	}
+
 	// Resolve constraint column indices from names
 	notNull := resolveColumnIndices(columns, ct.NotNull)
 	unique := resolveColumnGroupIndices(columns, ct.Unique)
