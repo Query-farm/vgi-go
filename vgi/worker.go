@@ -285,6 +285,9 @@ type Worker struct {
 	aggregates             map[string][]AggregateFunction
 	aggStorage             *aggregateStorage
 	catalogName            string
+	catalogComment         string
+	catalogTags            map[string]string
+	schemaComments         map[string]string
 	catalog                *DefaultReadOnlyCatalog
 	// extraCatalogs are additional catalog names this worker accepts via
 	// catalog_attach. They share the worker's registered functions but
@@ -311,6 +314,34 @@ type WorkerOption func(*Worker)
 func WithCatalogName(name string) WorkerOption {
 	return func(w *Worker) {
 		w.catalogName = name
+	}
+}
+
+// WithCatalogComment sets the comment reported by catalog_attach (surfaces in
+// duckdb_databases().comment).
+func WithCatalogComment(comment string) WorkerOption {
+	return func(w *Worker) {
+		w.catalogComment = comment
+	}
+}
+
+// WithCatalogTags sets tags reported by catalog_attach (duckdb_databases().tags).
+func WithCatalogTags(tags map[string]string) WorkerOption {
+	return func(w *Worker) {
+		w.catalogTags = tags
+	}
+}
+
+// WithSchemaComments overrides the default comment for built-in schemas
+// ("main" and "data"). Other schemas retain their auto-generated comments.
+func WithSchemaComments(comments map[string]string) WorkerOption {
+	return func(w *Worker) {
+		if w.schemaComments == nil {
+			w.schemaComments = map[string]string{}
+		}
+		for k, v := range comments {
+			w.schemaComments[k] = v
+		}
 	}
 }
 

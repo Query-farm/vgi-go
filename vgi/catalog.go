@@ -443,10 +443,14 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 	}
 
 	// Create "main" schema with all functions
+	mainComment := "Default schema containing all registered functions"
+	if c, ok := w.schemaComments["main"]; ok {
+		mainComment = c
+	}
 	mainSchema := &catalogSchemaInfo{
 		info: &SchemaInfo{
 			Name:    "main",
-			Comment: "Default schema containing all registered functions",
+			Comment: mainComment,
 		},
 	}
 
@@ -542,10 +546,14 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 	cat.schemas["main"] = mainSchema
 
 	// Add "data" schema (empty, for catalog compatibility)
+	dataComment := "Data schema"
+	if c, ok := w.schemaComments["data"]; ok {
+		dataComment = c
+	}
 	dataSchema := &catalogSchemaInfo{
 		info: &SchemaInfo{
 			Name:    "data",
-			Comment: "Data schema",
+			Comment: dataComment,
 		},
 	}
 	cat.schemas["data"] = dataSchema
@@ -703,7 +711,11 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 					break
 				}
 			}
-			return CatalogAttachResultWire{
+			tags := w.catalogTags
+			if tags == nil {
+				tags = map[string]string{}
+			}
+			result := CatalogAttachResultWire{
 				AttachID:                 attachID,
 				SupportsTransactions:     false,
 				SupportsTimeTravel:       supportsTimeTravel,
@@ -713,9 +725,14 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				DefaultSchema:            "main",
 				Settings:                 serializedSettings,
 				SecretTypes:              serializedSecretTypes,
-				Tags:                     map[string]string{},
+				Tags:                     tags,
 				SupportsColumnStatistics: supportsColStats,
-			}, nil
+			}
+			if w.catalogComment != "" {
+				c := w.catalogComment
+				result.Comment = &c
+			}
+			return result, nil
 		})
 
 	// catalog_detach

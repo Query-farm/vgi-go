@@ -28,6 +28,15 @@ func main() {
 
 	w := vgi.NewWorker(
 		vgi.WithCatalogName("example"),
+		vgi.WithCatalogComment("Example VGI catalog for testing"),
+		vgi.WithCatalogTags(map[string]string{
+			"source":  "vgi-example-worker",
+			"version": "1",
+		}),
+		vgi.WithSchemaComments(map[string]string{
+			"main": "Example functions for testing VGI",
+			"data": "Example tables backed by functions",
+		}),
 		vgi.WithSecretTypes(
 			vgi.SecretTypeSpec{
 				Name:        "vgi_example",
