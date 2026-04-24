@@ -298,8 +298,13 @@ type Worker struct {
 	catalogTables          map[string][]CatalogTable // schema_name → tables
 	catalogViews           map[string][]CatalogView  // schema_name → views
 	catalogMacros          map[string][]CatalogMacro // schema_name → macros
-	scanFunctionGetHandler ScanFunctionGetHandler
-	tableGetHandler        TableGetHandler
+	scanFunctionGetHandler       ScanFunctionGetHandler
+	tableGetHandler              TableGetHandler
+	catalogInfoOverride          *CatalogInfo
+	attachValidator              AttachValidator
+	schemaContentsHandler        SchemaContentsHandler
+	attachTableGetHandler        AttachTableGetHandler
+	attachScanFunctionGetHandler AttachScanFunctionGetHandler
 	authenticateFunc       vgirpc.AuthenticateFunc
 	oauthMetadata          *vgirpc.OAuthResourceMetadata
 	secretTypes            []SecretTypeSpec
@@ -329,6 +334,85 @@ func WithCatalogComment(comment string) WorkerOption {
 func WithCatalogTags(tags map[string]string) WorkerOption {
 	return func(w *Worker) {
 		w.catalogTags = tags
+	}
+}
+
+// WithCatalogInfo overrides the CatalogInfo record returned by catalog_catalogs
+// (used by `vgi_catalogs(location)` for discovery). Set it to advertise
+// implementation_version / data_version_spec for versioned workers.
+func WithCatalogInfo(info CatalogInfo) WorkerOption {
+	return func(w *Worker) {
+		copy := info
+		w.catalogInfoOverride = &copy
+	}
+}
+
+// AttachDecision is the custom response returned by an AttachValidator.
+// Any non-empty ResolvedDataVersion / ResolvedImplementationVersion value
+// is forwarded to the client so it appears as a duckdb_databases().tag.
+// If AttachID is nil, the worker falls back to the catalog name.
+type AttachDecision struct {
+	ResolvedDataVersion           string
+	ResolvedImplementationVersion string
+	AttachID                      []byte
+}
+
+// AttachValidator is invoked by the default catalog_attach handler. It may
+// inspect the requested data_version_spec / implementation_version, perform
+// validation, and return resolved values. Returning an error causes the
+// ATTACH to fail with that message — the test suite treats a "ValueError"
+// RPC type as a user error the extension should surface verbatim.
+type AttachValidator func(req *CatalogAttachRequestWire, callCtx *vgirpc.CallContext) (*AttachDecision, error)
+
+// WithAttachValidator installs a custom attach validator. Required by the
+// versioned/versioned-tables example workers.
+func WithAttachValidator(v AttachValidator) WorkerOption {
+	return func(w *Worker) {
+		w.attachValidator = v
+	}
+}
+
+// SchemaContentsHandler lets callers override catalog_schema_contents_tables
+// on a per-attach-id basis (e.g. return different tables per resolved data
+// version). Return nil to fall through to the default registered-tables
+// behaviour.
+type SchemaContentsHandler func(attachID []byte, schemaName string) ([]SerializedSchemaItem, bool)
+
+// SerializedSchemaItem is a single pre-serialized schema item (TableInfo or
+// ViewInfo IPC bytes).
+type SerializedSchemaItem []byte
+
+// WithSchemaContentsHandler installs a handler that can replace the tables
+// returned for a given (attach_id, schema) pair.
+func WithSchemaContentsHandler(h SchemaContentsHandler) WorkerOption {
+	return func(w *Worker) {
+		w.schemaContentsHandler = h
+	}
+}
+
+// AttachTableGetHandler is the attach-id-aware version of TableGetHandler.
+// Return (data, true) to override the default; return (nil, false) to fall
+// through. Used by version-aware workers where the attach_id encodes the
+// resolved version.
+type AttachTableGetHandler func(attachID []byte, schemaName, name string, atUnit, atValue *string) (data []byte, handled bool, err error)
+
+// WithAttachTableGetHandler installs an attach-id-aware table_get handler.
+func WithAttachTableGetHandler(h AttachTableGetHandler) WorkerOption {
+	return func(w *Worker) {
+		w.attachTableGetHandler = h
+	}
+}
+
+// AttachScanFunctionGetHandler is the attach-id-aware version of
+// ScanFunctionGetHandler. Return (result, true) to override; (nil, false) to
+// fall through.
+type AttachScanFunctionGetHandler func(attachID []byte, schemaName, name string, atUnit, atValue *string) (result *ScanFunctionResult, handled bool, err error)
+
+// WithAttachScanFunctionGetHandler installs an attach-id-aware
+// scan_function_get handler.
+func WithAttachScanFunctionGetHandler(h AttachScanFunctionGetHandler) WorkerOption {
+	return func(w *Worker) {
+		w.attachScanFunctionGetHandler = h
 	}
 }
 

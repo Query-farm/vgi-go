@@ -28,8 +28,10 @@ type CatalogsResponseWire struct {
 
 // CatalogAttachRequestWire is the wire type for catalog_attach.
 type CatalogAttachRequestWire struct {
-	Name    string  `vgirpc:"name"`
-	Options *[]byte `vgirpc:"options"`
+	Name                  string  `vgirpc:"name"`
+	Options               *[]byte `vgirpc:"options"`
+	DataVersionSpec       *string `vgirpc:"data_version_spec"`
+	ImplementationVersion *string `vgirpc:"implementation_version"`
 }
 
 // CatalogAttachResultWire is the wire type for catalog_attach result.
@@ -546,18 +548,26 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 
 	cat.schemas["main"] = mainSchema
 
-	// Add "data" schema (empty, for catalog compatibility)
-	dataComment := "Data schema"
-	if c, ok := w.schemaComments["data"]; ok {
-		dataComment = c
+	// Add "data" schema only when the worker actually registers tables,
+	// views, macros, or an explicit comment for it. Empty workers (e.g. the
+	// versioned-example worker) should expose main only.
+	_, hasDataTables := w.catalogTables["data"]
+	_, hasDataViews := w.catalogViews["data"]
+	_, hasDataMacros := w.catalogMacros["data"]
+	_, hasDataComment := w.schemaComments["data"]
+	if hasDataTables || hasDataViews || hasDataMacros || hasDataComment {
+		dataComment := "Data schema"
+		if c, ok := w.schemaComments["data"]; ok {
+			dataComment = c
+		}
+		dataSchema := &catalogSchemaInfo{
+			info: &SchemaInfo{
+				Name:    "data",
+				Comment: dataComment,
+			},
+		}
+		cat.schemas["data"] = dataSchema
 	}
-	dataSchema := &catalogSchemaInfo{
-		info: &SchemaInfo{
-			Name:    "data",
-			Comment: dataComment,
-		},
-	}
-	cat.schemas["data"] = dataSchema
 
 	// Populate catalog tables from worker registrations
 	for schemaName, tables := range w.catalogTables {
@@ -624,6 +634,13 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	vgirpc.Unary[struct{}, CatalogsResponseWire](s, "catalog_catalogs",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, _ struct{}) (CatalogsResponseWire, error) {
 			info := &CatalogInfo{Name: w.catalogName}
+			if w.catalogInfoOverride != nil {
+				c := *w.catalogInfoOverride
+				info = &c
+				if info.Name == "" {
+					info.Name = w.catalogName
+				}
+			}
 			data, err := SerializeCatalogInfo(info)
 			if err != nil {
 				return CatalogsResponseWire{}, err
@@ -716,18 +733,51 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			if tags == nil {
 				tags = map[string]string{}
 			}
+			// Invoke the attach validator if installed — the versioned
+			// workers use this to resolve data/implementation versions and
+			// to embed the chosen version into attach_id.
+			attachIDRequired := false
+			var resolvedData, resolvedImpl *string
+			if w.attachValidator != nil {
+				decision, vErr := w.attachValidator(&req, callCtx)
+				if vErr != nil {
+					return CatalogAttachResultWire{}, &vgirpc.RpcError{
+						Type:    "ValueError",
+						Message: vErr.Error(),
+					}
+				}
+				if decision != nil {
+					if decision.AttachID != nil {
+						attachID = decision.AttachID
+						attachIDRequired = true
+						if w.catalog != nil {
+							w.catalog.attachID = attachID
+						}
+					}
+					if decision.ResolvedDataVersion != "" {
+						v := decision.ResolvedDataVersion
+						resolvedData = &v
+					}
+					if decision.ResolvedImplementationVersion != "" {
+						v := decision.ResolvedImplementationVersion
+						resolvedImpl = &v
+					}
+				}
+			}
 			result := CatalogAttachResultWire{
-				AttachID:                 attachID,
-				SupportsTransactions:     false,
-				SupportsTimeTravel:       supportsTimeTravel,
-				CatalogVersionFrozen:     true,
-				CatalogVersion:           version,
-				AttachIDRequired:         false,
-				DefaultSchema:            "main",
-				Settings:                 serializedSettings,
-				SecretTypes:              serializedSecretTypes,
-				Tags:                     tags,
-				SupportsColumnStatistics: supportsColStats,
+				AttachID:                      attachID,
+				SupportsTransactions:          false,
+				SupportsTimeTravel:            supportsTimeTravel,
+				CatalogVersionFrozen:          true,
+				CatalogVersion:                version,
+				AttachIDRequired:              attachIDRequired,
+				DefaultSchema:                 "main",
+				Settings:                      serializedSettings,
+				SecretTypes:                   serializedSecretTypes,
+				Tags:                          tags,
+				SupportsColumnStatistics:      supportsColStats,
+				ResolvedDataVersion:           resolvedData,
+				ResolvedImplementationVersion: resolvedImpl,
 			}
 			if w.catalogComment != "" {
 				c := w.catalogComment
@@ -846,6 +896,18 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				}
 				return ItemsResponseWire{Items: items}, nil
 			}
+			// Per-attach override (versioned-tables worker etc.): the handler
+			// inspects the attach_id (which can encode the resolved version)
+			// and returns the right set of tables.
+			if w.schemaContentsHandler != nil {
+				if items, ok := w.schemaContentsHandler(req.AttachID, req.Name); ok {
+					out := make([][]byte, len(items))
+					for i, it := range items {
+						out[i] = []byte(it)
+					}
+					return ItemsResponseWire{Items: out}, nil
+				}
+			}
 			if w.catalog == nil {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
@@ -945,6 +1007,22 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				}
 				return ItemsResponseWire{Items: items}, nil
 			}
+			// Attach-id-aware handler (e.g. versioned-tables worker).
+			if w.attachTableGetHandler != nil {
+				data, handled, err := w.attachTableGetHandler(req.AttachID, req.SchemaName, req.Name, req.AtUnit, req.AtValue)
+				if err != nil {
+					return ItemsResponseWire{}, &vgirpc.RpcError{
+						Type:    "ValueError",
+						Message: err.Error(),
+					}
+				}
+				if handled {
+					if data == nil {
+						return ItemsResponseWire{Items: [][]byte{}}, nil
+					}
+					return ItemsResponseWire{Items: [][]byte{data}}, nil
+				}
+			}
 			// Delegate to the custom handler first (e.g. for time-travel version-specific schemas)
 			if w.tableGetHandler != nil {
 				data, err := w.tableGetHandler(req.SchemaName, req.Name, req.AtUnit, req.AtValue)
@@ -1024,6 +1102,19 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				}
 			}
 
+			// Attach-id-aware handler takes precedence over the plain one.
+			if w.attachScanFunctionGetHandler != nil {
+				result, handled, err := w.attachScanFunctionGetHandler(req.AttachID, req.SchemaName, req.Name, req.AtUnit, req.AtValue)
+				if err != nil {
+					return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{
+						Type:    "ValueError",
+						Message: err.Error(),
+					}
+				}
+				if handled {
+					return buildScanFunctionGetResponse(result)
+				}
+			}
 			// Delegate to the handler if set
 			if w.scanFunctionGetHandler != nil {
 				result, err := w.scanFunctionGetHandler(req.SchemaName, req.Name, req.AtUnit, req.AtValue)

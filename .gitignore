@@ -1,5 +1,7 @@
 # Compiled binaries
 vgi-example-worker-go
+vgi-example-versioned-worker-go
+vgi-example-versioned-tables-worker-go
 
 # IDE / editor
 .idea/
