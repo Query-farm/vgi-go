@@ -305,6 +305,7 @@ type Worker struct {
 	schemaContentsHandler        SchemaContentsHandler
 	attachTableGetHandler        AttachTableGetHandler
 	attachScanFunctionGetHandler AttachScanFunctionGetHandler
+	catalogVersionHook           CatalogVersionHook
 	authenticateFunc       vgirpc.AuthenticateFunc
 	oauthMetadata          *vgirpc.OAuthResourceMetadata
 	secretTypes            []SecretTypeSpec
@@ -413,6 +414,22 @@ type AttachScanFunctionGetHandler func(attachID []byte, schemaName, name string,
 func WithAttachScanFunctionGetHandler(h AttachScanFunctionGetHandler) WorkerOption {
 	return func(w *Worker) {
 		w.attachScanFunctionGetHandler = h
+	}
+}
+
+// CatalogVersionHook runs on every catalog_version RPC before the response is
+// returned. Returning a non-nil error causes the RPC to fail with that
+// message (wrapped as a ValueError). The hook can inspect call-context
+// cookies to assert the HTTP cookie jar is round-tripping correctly — a
+// useful regression check for versioned workers that set a sticky cookie at
+// ATTACH time.
+type CatalogVersionHook func(attachID []byte, callCtx *vgirpc.CallContext) error
+
+// WithCatalogVersionHook installs a hook that runs on every catalog_version
+// RPC. Use it to assert invariants like cookie presence on HTTP transport.
+func WithCatalogVersionHook(h CatalogVersionHook) WorkerOption {
+	return func(w *Worker) {
+		w.catalogVersionHook = h
 	}
 }
 

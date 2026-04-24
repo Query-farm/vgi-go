@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"sort"
 
 	ex "github.com/Query-farm/vgi-go/examples/versioned_tables"
 	"github.com/Query-farm/vgi-go/vgi"
@@ -78,6 +79,23 @@ func main() {
 			Name:                  catalogName,
 			ImplementationVersion: &implDefault,
 			DataVersionSpec:       &dvs,
+		}),
+		// Assert the HTTP cookie jar round-trips the sticky cookie we set at
+		// ATTACH. Matches vgi-python's VersionedTablesCatalog.catalog_version —
+		// a broken cookie jar manifests here as a hard failure instead of
+		// silently leaking sessions across ATTACH calls.
+		vgi.WithCatalogVersionHook(func(_ []byte, ctx *vgirpc.CallContext) error {
+			if ctx == nil || len(ctx.Cookies) == 0 {
+				return nil
+			}
+			if _, ok := ctx.Cookies[stickyCookieName]; !ok {
+				names := make([]string, 0, len(ctx.Cookies))
+				for k := range ctx.Cookies {
+					names = append(names, k)
+				}
+				return fmt.Errorf("expected cookie %q on follow-up request; got %v", stickyCookieName, names)
+			}
+			return nil
 		}),
 		vgi.WithAttachValidator(func(req *vgi.CatalogAttachRequestWire, ctx *vgirpc.CallContext) (*vgi.AttachDecision, error) {
 			implSpec := ""
@@ -190,12 +208,7 @@ func sortedKeys(m map[string]versionedTable) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	// Bubble sort — n is at most 2, keep the binary dependency-free.
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
+	sort.Strings(keys)
 	return keys
 }
 

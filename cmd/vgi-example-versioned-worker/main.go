@@ -48,6 +48,22 @@ func main() {
 			ImplementationVersion: &impl,
 			DataVersionSpec:       &dvs,
 		}),
+		// Assert the HTTP cookie jar round-trips the sticky cookie we set at
+		// ATTACH. Matches vgi-python's VersionedCatalog.catalog_version. For
+		// subprocess transport ctx.Cookies is empty and the check is skipped.
+		vgi.WithCatalogVersionHook(func(_ []byte, ctx *vgirpc.CallContext) error {
+			if ctx == nil || len(ctx.Cookies) == 0 {
+				return nil
+			}
+			if _, ok := ctx.Cookies[stickyCookieName]; !ok {
+				names := make([]string, 0, len(ctx.Cookies))
+				for k := range ctx.Cookies {
+					names = append(names, k)
+				}
+				return fmt.Errorf("expected cookie %q on follow-up request; got %v", stickyCookieName, names)
+			}
+			return nil
+		}),
 		vgi.WithAttachValidator(func(req *vgi.CatalogAttachRequestWire, ctx *vgirpc.CallContext) (*vgi.AttachDecision, error) {
 			if req.ImplementationVersion != nil && *req.ImplementationVersion != implementationVersion {
 				return nil, fmt.Errorf("Unsupported implementation_version %q; this worker serves %q",

@@ -795,6 +795,14 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_version
 	vgirpc.Unary[CatalogVersionRequestWire, CatalogVersionResponseWire](s, "catalog_version",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogVersionRequestWire) (CatalogVersionResponseWire, error) {
+			if w.catalogVersionHook != nil {
+				if err := w.catalogVersionHook(req.AttachID, callCtx); err != nil {
+					return CatalogVersionResponseWire{}, &vgirpc.RpcError{
+						Type:    "ValueError",
+						Message: err.Error(),
+					}
+				}
+			}
 			version := int64(1)
 			if w.catalog != nil {
 				version = w.catalog.version
