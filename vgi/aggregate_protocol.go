@@ -4,7 +4,6 @@
 package vgi
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -286,9 +285,11 @@ func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.Call
 	bucket.mu.Lock()
 	defer bucket.mu.Unlock()
 
+	// Pre-populate states ONLY for groups that already exist in storage.
+	// New groups are created lazily by the function (it knows whether the
+	// row actually contributes — e.g. non-null with NullHandlingDefault),
+	// so all-NULL groups stay absent and finalize() returns NULL.
 	states := make(map[int64]interface{}, len(uniqueGIDs))
-	newGIDs := make(map[int64]bool, len(uniqueGIDs))
-	initialBytes := make(map[int64][]byte, len(uniqueGIDs))
 	for _, gid := range uniqueGIDs {
 		if data, ok := bucket.groupStates[gid]; ok {
 			s, err := gobDecodeState(data)
@@ -296,15 +297,6 @@ func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.Call
 				return AggregateUpdateResponseWire{}, err
 			}
 			states[gid] = s
-		} else {
-			s := fn.NewState(params)
-			states[gid] = s
-			newGIDs[gid] = true
-			b, err := gobEncodeState(s)
-			if err != nil {
-				return AggregateUpdateResponseWire{}, err
-			}
-			initialBytes[gid] = b
 		}
 	}
 
@@ -316,11 +308,6 @@ func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.Call
 		b, err := gobEncodeState(st)
 		if err != nil {
 			return AggregateUpdateResponseWire{}, err
-		}
-		// Skip new groups that were never modified by Update — same logic
-		// as vgi-python so NULL-only inputs stay absent → finalize emits NULL.
-		if newGIDs[gid] && bytes.Equal(b, initialBytes[gid]) {
-			continue
 		}
 		bucket.groupStates[gid] = b
 	}

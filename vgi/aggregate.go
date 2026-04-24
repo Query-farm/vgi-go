@@ -55,9 +55,12 @@ type AggregateFunction interface {
 	// NewState returns a fresh state pointer for a new group. The pointer
 	// type is what the dispatcher uses for gob register/serialize.
 	NewState(params *AggregateProcessParams) interface{}
-	// Update accumulates rows into per-group state. The columns argument
-	// excludes the reserved `__vgi_group_id` column. groupIDs is parallel
-	// to each column row.
+	// Update accumulates rows into per-group state. The states map is
+	// pre-populated with existing states, but groups that aren't yet in
+	// the map MUST be created on demand by the function — call NewState
+	// only when the row genuinely contributes (e.g. non-null value with
+	// NullHandlingDefault). Groups never inserted into states stay absent
+	// from storage so finalize() returns NULL.
 	Update(states map[int64]interface{}, groupIDs *Int64Slice, columns []arrow.Array, params *AggregateProcessParams) error
 	// Combine merges source into target, returning the new target state.
 	Combine(source, target interface{}, params *AggregateProcessParams) (interface{}, error)
@@ -109,6 +112,20 @@ func (s *Int64Slice) Len() int { return len(s.Data) }
 
 // At returns the i-th entry.
 func (s *Int64Slice) At(i int) int64 { return s.Data[i] }
+
+// EnsureState is a helper for Update implementations: returns the existing
+// state for gid, or creates one via newFn() and registers it. Functions
+// should call this only when the row genuinely contributes (e.g. non-null
+// with NullHandlingDefault) — groups never inserted stay absent from
+// storage so finalize() returns NULL.
+func EnsureState[T any](states map[int64]interface{}, gid int64, newFn func() *T) *T {
+	if s, ok := states[gid]; ok {
+		return s.(*T)
+	}
+	s := newFn()
+	states[gid] = s
+	return s
+}
 
 // ============================================================================
 // State storage — per (function_name, execution_id) keyed by group_id.

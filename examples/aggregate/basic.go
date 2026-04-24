@@ -49,7 +49,7 @@ func (CountFunction) NewState(*vgi.AggregateProcessParams) interface{} { return 
 
 func (CountFunction) Update(states map[int64]interface{}, gids *vgi.Int64Slice, columns []arrow.Array, _ *vgi.AggregateProcessParams) error {
 	for i := 0; i < gids.Len(); i++ {
-		s := states[gids.At(i)].(*CountState)
+		s := vgi.EnsureState(states, gids.At(i), func() *CountState { return &CountState{} })
 		s.Count++
 	}
 	return nil
@@ -129,7 +129,7 @@ func (SumFunction) Update(states map[int64]interface{}, gids *vgi.Int64Slice, co
 		if col.IsNull(i) {
 			continue
 		}
-		s := states[gids.At(i)].(*SumState)
+		s := vgi.EnsureState(states, gids.At(i), func() *SumState { return &SumState{} })
 		s.Total += col.Value(i)
 	}
 	return nil
@@ -210,7 +210,7 @@ func (AvgFunction) Update(states map[int64]interface{}, gids *vgi.Int64Slice, co
 		if col.IsNull(i) {
 			continue
 		}
-		s := states[gids.At(i)].(*AvgState)
+		s := vgi.EnsureState(states, gids.At(i), func() *AvgState { return &AvgState{} })
 		s.Total += float64(col.Value(i))
 		s.Count++
 	}

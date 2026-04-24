@@ -69,7 +69,7 @@ func (WeightedSumFunction) Update(states map[int64]interface{}, gids *vgi.Int64S
 		}
 		v := scalarFloat(val, i)
 		w := scalarFloat(wgt, i)
-		s := states[gids.At(i)].(*WeightedSumState)
+		s := vgi.EnsureState(states, gids.At(i), func() *WeightedSumState { return &WeightedSumState{} })
 		s.Total += v * w
 	}
 	return nil
@@ -150,7 +150,7 @@ func (ListAggFunction) Update(states map[int64]interface{}, gids *vgi.Int64Slice
 		if col.IsNull(i) {
 			continue
 		}
-		s := states[gids.At(i)].(*ListAggState)
+		s := vgi.EnsureState(states, gids.At(i), func() *ListAggState { return &ListAggState{} })
 		s.Items = append(s.Items, col.Value(i))
 	}
 	return nil
@@ -232,7 +232,7 @@ func (PercentileFunction) Update(states map[int64]interface{}, gids *vgi.Int64Sl
 		if val.IsNull(i) {
 			continue
 		}
-		s := states[gids.At(i)].(*PercentileState)
+		s := vgi.EnsureState(states, gids.At(i), func() *PercentileState { return &PercentileState{} })
 		s.Values = append(s.Values, scalarFloat(val, i))
 	}
 	return nil
@@ -334,7 +334,7 @@ func (SumAllFunction) Update(states map[int64]interface{}, gids *vgi.Int64Slice,
 		if !anyNonNull {
 			continue
 		}
-		s := states[gids.At(i)].(*SumAllState)
+		s := vgi.EnsureState(states, gids.At(i), func() *SumAllState { return &SumAllState{} })
 		s.Total += sum
 	}
 	return nil
@@ -416,7 +416,7 @@ func (GenericSumFunction) Update(states map[int64]interface{}, gids *vgi.Int64Sl
 		if col.IsNull(i) {
 			continue
 		}
-		s := states[gids.At(i)].(*GenericSumState)
+		s := vgi.EnsureState(states, gids.At(i), func() *GenericSumState { return &GenericSumState{} })
 		s.Total += scalarFloat(col, i)
 	}
 	return nil
