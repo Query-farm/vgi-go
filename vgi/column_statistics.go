@@ -177,24 +177,27 @@ func SerializeColumnStatistics(stats []ColumnStatistics, cacheMaxAgeSeconds *int
 	minUnion.Retain()
 	maxUnion.Retain()
 
+	// Field nullability matches the vgi-python reference
+	// (serialize_column_statistics) byte-for-byte — DuckDB's ArrowScanner
+	// stricter matches schema-vs-value nullability when extracting stats.
 	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "column_name", Type: arrow.BinaryTypes.String},
-		{Name: "min", Type: unionType},
-		{Name: "max", Type: unionType},
-		{Name: "has_null", Type: &arrow.BooleanType{}},
-		{Name: "has_not_null", Type: &arrow.BooleanType{}},
+		{Name: "column_name", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: "min", Type: unionType, Nullable: true},
+		{Name: "max", Type: unionType, Nullable: true},
+		{Name: "has_null", Type: &arrow.BooleanType{}, Nullable: true},
+		{Name: "has_not_null", Type: &arrow.BooleanType{}, Nullable: true},
 		{Name: "distinct_count", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 		{Name: "contains_unicode", Type: &arrow.BooleanType{}, Nullable: true},
 		{Name: "max_string_length", Type: arrow.PrimitiveTypes.Uint64, Nullable: true},
 	}, nil)
 
-	if cacheMaxAgeSeconds != nil {
-		md := arrow.NewMetadata(
-			[]string{"cache_max_age_seconds"},
-			[]string{fmt.Sprintf("%d", *cacheMaxAgeSeconds)},
-		)
-		schema = arrow.NewSchema(schema.Fields(), &md)
-	}
+	// NOTE: cache_max_age_seconds should logically live on the RecordBatch
+	// message's custom_metadata (vgi-python puts it there); arrow-go's IPC
+	// writer doesn't expose per-batch custom_metadata, and placing it on
+	// schema metadata confuses DuckDB's stats decoder. We currently omit
+	// it — DuckDB falls back to its default cache-indefinitely behaviour,
+	// which matches the common case.
+	_ = cacheMaxAgeSeconds
 	batchWithMeta := array.NewRecordBatch(schema, cols, int64(n))
 	defer batchWithMeta.Release()
 	var buf bytes.Buffer

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -1313,6 +1314,18 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			data, err := SerializeColumnStatistics(ordered, ct.StatisticsCacheMaxAgeSeconds)
 			if err != nil {
 				return TableColumnStatisticsGetResponseWire{}, err
+			}
+			// Dev-only override: load Python-produced bytes from
+			// $VGI_GO_STATS_OVERRIDE_DIR/<schema>-<name>.bin when set —
+			// lets us confirm whether our serialiser or something else is
+			// the culprit behind optimizer non-elimination.
+			if p := os.Getenv("VGI_GO_STATS_OVERRIDE_DIR"); p != "" {
+				if b, err := os.ReadFile(fmt.Sprintf("%s/%s-%s.bin", p, req.SchemaName, req.Name)); err == nil {
+					data = b
+				}
+			}
+			if p := os.Getenv("VGI_GO_STATS_DUMP_DIR"); p != "" {
+				_ = os.WriteFile(fmt.Sprintf("%s/stats-%s-%s.bin", p, req.SchemaName, req.Name), data, 0644)
 			}
 			return TableColumnStatisticsGetResponseWire{Result: data}, nil
 		})
