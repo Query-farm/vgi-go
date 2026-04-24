@@ -262,7 +262,7 @@ func main() {
 	statsTTL0 := int64(0)
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:    "volatile_numbers",
-		Comment: "Numbers with volatile stats (TTL=0)",
+		Comment: "Numbers with volatile stats (TTL=0, always re-fetched)",
 		Columns: arrow.NewSchema([]arrow.Field{
 			{Name: "value", Type: arrow.PrimitiveTypes.Int64},
 		}, nil),
@@ -333,7 +333,7 @@ func main() {
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:    "rowid_string",
-		Comment: "Table with string-typed row_id",
+		Comment: "Table with string row_id",
 		Columns: arrow.NewSchema([]arrow.Field{
 			{Name: "row_id", Type: arrow.BinaryTypes.String, Metadata: rowIDMeta},
 			{Name: "name", Type: arrow.BinaryTypes.String},
@@ -342,7 +342,7 @@ func main() {
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:    "rowid_struct",
-		Comment: "Table with struct-typed row_id",
+		Comment: "Table with struct row_id",
 		Columns: arrow.NewSchema([]arrow.Field{
 			{Name: "row_id", Type: rowIDStructType, Metadata: rowIDMeta},
 			{Name: "name", Type: arrow.BinaryTypes.String},
@@ -353,7 +353,7 @@ func main() {
 	// Constraint example tables
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:       "departments",
-		Comment:    "Department reference table with constraints",
+		Comment:    "Department reference table",
 		Columns:    table.DepartmentsSchema,
 		NotNull:    []string{"id", "name"},
 		PrimaryKey: [][]string{{"id"}},
@@ -380,7 +380,7 @@ func main() {
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:       "projects",
-		Comment:    "Project table with composite PK and FK",
+		Comment:    "Projects with composite PK and FK to departments",
 		Columns:    table.ProjectsSchema,
 		NotNull:    []string{"department_id", "project_code", "title"},
 		PrimaryKey: [][]string{{"department_id", "project_code"}},
@@ -395,6 +395,11 @@ func main() {
 		NotNull:    []string{"id"},
 		PrimaryKey: [][]string{{"id"}},
 		Defaults:   map[string]any{"quantity": int64(0), "name": "unknown", "price": float64(9.99)},
+		ColumnComments: map[string]string{
+			"id":    "Unique product identifier",
+			"name":  "Product display name",
+			"price": "Unit price in USD",
+		},
 		Statistics: map[string]*vgi.ColumnStatistics{
 			"id":       {ColumnName: "id", Type: arrow.PrimitiveTypes.Int64, Min: int64(1), Max: int64(100), HasNotNull: true, DistinctCount: 100},
 			"name":     {ColumnName: "name", Type: arrow.BinaryTypes.String, Min: "Anvil", Max: "Zebra Tape", HasNotNull: true, DistinctCount: 100, ContainsUnicode: boolPtr(false), MaxStringLength: int64Ptr(30)},
@@ -406,7 +411,7 @@ func main() {
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:               "versioned_constraints",
 		Columns:            table.VersionedConstraintsSchemas[3],
-		Comment:            "Versioned table with constraint evolution",
+		Comment:            "Table with constraints that evolve across versions",
 		SupportsTimeTravel: true,
 		NotNull:            []string{"id", "name"},
 		PrimaryKey:         [][]string{{"id"}},
@@ -420,10 +425,12 @@ func main() {
 	w.RegisterCatalogView("main", vgi.CatalogView{
 		Name:       "first_ten",
 		Definition: "SELECT * FROM sequence(10)",
+		Comment:    "First 10 integers",
 	})
 	w.RegisterCatalogView("main", vgi.CatalogView{
 		Name:       "even_numbers",
 		Definition: "SELECT * FROM sequence(100) WHERE n % 2 = 0",
+		Comment:    "Even numbers from 0 to 98",
 	})
 	w.RegisterCatalogView("data", vgi.CatalogView{
 		Name:       "small_numbers",
@@ -483,7 +490,7 @@ func main() {
 			info := &vgi.TableInfo{
 				Name:       tableName,
 				SchemaName: schemaName,
-				Comment:    "Versioned table with constraint evolution",
+				Comment:    "Table with constraints that evolve across versions",
 				Columns:    table.VersionedConstraintsSchema(version),
 			}
 			return vgi.SerializeTableInfo(info)

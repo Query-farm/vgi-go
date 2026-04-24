@@ -1415,6 +1415,15 @@ func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]b
 		}
 	}
 
+	// Apply per-column comments as Arrow field metadata
+	if len(ct.ColumnComments) > 0 && columns != nil {
+		var err error
+		columns, err = applyColumnComments(columns, ct.ColumnComments)
+		if err != nil {
+			return nil, fmt.Errorf("applying column comments for table %s: %w", ct.Name, err)
+		}
+	}
+
 	// Resolve constraint column indices from names
 	notNull := resolveColumnIndices(columns, ct.NotNull)
 	unique := resolveColumnGroupIndices(columns, ct.Unique)

@@ -47,6 +47,9 @@ type CatalogTable struct {
 	// Defaults maps column names to their default values.
 	// Supported types: Sql (raw SQL), string, int/int64/int32, float64/float32, bool, nil.
 	Defaults map[string]any
+	// ColumnComments maps column names to per-column comments surfaced
+	// through duckdb_columns().comment.
+	ColumnComments map[string]string
 	// Generated maps column names to SQL expressions for generated (virtual)
 	// columns. Encoded as `generated_expression` Arrow field metadata.
 	Generated map[string]string
@@ -304,6 +307,36 @@ func applyGenerated(schema *arrow.Schema, generated map[string]string) (*arrow.S
 		fields[idx].Metadata = arrow.NewMetadata(keys, vals)
 	}
 
+	md := schema.Metadata()
+	return arrow.NewSchema(fields, &md), nil
+}
+
+// applyColumnComments adds "comment" metadata to Arrow schema fields for
+// columns with per-column descriptions. Existing metadata is preserved.
+func applyColumnComments(schema *arrow.Schema, comments map[string]string) (*arrow.Schema, error) {
+	if len(comments) == 0 {
+		return schema, nil
+	}
+	fields := make([]arrow.Field, schema.NumFields())
+	for i := 0; i < schema.NumFields(); i++ {
+		fields[i] = schema.Field(i)
+	}
+	for colName, comment := range comments {
+		idx := -1
+		for i, f := range fields {
+			if f.Name == colName {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return nil, fmt.Errorf("column_comment references non-existent column %q", colName)
+		}
+		existing := fields[idx].Metadata
+		keys := append(existing.Keys(), "comment")
+		vals := append(existing.Values(), comment)
+		fields[idx].Metadata = arrow.NewMetadata(keys, vals)
+	}
 	md := schema.Metadata()
 	return arrow.NewSchema(fields, &md), nil
 }
