@@ -366,6 +366,21 @@ type SchemaContentsMacrosRequestWire struct {
 	TransactionID *[]byte `vgirpc:"transaction_id"`
 }
 
+// TableColumnStatisticsGetRequestWire is for catalog_table_column_statistics_get.
+type TableColumnStatisticsGetRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	SchemaName    string  `vgirpc:"schema_name"`
+	Name          string  `vgirpc:"name"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableColumnStatisticsGetResponseWire wraps the IPC-serialized statistics
+// batch; the vgi C++ extension treats this as dynamic bytes in the
+// standard "result" binary column.
+type TableColumnStatisticsGetResponseWire struct {
+	Result []byte `vgirpc:"result"`
+}
+
 // TableInsertFunctionGetRequestWire is for catalog_table_insert_function_get.
 type TableInsertFunctionGetRequestWire struct {
 	AttachID      []byte  `vgirpc:"attach_id"`
@@ -681,17 +696,31 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				}
 			}
 
+			// Auto-derive supports_column_statistics from any table having Statistics set.
+			supportsColStats := false
+			for _, tbls := range w.catalogTables {
+				for i := range tbls {
+					if len(tbls[i].Statistics) > 0 {
+						supportsColStats = true
+						break
+					}
+				}
+				if supportsColStats {
+					break
+				}
+			}
 			return CatalogAttachResultWire{
-				AttachID:             attachID,
-				SupportsTransactions: false,
-				SupportsTimeTravel:   supportsTimeTravel,
-				CatalogVersionFrozen: true,
-				CatalogVersion:       version,
-				AttachIDRequired:     false,
-				DefaultSchema:        "main",
-				Settings:             serializedSettings,
-				SecretTypes:          serializedSecretTypes,
-				Tags:                 map[string]string{},
+				AttachID:                 attachID,
+				SupportsTransactions:     false,
+				SupportsTimeTravel:       supportsTimeTravel,
+				CatalogVersionFrozen:     true,
+				CatalogVersion:           version,
+				AttachIDRequired:         false,
+				DefaultSchema:            "main",
+				Settings:                 serializedSettings,
+				SecretTypes:              serializedSecretTypes,
+				Tags:                     map[string]string{},
+				SupportsColumnStatistics: supportsColStats,
 			}, nil
 		})
 
@@ -1254,6 +1283,53 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				},
 			})
 		})
+
+	// catalog_table_column_statistics_get
+	vgirpc.Unary[TableColumnStatisticsGetRequestWire, TableColumnStatisticsGetResponseWire](s, "catalog_table_column_statistics_get",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableColumnStatisticsGetRequestWire) (TableColumnStatisticsGetResponseWire, error) {
+			ct := w.findCatalogTable(req.SchemaName, req.Name)
+			if ct == nil || len(ct.Statistics) == 0 {
+				return TableColumnStatisticsGetResponseWire{Result: nil}, nil
+			}
+			// Emit stats in the order of columns in the schema when possible.
+			cols := ct.Columns
+			var ordered []ColumnStatistics
+			seen := map[string]bool{}
+			if cols != nil {
+				for i := 0; i < cols.NumFields(); i++ {
+					name := cols.Field(i).Name
+					if s, ok := ct.Statistics[name]; ok {
+						ordered = append(ordered, *s)
+						seen[name] = true
+					}
+				}
+			}
+			for name, s := range ct.Statistics {
+				if seen[name] {
+					continue
+				}
+				ordered = append(ordered, *s)
+			}
+			data, err := SerializeColumnStatistics(ordered, ct.StatisticsCacheMaxAgeSeconds)
+			if err != nil {
+				return TableColumnStatisticsGetResponseWire{}, err
+			}
+			return TableColumnStatisticsGetResponseWire{Result: data}, nil
+		})
+}
+
+// findCatalogTable returns the registered CatalogTable for (schema, name) or nil.
+func (w *Worker) findCatalogTable(schemaName, name string) *CatalogTable {
+	tables, ok := w.catalogTables[schemaName]
+	if !ok {
+		return nil
+	}
+	for i := range tables {
+		if tables[i].Name == name {
+			return &tables[i]
+		}
+	}
+	return nil
 }
 
 // resolveColumnIndices maps column names to their indices in the schema.
@@ -1345,15 +1421,16 @@ func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]b
 	}
 
 	info := &TableInfo{
-		Name:                  ct.Name,
-		SchemaName:            schemaName,
-		Comment:               ct.Comment,
-		Columns:               columns,
-		NotNullConstraints:    notNull,
-		UniqueConstraints:     unique,
-		CheckConstraints:      ct.Check,
-		PrimaryKeyConstraints: primaryKey,
-		ForeignKeyConstraints: foreignKeys,
+		Name:                     ct.Name,
+		SchemaName:               schemaName,
+		Comment:                  ct.Comment,
+		Columns:                  columns,
+		NotNullConstraints:       notNull,
+		UniqueConstraints:        unique,
+		CheckConstraints:         ct.Check,
+		PrimaryKeyConstraints:    primaryKey,
+		ForeignKeyConstraints:    foreignKeys,
+		SupportsColumnStatistics: len(ct.Statistics) > 0,
 	}
 
 	return SerializeTableInfo(info)

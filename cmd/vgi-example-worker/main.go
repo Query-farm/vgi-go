@@ -123,6 +123,8 @@ func main() {
 	w.RegisterTable(table.NewOrderEchoFunction())
 	w.RegisterTable(table.NewSampleEchoFunction())
 	w.RegisterTable(table.NewSpatialFilterExampleFunction())
+	w.RegisterTable(table.NewColorsScanFunction())
+	w.RegisterTable(table.NewGeoPointsScanFunction())
 
 	// Aggregate functions
 	aggregate.RegisterAll(w)
@@ -193,6 +195,8 @@ func main() {
 		Comment:            "Versioned data table demonstrating time travel with schema evolution",
 	})
 
+	statsTTL3600 := int64(3600)
+
 	// Explicit-columns table: uses scan function handler below
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:    "numbers",
@@ -200,6 +204,57 @@ func main() {
 		Columns: arrow.NewSchema([]arrow.Field{
 			{Name: "value", Type: arrow.PrimitiveTypes.Int64},
 		}, nil),
+		Statistics: map[string]*vgi.ColumnStatistics{
+			"value": {ColumnName: "value", Type: arrow.PrimitiveTypes.Int64, Min: int64(0), Max: int64(99), HasNotNull: true, DistinctCount: 100},
+		},
+	})
+
+	// ENUM-derived statistics demo (colors).
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "colors",
+		Comment: "Colors table with ENUM-derived statistics",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "id", Type: arrow.PrimitiveTypes.Int64},
+			{Name: "color", Type: arrow.BinaryTypes.String},
+			{Name: "hex_code", Type: arrow.BinaryTypes.String},
+		}, nil),
+		Statistics: map[string]*vgi.ColumnStatistics{
+			"id":       {ColumnName: "id", Type: arrow.PrimitiveTypes.Int64, Min: int64(1), Max: int64(3), HasNotNull: true, DistinctCount: 3},
+			"color":    {ColumnName: "color", Type: arrow.BinaryTypes.String, Min: "blue", Max: "red", HasNotNull: true, DistinctCount: 3, ContainsUnicode: boolPtr(false), MaxStringLength: int64Ptr(5)},
+			"hex_code": {ColumnName: "hex_code", Type: arrow.BinaryTypes.String, Min: "#0000FF", Max: "#FF0000", HasNotNull: true, DistinctCount: 3, ContainsUnicode: boolPtr(false), MaxStringLength: int64Ptr(7)},
+		},
+		StatisticsCacheMaxAgeSeconds: &statsTTL3600,
+	})
+
+	// Geometry stats: bounding box via BOX(min,max).
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "geo_points",
+		Comment: "5x5 grid of points with spatial bounding-box statistics",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "id", Type: arrow.PrimitiveTypes.Int64},
+			{Name: "geom", Type: arrow.BinaryTypes.Binary, Metadata: arrow.NewMetadata(
+				[]string{"ARROW:extension:name", "ARROW:extension:metadata"},
+				[]string{"geoarrow.wkb", "{}"},
+			)},
+		}, nil),
+		Statistics: map[string]*vgi.ColumnStatistics{
+			"id":   {ColumnName: "id", Type: arrow.PrimitiveTypes.Int64, Min: int64(1), Max: int64(25), HasNotNull: true, DistinctCount: 25},
+			"geom": {ColumnName: "geom", Type: arrow.BinaryTypes.String, Min: "BOX(0 0, 4 4)", Max: "BOX(0 0, 4 4)", HasNotNull: true, DistinctCount: 25},
+		},
+	})
+
+	// Volatile stats (TTL=0): re-fetched per query.
+	statsTTL0 := int64(0)
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "volatile_numbers",
+		Comment: "Numbers with volatile stats (TTL=0)",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "value", Type: arrow.PrimitiveTypes.Int64},
+		}, nil),
+		Statistics: map[string]*vgi.ColumnStatistics{
+			"value": {ColumnName: "value", Type: arrow.PrimitiveTypes.Int64, Min: int64(0), Max: int64(99), HasNotNull: true, DistinctCount: 100},
+		},
+		StatisticsCacheMaxAgeSeconds: &statsTTL0,
 	})
 
 	// Generated-column example: physical column `n` from sequence(10),
@@ -280,6 +335,12 @@ func main() {
 		Unique:     [][]string{{"name"}},
 		Check:      []string{"budget >= 0"},
 		Defaults:   map[string]any{"budget": int64(0)},
+		Statistics: map[string]*vgi.ColumnStatistics{
+			"id":     {ColumnName: "id", Type: arrow.PrimitiveTypes.Int64, Min: int64(1), Max: int64(10), HasNotNull: true, DistinctCount: 10},
+			"name":   {ColumnName: "name", Type: arrow.BinaryTypes.String, Min: "Accounting", Max: "Sales", HasNotNull: true, DistinctCount: 10, ContainsUnicode: boolPtr(false), MaxStringLength: int64Ptr(20)},
+			"budget": {ColumnName: "budget", Type: arrow.PrimitiveTypes.Float64, Min: float64(50000), Max: float64(500000), HasNotNull: true, DistinctCount: 10},
+		},
+		StatisticsCacheMaxAgeSeconds: &statsTTL3600,
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:       "employees",
@@ -309,6 +370,13 @@ func main() {
 		NotNull:    []string{"id"},
 		PrimaryKey: [][]string{{"id"}},
 		Defaults:   map[string]any{"quantity": int64(0), "name": "unknown", "price": float64(9.99)},
+		Statistics: map[string]*vgi.ColumnStatistics{
+			"id":       {ColumnName: "id", Type: arrow.PrimitiveTypes.Int64, Min: int64(1), Max: int64(100), HasNotNull: true, DistinctCount: 100},
+			"name":     {ColumnName: "name", Type: arrow.BinaryTypes.String, Min: "Anvil", Max: "Zebra Tape", HasNotNull: true, DistinctCount: 100, ContainsUnicode: boolPtr(false), MaxStringLength: int64Ptr(30)},
+			"quantity": {ColumnName: "quantity", Type: arrow.PrimitiveTypes.Int64, Min: int64(0), Max: int64(10000), HasNull: true, HasNotNull: true, DistinctCount: 50},
+			"price":    {ColumnName: "price", Type: arrow.PrimitiveTypes.Float64, Min: float64(0.99), Max: float64(999.99), HasNotNull: true, DistinctCount: 80},
+		},
+		StatisticsCacheMaxAgeSeconds: &statsTTL3600,
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:               "versioned_constraints",
@@ -462,6 +530,20 @@ func main() {
 				},
 			}, nil
 		}
+		if schemaName == "data" && tableName == "volatile_numbers" {
+			return &vgi.ScanFunctionResult{
+				FunctionName: "sequence",
+				PositionalArguments: []vgi.ScanArg{
+					{Value: int64(100), Type: arrow.PrimitiveTypes.Int64},
+				},
+			}, nil
+		}
+		if schemaName == "data" && tableName == "colors" {
+			return &vgi.ScanFunctionResult{FunctionName: "colors_scan"}, nil
+		}
+		if schemaName == "data" && tableName == "geo_points" {
+			return &vgi.ScanFunctionResult{FunctionName: "geo_points_scan"}, nil
+		}
 		if schemaName == "data" && tableName == "generated_sequence" {
 			return &vgi.ScanFunctionResult{
 				FunctionName: "sequence",
@@ -505,6 +587,9 @@ func main() {
 		w.RunStdio()
 	}
 }
+
+func boolPtr(b bool) *bool    { return &b }
+func int64Ptr(n int64) *int64 { return &n }
 
 // ---------------------------------------------------------------------------
 // Auth environment variable resolution (matches vgi-python serve.py)

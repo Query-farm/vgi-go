@@ -50,6 +50,14 @@ type CatalogTable struct {
 	// Generated maps column names to SQL expressions for generated (virtual)
 	// columns. Encoded as `generated_expression` Arrow field metadata.
 	Generated map[string]string
+	// Statistics holds optimizer hints per column name. When non-empty,
+	// the catalog reports supports_column_statistics=true for this table and
+	// answers catalog_table_column_statistics_get from this map.
+	Statistics map[string]*ColumnStatistics
+	// StatisticsCacheMaxAgeSeconds, when set, is emitted as
+	// cache_max_age_seconds schema metadata on the stats batch.
+	// Nil means cache indefinitely; 0 means do not cache.
+	StatisticsCacheMaxAgeSeconds *int64
 	// SupportsTimeTravel indicates this table supports AT (VERSION/TIMESTAMP) queries.
 	SupportsTimeTravel bool
 }
