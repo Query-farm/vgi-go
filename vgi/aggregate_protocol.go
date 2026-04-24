@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/google/uuid"
 )
+
+var _ = os.Stderr // keep import used
 
 // ============================================================================
 // Wire types — mirror vgi-python's protocol.py AggregateXxxRequest dataclasses.
@@ -229,9 +232,9 @@ func (w *Worker) handleAggregateBind(ctx context.Context, callCtx *vgirpc.CallCo
 	// can rebuild AggregateProcessParams.Args without resending them.
 	if args != nil && len(args.Positional) > 0 {
 		bucket := w.aggStorage.bucket(req.FunctionName, executionID)
-		bucket.mu.Lock()
-		bucket.constArgs = req.Arguments
-		bucket.mu.Unlock()
+		if err := bucket.putConstArgs(req.Arguments); err != nil {
+			return AggregateBindResponseWire{}, err
+		}
 	}
 
 	return AggregateBindResponseWire{OutputSchema: schemaBytes, ExecutionID: executionID}, nil
@@ -240,10 +243,11 @@ func (w *Worker) handleAggregateBind(ctx context.Context, callCtx *vgirpc.CallCo
 // loadAggArgs returns the bind-time arguments stashed by handleAggregateBind.
 func (w *Worker) loadAggArgs(funcName string, execID []byte) *Arguments {
 	bucket := w.aggStorage.bucket(funcName, execID)
-	bucket.mu.Lock()
-	data := bucket.constArgs
-	bucket.mu.Unlock()
-	if len(data) == 0 {
+	data, err := bucket.getConstArgs()
+	if err != nil || len(data) == 0 {
+		if err != nil {
+			slog.Debug("aggregate: failed to load const args", "err", err)
+		}
 		return nil
 	}
 	args, err := ParseArguments(data)
@@ -282,34 +286,38 @@ func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.Call
 	}
 
 	uniqueGIDs := uniqueInt64(gids)
-	bucket.mu.Lock()
-	defer bucket.mu.Unlock()
 
 	// Pre-populate states ONLY for groups that already exist in storage.
 	// New groups are created lazily by the function (it knows whether the
 	// row actually contributes — e.g. non-null with NullHandlingDefault),
 	// so all-NULL groups stay absent and finalize() returns NULL.
+	stored, err := bucket.loadStates(uniqueGIDs)
+	if err != nil {
+		return AggregateUpdateResponseWire{}, err
+	}
 	states := make(map[int64]interface{}, len(uniqueGIDs))
-	for _, gid := range uniqueGIDs {
-		if data, ok := bucket.groupStates[gid]; ok {
-			s, err := gobDecodeState(data)
-			if err != nil {
-				return AggregateUpdateResponseWire{}, err
-			}
-			states[gid] = s
+	for gid, data := range stored {
+		s, err := gobDecodeState(data)
+		if err != nil {
+			return AggregateUpdateResponseWire{}, err
 		}
+		states[gid] = s
 	}
 
 	if err := fn.Update(states, &Int64Slice{Data: gids}, columns, params); err != nil {
 		return AggregateUpdateResponseWire{}, err
 	}
 
+	toSave := make(map[int64][]byte, len(states))
 	for gid, st := range states {
 		b, err := gobEncodeState(st)
 		if err != nil {
 			return AggregateUpdateResponseWire{}, err
 		}
-		bucket.groupStates[gid] = b
+		toSave[gid] = b
+	}
+	if err := bucket.saveStates(toSave); err != nil {
+		return AggregateUpdateResponseWire{}, err
 	}
 	return AggregateUpdateResponseWire{}, nil
 }
@@ -353,20 +361,18 @@ func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.Cal
 		params.AttachID = *req.AttachID
 	}
 
-	bucket.mu.Lock()
-	defer bucket.mu.Unlock()
-
-	// Load all states involved.
-	states := make(map[int64]interface{})
 	allGIDs := uniqueInt64(append(append([]int64{}, srcIDs...), tgtIDs...))
-	for _, gid := range allGIDs {
-		if data, ok := bucket.groupStates[gid]; ok {
-			s, err := gobDecodeState(data)
-			if err != nil {
-				return AggregateCombineResponseWire{}, err
-			}
-			states[gid] = s
+	stored, err := bucket.loadStates(allGIDs)
+	if err != nil {
+		return AggregateCombineResponseWire{}, err
+	}
+	states := make(map[int64]interface{}, len(stored))
+	for gid, data := range stored {
+		s, err := gobDecodeState(data)
+		if err != nil {
+			return AggregateCombineResponseWire{}, err
 		}
+		states[gid] = s
 	}
 
 	for i := 0; i < n; i++ {
@@ -389,6 +395,7 @@ func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.Cal
 	}
 
 	updatedTargets := uniqueInt64(tgtIDs)
+	toSave := make(map[int64][]byte, len(updatedTargets))
 	for _, gid := range updatedTargets {
 		s, ok := states[gid]
 		if !ok {
@@ -398,7 +405,10 @@ func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.Cal
 		if err != nil {
 			return AggregateCombineResponseWire{}, err
 		}
-		bucket.groupStates[gid] = b
+		toSave[gid] = b
+	}
+	if err := bucket.saveStates(toSave); err != nil {
+		return AggregateCombineResponseWire{}, err
 	}
 	return AggregateCombineResponseWire{}, nil
 }
@@ -439,13 +449,15 @@ func (w *Worker) handleAggregateFinalize(ctx context.Context, callCtx *vgirpc.Ca
 		params.AttachID = *req.AttachID
 	}
 
-	bucket.mu.Lock()
+	stored, err := bucket.loadStates(gids)
+	if err != nil {
+		return AggregateFinalizeResponseWire{}, err
+	}
 	states := make(map[int64]interface{}, len(gids))
 	for _, gid := range gids {
-		if data, ok := bucket.groupStates[gid]; ok {
+		if data, ok := stored[gid]; ok {
 			s, err := gobDecodeState(data)
 			if err != nil {
-				bucket.mu.Unlock()
 				return AggregateFinalizeResponseWire{}, err
 			}
 			states[gid] = s
@@ -453,7 +465,6 @@ func (w *Worker) handleAggregateFinalize(ctx context.Context, callCtx *vgirpc.Ca
 			states[gid] = nil
 		}
 	}
-	bucket.mu.Unlock()
 
 	resultBatch, err := fn.Finalize(gids, states, params)
 	if err != nil {
@@ -472,7 +483,10 @@ func (w *Worker) handleAggregateFinalize(ctx context.Context, callCtx *vgirpc.Ca
 }
 
 func (w *Worker) handleAggregateDestructor(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateDestructorRequestWire) (AggregateDestructorResponseWire, error) {
-	w.aggStorage.clearExecution(req.FunctionName, req.ExecutionID)
+	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID)
+	if err := bucket.clear(); err != nil {
+		return AggregateDestructorResponseWire{}, err
+	}
 	return AggregateDestructorResponseWire{}, nil
 }
 
@@ -511,14 +525,14 @@ func (w *Worker) handleAggregateWindowInit(ctx context.Context, callCtx *vgirpc.
 				return AggregateWindowInitResponseWire{}, err
 			}
 		}
-		bucket.mu.Lock()
-		bucket.windowPartitions[req.PartitionID] = encodeWindowPartitionPayload(req, wsBytes)
-		bucket.mu.Unlock()
+		if err := bucket.putWindowPartition(req.PartitionID, encodeWindowPartitionPayload(req, wsBytes)); err != nil {
+			return AggregateWindowInitResponseWire{}, err
+		}
 	} else {
 		// Function doesn't override WindowInit — still cache the raw payload.
-		bucket.mu.Lock()
-		bucket.windowPartitions[req.PartitionID] = encodeWindowPartitionPayload(req, nil)
-		bucket.mu.Unlock()
+		if err := bucket.putWindowPartition(req.PartitionID, encodeWindowPartitionPayload(req, nil)); err != nil {
+			return AggregateWindowInitResponseWire{}, err
+		}
 	}
 	return AggregateWindowInitResponseWire{}, nil
 }
@@ -622,9 +636,9 @@ func (w *Worker) handleAggregateWindowBatch(ctx context.Context, callCtx *vgirpc
 
 func (w *Worker) handleAggregateWindowDestructor(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowDestructorRequestWire) (AggregateWindowDestructorResponseWire, error) {
 	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID)
-	bucket.mu.Lock()
-	delete(bucket.windowPartitions, req.PartitionID)
-	bucket.mu.Unlock()
+	if err := bucket.deleteWindowPartition(req.PartitionID); err != nil {
+		return AggregateWindowDestructorResponseWire{}, err
+	}
 	return AggregateWindowDestructorResponseWire{}, nil
 }
 

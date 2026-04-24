@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
-	"sync"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -125,62 +124,6 @@ func EnsureState[T any](states map[int64]interface{}, gid int64, newFn func() *T
 	s := newFn()
 	states[gid] = s
 	return s
-}
-
-// ============================================================================
-// State storage — per (function_name, execution_id) keyed by group_id.
-// ============================================================================
-
-type aggregateExecutionKey struct {
-	FunctionName string
-	ExecutionID  string // hex bytes for map key
-}
-
-type aggregateStateBucket struct {
-	mu          sync.Mutex
-	groupStates map[int64][]byte // gob-serialized state per group_id
-	// constArgs holds bind-time const arguments stored under group_id=-2
-	// in the Python implementation.
-	constArgs []byte
-	// windowPartitions caches partition payloads keyed by partition_id.
-	windowPartitions map[int64][]byte
-}
-
-func newAggregateStateBucket() *aggregateStateBucket {
-	return &aggregateStateBucket{
-		groupStates:      make(map[int64][]byte),
-		windowPartitions: make(map[int64][]byte),
-	}
-}
-
-// aggregateStorage holds per-execution state for all aggregate functions
-// running on this worker.
-type aggregateStorage struct {
-	mu      sync.Mutex
-	buckets map[aggregateExecutionKey]*aggregateStateBucket
-}
-
-func newAggregateStorage() *aggregateStorage {
-	return &aggregateStorage{buckets: make(map[aggregateExecutionKey]*aggregateStateBucket)}
-}
-
-func (s *aggregateStorage) bucket(funcName string, execID []byte) *aggregateStateBucket {
-	key := aggregateExecutionKey{FunctionName: funcName, ExecutionID: string(execID)}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	b, ok := s.buckets[key]
-	if !ok {
-		b = newAggregateStateBucket()
-		s.buckets[key] = b
-	}
-	return b
-}
-
-func (s *aggregateStorage) clearExecution(funcName string, execID []byte) {
-	key := aggregateExecutionKey{FunctionName: funcName, ExecutionID: string(execID)}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.buckets, key)
 }
 
 // gobEncodeState serializes a state value (passed by interface, typically a
