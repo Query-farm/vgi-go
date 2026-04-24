@@ -4,9 +4,11 @@
 package main
 
 import (
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strings"
 
@@ -239,8 +241,11 @@ func main() {
 			)},
 		}, nil),
 		Statistics: map[string]*vgi.ColumnStatistics{
-			"id":   {ColumnName: "id", Type: arrow.PrimitiveTypes.Int64, Min: int64(1), Max: int64(25), HasNotNull: true, DistinctCount: 25},
-			"geom": {ColumnName: "geom", Type: arrow.BinaryTypes.String, Min: "BOX(0 0, 4 4)", Max: "BOX(0 0, 4 4)", HasNotNull: true, DistinctCount: 25},
+			"id": {ColumnName: "id", Type: arrow.PrimitiveTypes.Int64, Min: int64(1), Max: int64(25), HasNotNull: true, DistinctCount: 25},
+			// WKB corner points: ST_Point(0,0) and ST_Point(4,4).
+			// DuckDB renders GEOMETRY stats as BOX(min, max) in
+			// vgi_table_statistics().
+			"geom": {ColumnName: "geom", Type: arrow.BinaryTypes.Binary, Min: wkbPoint(0, 0), Max: wkbPoint(4, 4), HasNotNull: true, DistinctCount: 25},
 		},
 	})
 
@@ -591,6 +596,17 @@ func main() {
 
 func boolPtr(b bool) *bool    { return &b }
 func int64Ptr(n int64) *int64 { return &n }
+
+// wkbPoint encodes a 2D WKB point (little-endian) for stats min/max values
+// on geoarrow.wkb columns.
+func wkbPoint(x, y float64) []byte {
+	buf := make([]byte, 21)
+	buf[0] = 1
+	binary.LittleEndian.PutUint32(buf[1:5], 1)
+	binary.LittleEndian.PutUint64(buf[5:13], math.Float64bits(x))
+	binary.LittleEndian.PutUint64(buf[13:21], math.Float64bits(y))
+	return buf
+}
 
 // ---------------------------------------------------------------------------
 // Auth environment variable resolution (matches vgi-python serve.py)

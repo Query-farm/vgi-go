@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -375,12 +374,6 @@ type TableColumnStatisticsGetRequestWire struct {
 	TransactionID *[]byte `vgirpc:"transaction_id"`
 }
 
-// TableColumnStatisticsGetResponseWire wraps the IPC-serialized statistics
-// batch; the vgi C++ extension treats this as dynamic bytes in the
-// standard "result" binary column.
-type TableColumnStatisticsGetResponseWire struct {
-	Result []byte `vgirpc:"result"`
-}
 
 // TableInsertFunctionGetRequestWire is for catalog_table_insert_function_get.
 type TableInsertFunctionGetRequestWire struct {
@@ -1285,14 +1278,17 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			})
 		})
 
-	// catalog_table_column_statistics_get
-	vgirpc.Unary[TableColumnStatisticsGetRequestWire, TableColumnStatisticsGetResponseWire](s, "catalog_table_column_statistics_get",
-		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableColumnStatisticsGetRequestWire) (TableColumnStatisticsGetResponseWire, error) {
+	// catalog_table_column_statistics_get — returns raw IPC bytes in the
+	// standard "result" binary column. Using []byte directly (not a struct
+	// wrapper) avoids vgi-rpc-go's struct-to-IPC double-wrap, so the C++
+	// extension's DeserializeFromIpcBytesWithMetadata parses the stats
+	// batch directly instead of a nested {result: binary} envelope.
+	vgirpc.Unary[TableColumnStatisticsGetRequestWire, []byte](s, "catalog_table_column_statistics_get",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableColumnStatisticsGetRequestWire) ([]byte, error) {
 			ct := w.findCatalogTable(req.SchemaName, req.Name)
 			if ct == nil || len(ct.Statistics) == 0 {
-				return TableColumnStatisticsGetResponseWire{Result: nil}, nil
+				return nil, nil
 			}
-			// Emit stats in the order of columns in the schema when possible.
 			cols := ct.Columns
 			var ordered []ColumnStatistics
 			seen := map[string]bool{}
@@ -1311,23 +1307,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				}
 				ordered = append(ordered, *s)
 			}
-			data, err := SerializeColumnStatistics(ordered, ct.StatisticsCacheMaxAgeSeconds)
-			if err != nil {
-				return TableColumnStatisticsGetResponseWire{}, err
-			}
-			// Dev-only override: load Python-produced bytes from
-			// $VGI_GO_STATS_OVERRIDE_DIR/<schema>-<name>.bin when set —
-			// lets us confirm whether our serialiser or something else is
-			// the culprit behind optimizer non-elimination.
-			if p := os.Getenv("VGI_GO_STATS_OVERRIDE_DIR"); p != "" {
-				if b, err := os.ReadFile(fmt.Sprintf("%s/%s-%s.bin", p, req.SchemaName, req.Name)); err == nil {
-					data = b
-				}
-			}
-			if p := os.Getenv("VGI_GO_STATS_DUMP_DIR"); p != "" {
-				_ = os.WriteFile(fmt.Sprintf("%s/stats-%s-%s.bin", p, req.SchemaName, req.Name), data, 0644)
-			}
-			return TableColumnStatisticsGetResponseWire{Result: data}, nil
+			return SerializeColumnStatistics(ordered, ct.StatisticsCacheMaxAgeSeconds)
 		})
 }
 
