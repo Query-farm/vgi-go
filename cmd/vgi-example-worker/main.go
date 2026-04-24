@@ -126,6 +126,9 @@ func main() {
 
 	// Aggregate functions
 	aggregate.RegisterAll(w)
+
+	// Writable catalog (in-memory, per-process state).
+	w.RegisterWritableCatalog(vgi.NewWritableCatalog("writable"))
 	w.RegisterTable(table.NewDoubleSequenceFunction())
 	w.RegisterTable(table.NewGeneratorExceptionFunction())
 	w.RegisterTable(table.NewLoggingGeneratorFunction())

@@ -286,6 +286,10 @@ type Worker struct {
 	aggStorage             *aggregateStorage
 	catalogName            string
 	catalog                *DefaultReadOnlyCatalog
+	// extraCatalogs are additional catalog names this worker accepts via
+	// catalog_attach. They share the worker's registered functions but
+	// have their own (writable) table/schema state. Indexed by name.
+	extraCatalogs map[string]*WritableCatalog
 	storages               sync.Map // map[hex execution ID string]*ExecutionStorage
 	settings               []SettingSpec
 	catalogTables          map[string][]CatalogTable // schema_name → tables
@@ -348,6 +352,7 @@ func NewWorker(opts ...WorkerOption) *Worker {
 		tableInOuts:   make(map[string][]TableInOutFunction),
 		aggregates:    make(map[string][]AggregateFunction),
 		aggStorage:    newAggregateStorage(),
+		extraCatalogs: make(map[string]*WritableCatalog),
 		catalogTables: make(map[string][]CatalogTable),
 		catalogViews:  make(map[string][]CatalogView),
 		catalogMacros: make(map[string][]CatalogMacro),
@@ -379,6 +384,14 @@ func (w *Worker) RegisterTableInOut(f TableInOutFunction) {
 // ArgumentSpecs at catalog-discovery time.
 func (w *Worker) RegisterAggregate(f AggregateFunction) {
 	w.aggregates[f.Name()] = append(w.aggregates[f.Name()], f)
+}
+
+// RegisterWritableCatalog adds a writable catalog this worker handles
+// alongside its primary read-only catalog. The catalog accepts ATTACH
+// requests by its name and supports DDL/DML operations on user-created
+// tables.
+func (w *Worker) RegisterWritableCatalog(c *WritableCatalog) {
+	w.extraCatalogs[c.Name] = c
 }
 
 // RegisterCatalogTable registers a table in the given schema of the catalog.

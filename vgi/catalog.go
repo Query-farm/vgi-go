@@ -131,6 +131,7 @@ type CatalogCreateRequestWire struct {
 type SchemaCreateRequestWire struct {
 	AttachID      []byte             `vgirpc:"attach_id"`
 	Name          string             `vgirpc:"name"`
+	OnConflict    string             `vgirpc:"on_conflict,enum"`
 	Comment       *string            `vgirpc:"comment"`
 	Tags          *map[string]string `vgirpc:"tags"`
 	TransactionID *[]byte            `vgirpc:"transaction_id"`
@@ -587,6 +588,11 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_attach
 	vgirpc.Unary[CatalogAttachRequestWire, CatalogAttachResultWire](s, "catalog_attach",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogAttachRequestWire) (CatalogAttachResultWire, error) {
+			// Writable catalogs are handled separately so they have their
+			// own attach_id and per-catalog table state.
+			if wc, ok := w.extraCatalogs[req.Name]; ok {
+				return w.handleWritableAttach(req, wc)
+			}
 			// Validate catalog name matches
 			if req.Name != w.catalogName {
 				return CatalogAttachResultWire{}, &vgirpc.RpcError{
@@ -698,6 +704,13 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schemas
 	vgirpc.Unary[SchemasRequestWire, ItemsResponseWire](s, "catalog_schemas",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemasRequestWire) (ItemsResponseWire, error) {
+			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+				items, err := w.writableSchemas(wc)
+				if err != nil {
+					return ItemsResponseWire{}, err
+				}
+				return ItemsResponseWire{Items: items}, nil
+			}
 			if w.catalog == nil {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
@@ -715,6 +728,13 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_get
 	vgirpc.Unary[SchemaGetRequestWire, ItemsResponseWire](s, "catalog_schema_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaGetRequestWire) (ItemsResponseWire, error) {
+			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+				items, err := w.writableSchemaGet(wc, req.Name)
+				if err != nil {
+					return ItemsResponseWire{}, err
+				}
+				return ItemsResponseWire{Items: items}, nil
+			}
 			if w.catalog == nil {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
@@ -744,6 +764,13 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_contents_tables
 	vgirpc.Unary[SchemaContentsRequestWire, ItemsResponseWire](s, "catalog_schema_contents_tables",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsRequestWire) (ItemsResponseWire, error) {
+			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+				items, err := w.writableSchemaContentsTables(wc, req.Name)
+				if err != nil {
+					return ItemsResponseWire{}, err
+				}
+				return ItemsResponseWire{Items: items}, nil
+			}
 			if w.catalog == nil {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
@@ -833,6 +860,16 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_get
 	vgirpc.Unary[TableGetRequestWire, ItemsResponseWire](s, "catalog_table_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableGetRequestWire) (ItemsResponseWire, error) {
+			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+				items, err := w.writableTableGet(wc, req.SchemaName, req.Name)
+				if err != nil {
+					return ItemsResponseWire{}, err
+				}
+				if items == nil {
+					return ItemsResponseWire{Items: [][]byte{}}, nil
+				}
+				return ItemsResponseWire{Items: items}, nil
+			}
 			// Delegate to the custom handler first (e.g. for time-travel version-specific schemas)
 			if w.tableGetHandler != nil {
 				data, err := w.tableGetHandler(req.SchemaName, req.Name, req.AtUnit, req.AtValue)
