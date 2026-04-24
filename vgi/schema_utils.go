@@ -73,6 +73,29 @@ func DeserializeRecordBatch(data []byte) (arrow.RecordBatch, error) {
 	return batch, nil
 }
 
+// deserializeJoinKeys unpacks a list of IPC-serialized RecordBatches into a
+// map from column name to Arrow array. Each batch should be a single-column
+// batch; all columns across batches are flattened into one map by field name.
+func deserializeJoinKeys(entries [][]byte) map[string]arrow.Array {
+	out := map[string]arrow.Array{}
+	for _, data := range entries {
+		if len(data) == 0 {
+			continue
+		}
+		batch, err := DeserializeRecordBatch(data)
+		if err != nil {
+			continue
+		}
+		for i, field := range batch.Schema().Fields() {
+			col := batch.Column(i)
+			col.Retain()
+			out[field.Name] = col
+		}
+		batch.Release()
+	}
+	return out
+}
+
 // SerializeRecordBatch serializes a RecordBatch to IPC bytes.
 func SerializeRecordBatch(batch arrow.RecordBatch) ([]byte, error) {
 	var buf bytes.Buffer

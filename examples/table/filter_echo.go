@@ -67,7 +67,7 @@ func (f *FilterEchoFunction) NewState(params *vgi.ProcessParams) (*filterEchoSta
 
 	filterStr := "(none)"
 	if params.PushdownFilters != nil {
-		pf, err := vgi.DeserializeFilters(params.PushdownFilters)
+		pf, err := vgi.DeserializeFilters(params.PushdownFilters, params.JoinKeys)
 		if err == nil && len(pf.Filters) > 0 {
 			filterStr = formatFiltersInline(pf)
 		}
@@ -102,12 +102,41 @@ func NewFilterEchoFunction() vgi.TableFunction {
 }
 
 // formatFiltersInline formats pushdown filters as a human-readable SQL-like
-// string with values inlined (no placeholders).
+// string with values inlined (no placeholders). Large IN lists (>20 values)
+// are summarized as "col IN (N values)" to match vgi-python's filter_echo.
 func formatFiltersInline(pf *vgi.PushdownFilters) string {
-	sql, params := pf.ToSQL(func(s string) string { return s }, "?")
-	if sql == "" {
+	if pf == nil || len(pf.Filters) == 0 {
 		return "(none)"
 	}
+	parts := make([]string, 0, len(pf.Filters))
+	for _, f := range pf.Filters {
+		parts = append(parts, formatOneFilter(f))
+	}
+	return strings.Join(parts, " AND ")
+}
+
+func formatOneFilter(f vgi.Filter) string {
+	switch ft := f.(type) {
+	case *vgi.InFilter:
+		if ft.Values.Len() > 20 {
+			return fmt.Sprintf("%s IN (%d values)", ft.ColumnName(), ft.Values.Len())
+		}
+	case *vgi.AndFilter:
+		children := make([]string, 0, len(ft.Children))
+		for _, c := range ft.Children {
+			children = append(children, formatOneFilter(c))
+		}
+		return "(" + strings.Join(children, " AND ") + ")"
+	case *vgi.OrFilter:
+		children := make([]string, 0, len(ft.Children))
+		for _, c := range ft.Children {
+			children = append(children, formatOneFilter(c))
+		}
+		return "(" + strings.Join(children, " OR ") + ")"
+	}
+	// Fall back to single-filter SQL rendering with inlined params.
+	pf := &vgi.PushdownFilters{Filters: []vgi.Filter{f}}
+	sql, params := pf.ToSQL(func(s string) string { return s }, "?")
 	return inlineParams(sql, params)
 }
 

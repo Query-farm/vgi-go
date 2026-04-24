@@ -95,7 +95,7 @@ func (w *Worker) rehydrateTableProducer(s *TableProducerState) error {
 
 	// Restore auto-apply filters
 	if tableFn.Metadata().AutoApplyFilters && params.PushdownFilters != nil {
-		parsed, err := DeserializeFilters(params.PushdownFilters)
+		parsed, err := DeserializeFilters(params.PushdownFilters, params.JoinKeys)
 		if err == nil && len(parsed.Filters) > 0 {
 			s.autoApply = parsed
 		}
@@ -137,7 +137,7 @@ func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
 
 	// Restore auto-apply filters
 	if tioFn.Metadata().AutoApplyFilters && params.PushdownFilters != nil {
-		parsed, err := DeserializeFilters(params.PushdownFilters)
+		parsed, err := DeserializeFilters(params.PushdownFilters, params.JoinKeys)
 		if err == nil && len(parsed.Filters) > 0 {
 			s.autoApply = parsed
 		}

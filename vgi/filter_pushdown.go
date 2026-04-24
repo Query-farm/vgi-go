@@ -30,6 +30,7 @@ const (
 	FilterIsNull    FilterType = "is_null"
 	FilterIsNotNull FilterType = "is_not_null"
 	FilterIn        FilterType = "in"
+	FilterJoinKeys  FilterType = "join_keys"
 	FilterAnd       FilterType = "and"
 	FilterOr        FilterType = "or"
 	FilterStruct    FilterType = "struct"
@@ -461,8 +462,9 @@ func (pf *PushdownFilters) GetColumnFilters(name string) []Filter {
 // ---------------------------------------------------------------------------
 
 // DeserializeFilters deserializes a pushdown filters record batch into a
-// PushdownFilters container with a typed filter AST.
-func DeserializeFilters(batch arrow.RecordBatch) (*PushdownFilters, error) {
+// PushdownFilters container with a typed filter AST. Join-keys InFilters are
+// resolved by name against joinKeys (name -> column) when provided.
+func DeserializeFilters(batch arrow.RecordBatch, joinKeys ...map[string]arrow.Array) (*PushdownFilters, error) {
 	if batch.NumCols() == 0 {
 		return nil, fmt.Errorf("filter batch has no columns")
 	}
@@ -507,13 +509,27 @@ func DeserializeFilters(batch arrow.RecordBatch) (*PushdownFilters, error) {
 		return scalar.GetScalar(col, 0)
 	}
 
-	filters := make([]Filter, len(specs))
+	var joinKeysMap map[string]arrow.Array
+	if len(joinKeys) > 0 {
+		joinKeysMap = joinKeys[0]
+	}
+	getJoinKey := func(name string) arrow.Array {
+		if joinKeysMap == nil {
+			return nil
+		}
+		return joinKeysMap[name]
+	}
+
+	filters := make([]Filter, 0, len(specs))
 	for i, spec := range specs {
-		f, err := parseFilterWithBatch(spec, getValue, batch)
+		f, err := parseFilterWithBatch(spec, getValue, getJoinKey, batch)
 		if err != nil {
 			return nil, fmt.Errorf("parsing filter %d: %w", i, err)
 		}
-		filters[i] = f
+		if f == nil {
+			continue // graceful degradation (e.g., join_keys without keys batch)
+		}
+		filters = append(filters, f)
 	}
 
 	return &PushdownFilters{
@@ -532,6 +548,7 @@ type filterSpec struct {
 	ColumnIndex int              `json:"column_index"`
 	Op          string           `json:"op,omitempty"`
 	ValueRef    *int             `json:"value_ref,omitempty"`
+	KeysColumn  string           `json:"keys_column,omitempty"`
 	Children    []filterSpec     `json:"children,omitempty"`
 	ChildIndex  int              `json:"child_index,omitempty"`
 	ChildName   string           `json:"child_name,omitempty"`
@@ -542,10 +559,13 @@ type filterSpec struct {
 // parseFilterWithBatch is like parseFilter but also provides access to the
 // raw filter batch so expression filters can harvest their value-ref columns
 // (including Arrow extension metadata such as geoarrow.wkb).
-func parseFilterWithBatch(spec filterSpec, getValue func(int) (scalar.Scalar, error), batch arrow.RecordBatch) (Filter, error) {
-	f, err := parseFilter(spec, getValue)
+func parseFilterWithBatch(spec filterSpec, getValue func(int) (scalar.Scalar, error), getJoinKey func(string) arrow.Array, batch arrow.RecordBatch) (Filter, error) {
+	f, err := parseFilter(spec, getValue, getJoinKey)
 	if err != nil {
 		return nil, err
+	}
+	if f == nil {
+		return nil, nil
 	}
 	if ef, ok := f.(*ExpressionFilter); ok {
 		// Populate Values once all value_refs in the tree are collected.
@@ -570,7 +590,7 @@ func parseFilterWithBatch(spec filterSpec, getValue func(int) (scalar.Scalar, er
 	return f, nil
 }
 
-func parseFilter(spec filterSpec, getValue func(int) (scalar.Scalar, error)) (Filter, error) {
+func parseFilter(spec filterSpec, getValue func(int) (scalar.Scalar, error), getJoinKey func(string) arrow.Array) (Filter, error) {
 	switch FilterType(spec.Type) {
 	case FilterConstant:
 		if spec.ValueRef == nil {
@@ -599,6 +619,24 @@ func parseFilter(spec filterSpec, getValue func(int) (scalar.Scalar, error)) (Fi
 			columnIndex: spec.ColumnIndex,
 		}, nil
 
+	case FilterJoinKeys:
+		if spec.KeysColumn == "" {
+			return nil, fmt.Errorf("join_keys filter missing keys_column")
+		}
+		if getJoinKey == nil {
+			return nil, nil // graceful degradation — filters applied client-side
+		}
+		values := getJoinKey(spec.KeysColumn)
+		if values == nil {
+			return nil, nil
+		}
+		values.Retain()
+		return &InFilter{
+			columnName:  spec.ColumnName,
+			columnIndex: spec.ColumnIndex,
+			Values:      values,
+		}, nil
+
 	case FilterIn:
 		if spec.ValueRef == nil {
 			return nil, fmt.Errorf("in filter missing value_ref")
@@ -622,7 +660,7 @@ func parseFilter(spec filterSpec, getValue func(int) (scalar.Scalar, error)) (Fi
 	case FilterAnd:
 		children := make([]Filter, len(spec.Children))
 		for i, childSpec := range spec.Children {
-			child, err := parseFilter(childSpec, getValue)
+			child, err := parseFilter(childSpec, getValue, getJoinKey)
 			if err != nil {
 				return nil, fmt.Errorf("parsing AND child %d: %w", i, err)
 			}
@@ -637,7 +675,7 @@ func parseFilter(spec filterSpec, getValue func(int) (scalar.Scalar, error)) (Fi
 	case FilterOr:
 		children := make([]Filter, len(spec.Children))
 		for i, childSpec := range spec.Children {
-			child, err := parseFilter(childSpec, getValue)
+			child, err := parseFilter(childSpec, getValue, getJoinKey)
 			if err != nil {
 				return nil, fmt.Errorf("parsing OR child %d: %w", i, err)
 			}
@@ -653,7 +691,7 @@ func parseFilter(spec filterSpec, getValue func(int) (scalar.Scalar, error)) (Fi
 		if spec.ChildFilter == nil {
 			return nil, fmt.Errorf("struct filter missing child_filter")
 		}
-		childFilter, err := parseFilter(*spec.ChildFilter, getValue)
+		childFilter, err := parseFilter(*spec.ChildFilter, getValue, getJoinKey)
 		if err != nil {
 			return nil, fmt.Errorf("parsing struct child filter: %w", err)
 		}

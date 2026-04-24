@@ -47,6 +47,7 @@ type InitRequestWire struct {
 	BindOpaqueData        *[]byte  `vgirpc:"bind_opaque_data"`
 	ProjectionIDs         *[]int32 `vgirpc:"projection_ids"`
 	PushdownFilters       *[]byte  `vgirpc:"pushdown_filters"`
+	JoinKeys              *[][]byte `vgirpc:"join_keys"`
 	Phase                 *string  `vgirpc:"phase,enum"`
 	ExecutionID           *[]byte  `vgirpc:"execution_id"`
 	InitOpaqueData        *[]byte  `vgirpc:"init_opaque_data"`
@@ -341,6 +342,9 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 			initParams.PushdownFilters = batch
 		}
 	}
+	if req.JoinKeys != nil && len(*req.JoinKeys) > 0 {
+		initParams.JoinKeys = deserializeJoinKeys(*req.JoinKeys)
+	}
 	if req.OrderByColumnName != nil {
 		hint := &OrderByHint{ColumnName: *req.OrderByColumnName, RowLimit: -1}
 		if req.OrderByDirection != nil {
@@ -388,6 +392,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		Settings:        bindParams.Settings,
 		Secrets:         bindParams.Secrets,
 		PushdownFilters: initParams.PushdownFilters,
+		JoinKeys:        initParams.JoinKeys,
 		OrderByHint:     initParams.OrderByHint,
 		TableSampleHint: initParams.TableSampleHint,
 	}
@@ -551,7 +556,7 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 
 	// Set up auto-apply if the function opts in and filters are present
 	if fn.Metadata().AutoApplyFilters && processParams.PushdownFilters != nil {
-		parsed, err := DeserializeFilters(processParams.PushdownFilters)
+		parsed, err := DeserializeFilters(processParams.PushdownFilters, processParams.JoinKeys)
 		if err == nil && len(parsed.Filters) > 0 {
 			state.autoApply = parsed
 		}
@@ -672,7 +677,7 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 
 	// Set up auto-apply if the function opts in and filters are present
 	if fn.Metadata().AutoApplyFilters && processParams.PushdownFilters != nil {
-		parsed, err := DeserializeFilters(processParams.PushdownFilters)
+		parsed, err := DeserializeFilters(processParams.PushdownFilters, processParams.JoinKeys)
 		if err == nil && len(parsed.Filters) > 0 {
 			state.autoApply = parsed
 		}
