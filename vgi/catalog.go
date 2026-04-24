@@ -141,8 +141,8 @@ type SchemaCreateRequestWire struct {
 type SchemaDropRequestWire struct {
 	AttachID       []byte  `vgirpc:"attach_id"`
 	Name           string  `vgirpc:"name"`
-	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
-	Cascade        *bool   `vgirpc:"cascade"`
+	IgnoreNotFound bool    `vgirpc:"ignore_not_found"`
+	Cascade        bool    `vgirpc:"cascade"`
 	TransactionID  *[]byte `vgirpc:"transaction_id"`
 }
 
@@ -161,7 +161,8 @@ type TableDropRequestWire struct {
 	AttachID       []byte  `vgirpc:"attach_id"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
-	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
+	IgnoreNotFound bool    `vgirpc:"ignore_not_found"`
+	Cascade        bool    `vgirpc:"cascade"`
 	TransactionID  *[]byte `vgirpc:"transaction_id"`
 }
 
@@ -365,16 +366,43 @@ type SchemaContentsMacrosRequestWire struct {
 	TransactionID *[]byte `vgirpc:"transaction_id"`
 }
 
+// TableInsertFunctionGetRequestWire is for catalog_table_insert_function_get.
+type TableInsertFunctionGetRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	SchemaName    string  `vgirpc:"schema_name"`
+	Name          string  `vgirpc:"name"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableUpdateFunctionGetRequestWire is for catalog_table_update_function_get.
+type TableUpdateFunctionGetRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	SchemaName    string  `vgirpc:"schema_name"`
+	Name          string  `vgirpc:"name"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
+// TableDeleteFunctionGetRequestWire is for catalog_table_delete_function_get.
+type TableDeleteFunctionGetRequestWire struct {
+	AttachID      []byte  `vgirpc:"attach_id"`
+	SchemaName    string  `vgirpc:"schema_name"`
+	Name          string  `vgirpc:"name"`
+	TransactionID *[]byte `vgirpc:"transaction_id"`
+}
+
 // TableCreateRequestWire is for catalog_table_create.
 type TableCreateRequestWire struct {
-	AttachID           []byte    `vgirpc:"attach_id"`
-	SchemaName         string    `vgirpc:"schema_name"`
-	Name               string    `vgirpc:"name"`
-	Columns            []byte    `vgirpc:"columns"`
-	OnConflict         string    `vgirpc:"on_conflict,enum"`
-	NotNullConstraints *[]int32  `vgirpc:"not_null_constraints"`
-	CheckConstraints   *[]string `vgirpc:"check_constraints"`
-	TransactionID      *[]byte   `vgirpc:"transaction_id"`
+	AttachID               []byte    `vgirpc:"attach_id"`
+	SchemaName             string    `vgirpc:"schema_name"`
+	Name                   string    `vgirpc:"name"`
+	Columns                []byte    `vgirpc:"columns"`
+	OnConflict             string    `vgirpc:"on_conflict,enum"`
+	NotNullConstraints     []int32   `vgirpc:"not_null_constraints"`
+	UniqueConstraints      [][]int32 `vgirpc:"unique_constraints"`
+	CheckConstraints       []string  `vgirpc:"check_constraints"`
+	PrimaryKeyConstraints  [][]int32 `vgirpc:"primary_key_constraints"`
+	ForeignKeyConstraints  [][]byte  `vgirpc:"foreign_key_constraints"`
+	TransactionID          *[]byte   `vgirpc:"transaction_id"`
 }
 
 // ---------------------------------------------------------------------------
@@ -749,15 +777,21 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			return ItemsResponseWire{Items: [][]byte{data}}, nil
 		})
 
-	// catalog_schema_create (read-only)
+	// catalog_schema_create
 	vgirpc.UnaryVoid[SchemaCreateRequestWire](s, "catalog_schema_create",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaCreateRequestWire) error {
+			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+				return w.writableSchemaCreate(wc, req.Name, parseOnConflict(req.OnConflict), req.Comment)
+			}
 			return readOnlyErr("catalog_schema_create")
 		})
 
-	// catalog_schema_drop (read-only)
+	// catalog_schema_drop
 	vgirpc.UnaryVoid[SchemaDropRequestWire](s, "catalog_schema_drop",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaDropRequestWire) error {
+			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+				return w.writableSchemaDrop(wc, req.Name, req.IgnoreNotFound, req.Cascade)
+			}
 			return readOnlyErr("catalog_schema_drop")
 		})
 
@@ -903,21 +937,36 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			return ItemsResponseWire{Items: [][]byte{}}, nil
 		})
 
-	// catalog_table_create (read-only)
+	// catalog_table_create
 	vgirpc.UnaryVoid[TableCreateRequestWire](s, "catalog_table_create",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableCreateRequestWire) error {
+			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+				return w.writableTableCreate(wc, req)
+			}
 			return readOnlyErr("catalog_table_create")
 		})
 
-	// catalog_table_drop (read-only)
+	// catalog_table_drop
 	vgirpc.UnaryVoid[TableDropRequestWire](s, "catalog_table_drop",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableDropRequestWire) error {
+			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+				return w.writableTableDrop(wc, req.SchemaName, req.Name, req.IgnoreNotFound, req.Cascade)
+			}
 			return readOnlyErr("catalog_table_drop")
 		})
 
 	// catalog_table_scan_function_get
 	vgirpc.Unary[TableScanFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_scan_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableScanFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
+			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+				return buildScanFunctionGetResponse(&ScanFunctionResult{
+					FunctionName: writableScanFunctionName,
+					PositionalArguments: []ScanArg{
+						{Value: req.SchemaName, Type: arrow.BinaryTypes.String},
+						{Value: req.Name, Type: arrow.BinaryTypes.String},
+					},
+				})
+			}
 			slog.Debug("catalog: scan function get", "schema", req.SchemaName, "table", req.Name)
 
 			// Check for a registered catalog table with a backing function
@@ -1159,6 +1208,51 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	vgirpc.UnaryVoid[CatalogDropRequestWire](s, "catalog_drop",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogDropRequestWire) error {
 			return readOnlyErr("catalog_drop")
+		})
+
+	// catalog_table_insert_function_get
+	vgirpc.Unary[TableInsertFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_insert_function_get",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableInsertFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
+			if w.writableByAttachID(req.AttachID) == nil {
+				return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_id=%x len=%d, extra_catalogs=%d)", req.SchemaName, req.Name, req.AttachID, len(req.AttachID), len(w.extraCatalogs))}
+			}
+			return buildScanFunctionGetResponse(&ScanFunctionResult{
+				FunctionName: writableInsertFunctionName,
+				PositionalArguments: []ScanArg{
+					{Value: req.SchemaName, Type: arrow.BinaryTypes.String},
+					{Value: req.Name, Type: arrow.BinaryTypes.String},
+				},
+			})
+		})
+
+	// catalog_table_update_function_get
+	vgirpc.Unary[TableUpdateFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_update_function_get",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableUpdateFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
+			if w.writableByAttachID(req.AttachID) == nil {
+				return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_id=%x len=%d, extra_catalogs=%d)", req.SchemaName, req.Name, req.AttachID, len(req.AttachID), len(w.extraCatalogs))}
+			}
+			return buildScanFunctionGetResponse(&ScanFunctionResult{
+				FunctionName: writableUpdateFunctionName,
+				PositionalArguments: []ScanArg{
+					{Value: req.SchemaName, Type: arrow.BinaryTypes.String},
+					{Value: req.Name, Type: arrow.BinaryTypes.String},
+				},
+			})
+		})
+
+	// catalog_table_delete_function_get
+	vgirpc.Unary[TableDeleteFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_delete_function_get",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableDeleteFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
+			if w.writableByAttachID(req.AttachID) == nil {
+				return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_id=%x len=%d, extra_catalogs=%d)", req.SchemaName, req.Name, req.AttachID, len(req.AttachID), len(w.extraCatalogs))}
+			}
+			return buildScanFunctionGetResponse(&ScanFunctionResult{
+				FunctionName: writableDeleteFunctionName,
+				PositionalArguments: []ScanArg{
+					{Value: req.SchemaName, Type: arrow.BinaryTypes.String},
+					{Value: req.Name, Type: arrow.BinaryTypes.String},
+				},
+			})
 		})
 }
 

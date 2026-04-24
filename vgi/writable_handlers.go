@@ -15,16 +15,233 @@ import (
 
 var _ = bytes.Buffer{}
 
+// rowIDFieldName is the synthesized column name used to expose a stable
+// row identifier on writable tables. DuckDB hides columns with the
+// `is_row_id` metadata key from SELECT *.
+const rowIDFieldName = "__row_id"
+
+var rowIDMetadata = arrow.NewMetadata([]string{"is_row_id"}, []string{""})
+
+// withSynthesizedRowID returns a new schema with __row_id (int64) appended
+// if not already present.
+func withSynthesizedRowID(s *arrow.Schema) *arrow.Schema {
+	for i := 0; i < s.NumFields(); i++ {
+		f := s.Field(i)
+		if !f.HasMetadata() {
+			continue
+		}
+		md := f.Metadata
+		for k := 0; k < md.Len(); k++ {
+			if md.Keys()[k] == "is_row_id" {
+				return s
+			}
+		}
+	}
+	fields := make([]arrow.Field, s.NumFields(), s.NumFields()+1)
+	for i := 0; i < s.NumFields(); i++ {
+		fields[i] = s.Field(i)
+	}
+	fields = append(fields, arrow.Field{
+		Name:     rowIDFieldName,
+		Type:     arrow.PrimitiveTypes.Int64,
+		Metadata: rowIDMetadata,
+	})
+	md := s.Metadata()
+	return arrow.NewSchema(fields, &md)
+}
+
+// ============================================================================
+// DDL handlers (schema/table create/drop/alter).
+// ============================================================================
+
+// onConflictAction encodes the SQL ON-CONFLICT semantics carried as a
+// dictionary-encoded string by the C++ extension.
+type onConflictAction string
+
+const (
+	onConflictError   onConflictAction = "ERROR"
+	onConflictReplace onConflictAction = "REPLACE"
+	onConflictIgnore  onConflictAction = "IGNORE"
+)
+
+func parseOnConflict(s string) onConflictAction {
+	switch strings.ToUpper(s) {
+	case "REPLACE":
+		return onConflictReplace
+	case "IGNORE":
+		return onConflictIgnore
+	}
+	return onConflictError
+}
+
+func (w *Worker) writableSchemaCreate(c *WritableCatalog, name string, onConflict onConflictAction, comment *string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := strings.ToLower(name)
+	if existing, ok := c.schemas[key]; ok {
+		switch onConflict {
+		case onConflictReplace:
+			existing.tables = map[string]*writableTable{}
+			if comment != nil {
+				existing.comment = *comment
+			}
+			c.version++
+			return nil
+		case onConflictIgnore:
+			return nil
+		default:
+			return fmt.Errorf("schema %q already exists", name)
+		}
+	}
+	s := &writableSchema{name: name, tables: map[string]*writableTable{}}
+	if comment != nil {
+		s.comment = *comment
+	}
+	c.schemas[key] = s
+	c.version++
+	return nil
+}
+
+func (w *Worker) writableSchemaDrop(c *WritableCatalog, name string, ignoreNotFound, cascade bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := strings.ToLower(name)
+	s, ok := c.schemas[key]
+	if !ok {
+		if ignoreNotFound {
+			return nil
+		}
+		return fmt.Errorf("schema %q does not exist", name)
+	}
+	if !cascade && len(s.tables) > 0 {
+		return fmt.Errorf("schema %q is not empty (use CASCADE)", name)
+	}
+	delete(c.schemas, key)
+	c.version++
+	return nil
+}
+
+func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestWire) error {
+	if len(req.Columns) == 0 {
+		return fmt.Errorf("catalog_table_create: missing columns schema")
+	}
+	schema, err := DeserializeSchema(req.Columns)
+	if err != nil {
+		return fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sKey := strings.ToLower(req.SchemaName)
+	s, ok := c.schemas[sKey]
+	if !ok {
+		return fmt.Errorf("schema %q does not exist", req.SchemaName)
+	}
+	tKey := strings.ToLower(req.Name)
+	if _, ok := s.tables[tKey]; ok {
+		switch parseOnConflict(req.OnConflict) {
+		case onConflictReplace:
+			delete(s.tables, tKey)
+		case onConflictIgnore:
+			return nil
+		default:
+			return fmt.Errorf("table %q.%q already exists", req.SchemaName, req.Name)
+		}
+	}
+
+	t := &writableTable{
+		name:          req.Name,
+		schema:        schema,
+		notNull:       columnsByIndex(schema, req.NotNullConstraints),
+		primaryKey:    columnGroupsByIndex(schema, req.PrimaryKeyConstraints),
+		unique:        columnGroupsByIndex(schema, req.UniqueConstraints),
+		check:         req.CheckConstraints,
+		defaults:      defaultsFromSchemaMetadata(schema),
+		columnComment: map[string]string{},
+	}
+	s.tables[tKey] = t
+	c.version++
+	return nil
+}
+
+func (w *Worker) writableTableDrop(c *WritableCatalog, schemaName, name string, ignoreNotFound, cascade bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s, ok := c.schemas[strings.ToLower(schemaName)]
+	if !ok {
+		if ignoreNotFound {
+			return nil
+		}
+		return fmt.Errorf("schema %q does not exist", schemaName)
+	}
+	tKey := strings.ToLower(name)
+	if _, ok := s.tables[tKey]; !ok {
+		if ignoreNotFound {
+			return nil
+		}
+		return fmt.Errorf("table %q.%q does not exist", schemaName, name)
+	}
+	delete(s.tables, tKey)
+	c.version++
+	return nil
+}
+
+func columnsByIndex(schema *arrow.Schema, idx []int32) []string {
+	out := make([]string, 0, len(idx))
+	for _, i := range idx {
+		if int(i) < schema.NumFields() {
+			out = append(out, schema.Field(int(i)).Name)
+		}
+	}
+	return out
+}
+
+func columnGroupsByIndex(schema *arrow.Schema, groups [][]int32) [][]string {
+	out := make([][]string, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, columnsByIndex(schema, g))
+	}
+	return out
+}
+
+// defaultsFromSchemaMetadata extracts the default-value SQL expression
+// stored as Arrow field metadata (key "default") set by DuckDB's column
+// definition serializer.
+func defaultsFromSchemaMetadata(schema *arrow.Schema) map[string]any {
+	out := map[string]any{}
+	for i := 0; i < schema.NumFields(); i++ {
+		f := schema.Field(i)
+		if !f.HasMetadata() {
+			continue
+		}
+		md := f.Metadata
+		for k := 0; k < md.Len(); k++ {
+			if md.Keys()[k] == "default" {
+				out[f.Name] = Sql(md.Values()[k])
+				break
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // writableByAttachID returns the writable catalog whose attach_id matches.
-// nil if no match (the caller should treat as the default read-only catalog).
+// Attach IDs are deterministic ("writable:<name>") so DuckDB-spawned worker
+// processes resolve to the same catalog without sharing in-memory state.
 func (w *Worker) writableByAttachID(attachID []byte) *WritableCatalog {
 	if len(attachID) == 0 {
 		return nil
 	}
-	for _, c := range w.extraCatalogs {
-		if bytes.Equal(c.AttachID(), attachID) {
-			return c
-		}
+	const prefix = "writable:"
+	if !bytes.HasPrefix(attachID, []byte(prefix)) {
+		return nil
+	}
+	name := string(attachID[len(prefix):])
+	if c, ok := w.extraCatalogs[name]; ok {
+		return c
 	}
 	return nil
 }
@@ -155,6 +372,10 @@ func (w *Worker) writableTableGet(c *WritableCatalog, schemaName, tableName stri
 
 func tableInfoFromWritable(t *writableTable, schemaName string) (*TableInfo, error) {
 	cols := t.schema
+	// Inject a synthesized __row_id column at the end so DuckDB has a row
+	// reference for UPDATE/DELETE. DuckDB hides is_row_id columns from
+	// SELECT *. The generic scan function fills it with the row's index.
+	cols = withSynthesizedRowID(cols)
 	var err error
 	if len(t.defaults) > 0 {
 		cols, err = applyDefaults(cols, t.defaults)

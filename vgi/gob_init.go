@@ -14,4 +14,6 @@ func init() {
 	vgirpc.RegisterStateType(map[string]interface{}{})
 	vgirpc.RegisterStateType(SecretRequirement{})
 	vgirpc.RegisterStateType(SecretLookup{})
+	vgirpc.RegisterStateType(&writableScanState{})
+	vgirpc.RegisterStateType(&writableMutateState{})
 }

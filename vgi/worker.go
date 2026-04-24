@@ -392,6 +392,7 @@ func (w *Worker) RegisterAggregate(f AggregateFunction) {
 // tables.
 func (w *Worker) RegisterWritableCatalog(c *WritableCatalog) {
 	w.extraCatalogs[c.Name] = c
+	w.registerWritableFunctions()
 }
 
 // RegisterCatalogTable registers a table in the given schema of the catalog.
