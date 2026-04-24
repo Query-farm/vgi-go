@@ -438,6 +438,9 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			v := true
 			fi.SamplingPushdown = &v
 		}
+		if len(meta.SupportedExpressionFilters) > 0 {
+			fi.SupportedExpressionFilters = meta.SupportedExpressionFilters
+		}
 		return fi
 	}
 

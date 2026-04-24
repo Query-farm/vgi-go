@@ -183,6 +183,16 @@ func BuildBooleanArray(n int64, fn func(i int64) bool) arrow.Array {
 	return builder.NewArray()
 }
 
+// BuildBinaryArray creates a binary array by calling fn for each row index.
+func BuildBinaryArray(n int64, fn func(i int64) []byte) arrow.Array {
+	builder := array.NewBinaryBuilder(defaultAllocator, arrow.BinaryTypes.Binary)
+	defer builder.Release()
+	for i := int64(0); i < n; i++ {
+		builder.Append(fn(i))
+	}
+	return builder.NewArray()
+}
+
 // BuildArray creates an array of any type using the ArrayBuilder generic constraint.
 // Use this for types not covered by BuildInt64Array, BuildFloat64Array, etc.
 func BuildArray[T any, B ArrayBuilder[T]](n int64, newBuilder func(memory.Allocator) B, fn func(i int64) T) arrow.Array {

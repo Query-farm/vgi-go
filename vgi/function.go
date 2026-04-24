@@ -74,6 +74,10 @@ type FunctionMetadata struct {
 	FilterPushdown bool
 	// SamplingPushdown indicates support for TABLESAMPLE SYSTEM pushdown.
 	SamplingPushdown bool
+	// SupportedExpressionFilters lists DuckDB expression names that the
+	// function can absorb into its scan (e.g. "&&", "list_contains",
+	// "starts_with"). Without this, DuckDB inserts a separate FILTER node.
+	SupportedExpressionFilters []string
 	// AutoApplyFilters indicates the framework should auto-apply pushdown filters.
 	AutoApplyFilters bool
 	// Categories is a list of classification tags for the function.
