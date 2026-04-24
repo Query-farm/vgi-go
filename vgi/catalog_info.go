@@ -19,6 +19,10 @@ type CatalogInfo struct {
 	Name                  string
 	ImplementationVersion *string
 	DataVersionSpec       *string
+	// AttachOptionSpecs holds pre-serialized AttachOptionSpec records (one per
+	// declared ATTACH-time option). Surfaced to DuckDB via vgi_catalogs() so
+	// the extension can validate ATTACH options before attach.
+	AttachOptionSpecs [][]byte
 }
 
 var catalogInfoSchema = generated.CatalogInfoSchema
@@ -47,10 +51,19 @@ func SerializeCatalogInfo(info *CatalogInfo) ([]byte, error) {
 		dvsBuilder.AppendNull()
 	}
 
+	aosBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.Binary)
+	defer aosBuilder.Release()
+	aosBuilder.Append(true)
+	aosVb := aosBuilder.ValueBuilder().(*array.BinaryBuilder)
+	for _, spec := range info.AttachOptionSpecs {
+		aosVb.Append(spec)
+	}
+
 	cols := []arrow.Array{
 		nameBuilder.NewArray(),
 		implBuilder.NewArray(),
 		dvsBuilder.NewArray(),
+		aosBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

@@ -641,6 +641,18 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 					info.Name = w.catalogName
 				}
 			}
+			if len(w.attachOptions) > 0 && info.AttachOptionSpecs == nil {
+				specs := make([][]byte, 0, len(w.attachOptions))
+				for _, opt := range w.attachOptions {
+					data, err := serializeAttachOptionSpec(opt)
+					if err != nil {
+						slog.Error("failed to serialize attach option", "name", opt.Name, "err", err)
+						continue
+					}
+					specs = append(specs, data)
+				}
+				info.AttachOptionSpecs = specs
+			}
 			data, err := SerializeCatalogInfo(info)
 			if err != nil {
 				return CatalogsResponseWire{}, err

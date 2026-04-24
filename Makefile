@@ -28,6 +28,8 @@ VERSIONED_BINARY        := vgi-example-versioned-worker-go
 VERSIONED_CMD           := ./cmd/vgi-example-versioned-worker
 VERSIONED_TABLES_BINARY := vgi-example-versioned-tables-worker-go
 VERSIONED_TABLES_CMD    := ./cmd/vgi-example-versioned-tables-worker
+ATTACH_OPTIONS_BINARY   := vgi-example-attach-options-worker-go
+ATTACH_OPTIONS_CMD      := ./cmd/vgi-example-attach-options-worker
 
 # Path to the sibling DuckDB VGI extension repo (contains tests).
 VGI_EXT_DIR  := ../vgi
@@ -48,6 +50,7 @@ DEBUG_BIN    := $(VGI_EXT_DIR)/build/debug/test/unittest
 WORKER_PATH                  := $(CURDIR)/$(BINARY)
 VERSIONED_WORKER_PATH        := $(CURDIR)/$(VERSIONED_BINARY)
 VERSIONED_TABLES_WORKER_PATH := $(CURDIR)/$(VERSIONED_TABLES_BINARY)
+ATTACH_OPTIONS_WORKER_PATH   := $(CURDIR)/$(ATTACH_OPTIONS_BINARY)
 
 # Test directory inside the extension repo.
 TEST_DIR     := $(VGI_EXT_DIR)/test/sql
@@ -67,10 +70,11 @@ build:
 	go build -o $(BINARY) $(CMD)
 	go build -o $(VERSIONED_BINARY) $(VERSIONED_CMD)
 	go build -o $(VERSIONED_TABLES_BINARY) $(VERSIONED_TABLES_CMD)
+	go build -o $(ATTACH_OPTIONS_BINARY) $(ATTACH_OPTIONS_CMD)
 
 # Remove built binaries.
 clean:
-	rm -f $(BINARY) $(VERSIONED_BINARY) $(VERSIONED_TABLES_BINARY)
+	rm -f $(BINARY) $(VERSIONED_BINARY) $(VERSIONED_TABLES_BINARY) $(ATTACH_OPTIONS_BINARY)
 
 # Format all Go source files.
 fmt:
@@ -91,6 +95,7 @@ test: build
 	    VGI_TEST_WORKER=$(WORKER_PATH) \
 	    VGI_VERSIONED_WORKER=$(VERSIONED_WORKER_PATH) \
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
+	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    $(UNITTEST) "test/*" "~test/sql/integration/writable/*"
 
 # Run a single integration test file.
@@ -101,6 +106,7 @@ test-single: build
 	    VGI_TEST_WORKER=$(WORKER_PATH) \
 	    VGI_VERSIONED_WORKER=$(VERSIONED_WORKER_PATH) \
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
+	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    $(UNITTEST) "$(TEST)"
 
 # Run the full integration test suite over HTTP transport.

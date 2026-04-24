@@ -309,6 +309,7 @@ type Worker struct {
 	authenticateFunc       vgirpc.AuthenticateFunc
 	oauthMetadata          *vgirpc.OAuthResourceMetadata
 	secretTypes            []SecretTypeSpec
+	attachOptions          []AttachOptionSpec
 	logLevel               slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
 	logHandler             slog.Handler // nil means default TextHandler to stderr
 }
@@ -457,6 +458,16 @@ func WithSettings(settings ...SettingSpec) WorkerOption {
 func WithSecretTypes(types ...SecretTypeSpec) WorkerOption {
 	return func(w *Worker) {
 		w.secretTypes = append(w.secretTypes, types...)
+	}
+}
+
+// WithAttachOptions declares ATTACH-time options accepted by the worker.
+// These are advertised via catalog_catalogs so DuckDB can validate option
+// names/types at ATTACH time. Values passed at ATTACH arrive as the
+// CatalogAttachRequestWire.Options RecordBatch.
+func WithAttachOptions(opts ...AttachOptionSpec) WorkerOption {
+	return func(w *Worker) {
+		w.attachOptions = append(w.attachOptions, opts...)
 	}
 }
 

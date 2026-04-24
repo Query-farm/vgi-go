@@ -11,8 +11,9 @@ replace github.com/Query-farm/vgi-rpc/vgirpc/jwtauth => ../vgi-rpc-go/vgirpc/jwt
 require (
 	github.com/Query-farm/vgi-rpc v0.0.0
 	github.com/Query-farm/vgi-rpc/vgirpc/jwtauth v0.0.0-00010101000000-000000000000
-	github.com/apache/arrow-go/v18 v18.4.1
+	github.com/apache/arrow-go/v18 v18.5.2
 	github.com/google/uuid v1.6.0
+	github.com/marcboeker/go-duckdb/v2 v2.4.3
 	modernc.org/sqlite v1.46.1
 )
 
@@ -38,7 +39,6 @@ require (
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/marcboeker/go-duckdb/arrowmapping v0.0.21 // indirect
 	github.com/marcboeker/go-duckdb/mapping v0.0.21 // indirect
-	github.com/marcboeker/go-duckdb/v2 v2.4.3 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/minio/asm2plan9s v0.0.0-20200509001527-cdd76441f9d8 // indirect
 	github.com/minio/c2goasm v0.0.0-20190812172519-36a3d3bbc4f3 // indirect

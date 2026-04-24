@@ -2,6 +2,7 @@
 vgi-example-worker-go
 vgi-example-versioned-worker-go
 vgi-example-versioned-tables-worker-go
+vgi-example-attach-options-worker-go
 
 # IDE / editor
 .idea/
