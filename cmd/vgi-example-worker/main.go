@@ -119,6 +119,7 @@ func main() {
 	// Table functions
 	w.RegisterTable(table.NewConstantColumnsFunction())
 	w.RegisterTable(table.NewFilterEchoFunction())
+	w.RegisterTable(table.NewOrderEchoFunction())
 	w.RegisterTable(table.NewDoubleSequenceFunction())
 	w.RegisterTable(table.NewGeneratorExceptionFunction())
 	w.RegisterTable(table.NewLoggingGeneratorFunction())

@@ -30,6 +30,10 @@ type ProcessParams struct {
 	InitOpaqueData []byte
 	// PushdownFilters is the pushdown filter batch (nil if none).
 	PushdownFilters arrow.RecordBatch
+	// OrderByHint, when non-nil, carries an ORDER BY + LIMIT pushdown hint.
+	OrderByHint *OrderByHint
+	// TableSampleHint, when non-nil, carries a TABLESAMPLE pushdown hint.
+	TableSampleHint *TableSampleHint
 	// Storage provides shared execution storage for cross-phase data.
 	Storage *ExecutionStorage
 	// Auth is the authentication context for the current request.

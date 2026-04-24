@@ -42,14 +42,20 @@ type BindResponseWire struct {
 
 // InitRequestWire is the wire format for init requests.
 type InitRequestWire struct {
-	BindCall        []byte   `vgirpc:"bind_call"`
-	OutputSchema    []byte   `vgirpc:"output_schema"`
-	BindOpaqueData  *[]byte  `vgirpc:"bind_opaque_data"`
-	ProjectionIDs   *[]int32 `vgirpc:"projection_ids"`
-	PushdownFilters *[]byte  `vgirpc:"pushdown_filters"`
-	Phase           *string  `vgirpc:"phase,enum"`
-	ExecutionID     *[]byte  `vgirpc:"execution_id"`
-	InitOpaqueData  *[]byte  `vgirpc:"init_opaque_data"`
+	BindCall              []byte   `vgirpc:"bind_call"`
+	OutputSchema          []byte   `vgirpc:"output_schema"`
+	BindOpaqueData        *[]byte  `vgirpc:"bind_opaque_data"`
+	ProjectionIDs         *[]int32 `vgirpc:"projection_ids"`
+	PushdownFilters       *[]byte  `vgirpc:"pushdown_filters"`
+	Phase                 *string  `vgirpc:"phase,enum"`
+	ExecutionID           *[]byte  `vgirpc:"execution_id"`
+	InitOpaqueData        *[]byte  `vgirpc:"init_opaque_data"`
+	OrderByColumnName     *string  `vgirpc:"order_by_column_name"`
+	OrderByDirection      *string  `vgirpc:"order_by_direction,enum"`
+	OrderByNullOrder      *string  `vgirpc:"order_by_null_order,enum"`
+	OrderByLimit          *int64   `vgirpc:"order_by_limit"`
+	TablesamplePercentage *float64 `vgirpc:"tablesample_percentage"`
+	TablesampleSeed       *int64   `vgirpc:"tablesample_seed"`
 }
 
 // GlobalInitResponseWire is the wire format for global init responses.
@@ -335,6 +341,26 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 			initParams.PushdownFilters = batch
 		}
 	}
+	if req.OrderByColumnName != nil {
+		hint := &OrderByHint{ColumnName: *req.OrderByColumnName, RowLimit: -1}
+		if req.OrderByDirection != nil {
+			hint.Direction = *req.OrderByDirection
+		}
+		if req.OrderByNullOrder != nil {
+			hint.NullOrder = *req.OrderByNullOrder
+		}
+		if req.OrderByLimit != nil {
+			hint.RowLimit = *req.OrderByLimit
+		}
+		initParams.OrderByHint = hint
+	}
+	if req.TablesamplePercentage != nil && *req.TablesamplePercentage >= 0 {
+		hint := &TableSampleHint{Percentage: *req.TablesamplePercentage}
+		if req.TablesampleSeed != nil {
+			hint.Seed = *req.TablesampleSeed
+		}
+		initParams.TableSampleHint = hint
+	}
 
 	// Apply projection to the wire output schema (what DuckDB expects back).
 	projectedSchema := ProjectSchema(initParams.ProjectionIDs, outputSchema)
@@ -362,6 +388,8 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		Settings:        bindParams.Settings,
 		Secrets:         bindParams.Secrets,
 		PushdownFilters: initParams.PushdownFilters,
+		OrderByHint:     initParams.OrderByHint,
+		TableSampleHint: initParams.TableSampleHint,
 	}
 
 	// Build InitRecipe for HTTP state serialization

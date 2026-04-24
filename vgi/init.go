@@ -35,8 +35,27 @@ type InitParams struct {
 	IsSecondary bool
 	// PushdownFilters is the pushdown filter batch (nil if none).
 	PushdownFilters arrow.RecordBatch
+	// OrderByHint, when non-nil, carries an ORDER BY + LIMIT pushdown
+	// hint set by DuckDB's RowGroupPruner optimizer.
+	OrderByHint *OrderByHint
+	// TableSampleHint, when non-nil, carries a TABLESAMPLE pushdown hint.
+	TableSampleHint *TableSampleHint
 	// Storage provides shared execution storage for cross-phase data.
 	Storage *ExecutionStorage
+}
+
+// OrderByHint is an ORDER BY + LIMIT hint pushed by the optimizer.
+type OrderByHint struct {
+	ColumnName string
+	Direction  string // "ASC" or "DESC"
+	NullOrder  string // "NULLS_FIRST" or "NULLS_LAST"
+	RowLimit   int64  // -1 if unbounded
+}
+
+// TableSampleHint is a TABLESAMPLE pushdown hint.
+type TableSampleHint struct {
+	Percentage float64
+	Seed       int64
 }
 
 // GlobalInitResponse is returned by a function's OnInit method.
