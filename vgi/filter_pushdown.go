@@ -33,6 +33,9 @@ const (
 	FilterAnd       FilterType = "and"
 	FilterOr        FilterType = "or"
 	FilterStruct    FilterType = "struct"
+	// FilterExpression is a recursive expression tree evaluated by the
+	// worker (typically via an embedded DuckDB connection).
+	FilterExpression FilterType = "expression"
 )
 
 // ComparisonOp identifies a comparison operator used in constant filters.
@@ -506,7 +509,7 @@ func DeserializeFilters(batch arrow.RecordBatch) (*PushdownFilters, error) {
 
 	filters := make([]Filter, len(specs))
 	for i, spec := range specs {
-		f, err := parseFilter(spec, getValue)
+		f, err := parseFilterWithBatch(spec, getValue, batch)
 		if err != nil {
 			return nil, fmt.Errorf("parsing filter %d: %w", i, err)
 		}
@@ -524,15 +527,47 @@ func DeserializeFilters(batch arrow.RecordBatch) (*PushdownFilters, error) {
 // ---------------------------------------------------------------------------
 
 type filterSpec struct {
-	Type        string       `json:"type"`
-	ColumnName  string       `json:"column_name"`
-	ColumnIndex int          `json:"column_index"`
-	Op          string       `json:"op,omitempty"`
-	ValueRef    *int         `json:"value_ref,omitempty"`
-	Children    []filterSpec `json:"children,omitempty"`
-	ChildIndex  int          `json:"child_index,omitempty"`
-	ChildName   string       `json:"child_name,omitempty"`
-	ChildFilter *filterSpec  `json:"child_filter,omitempty"`
+	Type        string           `json:"type"`
+	ColumnName  string           `json:"column_name"`
+	ColumnIndex int              `json:"column_index"`
+	Op          string           `json:"op,omitempty"`
+	ValueRef    *int             `json:"value_ref,omitempty"`
+	Children    []filterSpec     `json:"children,omitempty"`
+	ChildIndex  int              `json:"child_index,omitempty"`
+	ChildName   string           `json:"child_name,omitempty"`
+	ChildFilter *filterSpec      `json:"child_filter,omitempty"`
+	Expr        *json.RawMessage `json:"expr,omitempty"`
+}
+
+// parseFilterWithBatch is like parseFilter but also provides access to the
+// raw filter batch so expression filters can harvest their value-ref columns
+// (including Arrow extension metadata such as geoarrow.wkb).
+func parseFilterWithBatch(spec filterSpec, getValue func(int) (scalar.Scalar, error), batch arrow.RecordBatch) (Filter, error) {
+	f, err := parseFilter(spec, getValue)
+	if err != nil {
+		return nil, err
+	}
+	if ef, ok := f.(*ExpressionFilter); ok {
+		// Populate Values once all value_refs in the tree are collected.
+		refs := map[int]bool{}
+		collectExprValueRefs(ef.Expr, refs)
+		maxRef := -1
+		for r := range refs {
+			if r > maxRef {
+				maxRef = r
+			}
+		}
+		vals := make([]scalarValueRef, maxRef+1)
+		for r := range refs {
+			sv, err := resolveScalarValueRef(batch, r)
+			if err != nil {
+				return nil, err
+			}
+			vals[r] = sv
+		}
+		ef.Values = vals
+	}
+	return f, nil
 }
 
 func parseFilter(spec filterSpec, getValue func(int) (scalar.Scalar, error)) (Filter, error) {
@@ -628,6 +663,20 @@ func parseFilter(spec filterSpec, getValue func(int) (scalar.Scalar, error)) (Fi
 			ChildIndex:  spec.ChildIndex,
 			ChildName:   spec.ChildName,
 			ChildFilter: childFilter,
+		}, nil
+
+	case FilterExpression:
+		if spec.Expr == nil {
+			return nil, fmt.Errorf("expression filter missing expr tree")
+		}
+		var node exprNode
+		if err := json.Unmarshal(*spec.Expr, &node); err != nil {
+			return nil, fmt.Errorf("parsing expression tree: %w", err)
+		}
+		return &ExpressionFilter{
+			columnName:  spec.ColumnName,
+			columnIndex: spec.ColumnIndex,
+			Expr:        &node,
 		}, nil
 
 	default:

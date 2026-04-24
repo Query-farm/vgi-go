@@ -124,6 +124,7 @@ func main() {
 	w.RegisterTable(table.NewSampleEchoFunction())
 	w.RegisterTable(table.NewSpatialFilterExampleFunction())
 	w.RegisterTable(table.NewColorsScanFunction())
+	w.RegisterTable(table.NewExpressionFilterTestFunction())
 	w.RegisterTable(table.NewGeoPointsScanFunction())
 
 	// Aggregate functions
