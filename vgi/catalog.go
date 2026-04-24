@@ -566,7 +566,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			if req.Name != w.catalogName {
 				return CatalogAttachResultWire{}, &vgirpc.RpcError{
 					Type:    "ValueError",
-					Message: fmt.Sprintf("Unknown catalog: '%s'", req.Name),
+					Message: fmt.Sprintf("No worker handles catalog '%s'", req.Name),
 				}
 			}
 			// Generate a simple attach ID
