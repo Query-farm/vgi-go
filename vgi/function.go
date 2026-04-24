@@ -82,6 +82,13 @@ type FunctionMetadata struct {
 	// callbacks (window_init, window, window_destructor). Ignored for
 	// non-aggregate functions.
 	SupportsWindow bool
+	// HasFinalize signals a TableInOut function whose Finalize method emits
+	// meaningful batches. Defaults to false; set to true only for functions
+	// that accumulate during Process and flush at end-of-stream. DuckDB
+	// skips the FINALIZE phase RPC entirely when this is false — required
+	// for LATERAL compatibility (avoids "FinalExecute not supported for
+	// project_input").
+	HasFinalize bool
 	// OrderDependent declares whether the aggregate result depends on the
 	// row order. Empty defaults to NOT_ORDER_DEPENDENT.
 	OrderDependent string

@@ -44,6 +44,7 @@ type FunctionInfo struct {
 	OrderDependent              string // dictionary, default "NOT_ORDER_DEPENDENT"
 	DistinctDependent           string // dictionary, default "NOT_DISTINCT_DEPENDENT"
 	SupportsWindow              bool
+	HasFinalize                 bool
 	RequiredSettings            []string
 	RequiredSecrets             []SecretRequirement
 }
@@ -263,6 +264,11 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	defer swBuilder.Release()
 	swBuilder.Append(info.SupportsWindow)
 
+	// has_finalize
+	hfBuilder := array.NewBooleanBuilder(mem)
+	defer hfBuilder.Release()
+	hfBuilder.Append(info.HasFinalize)
+
 	// required_settings
 	reqSettingsBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
 	defer reqSettingsBuilder.Release()
@@ -314,6 +320,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		odBuilder.NewArray(),
 		ddBuilder.NewArray(),
 		swBuilder.NewArray(),
+		hfBuilder.NewArray(),
 		reqSettingsBuilder.NewArray(),
 		rsListBuilder.NewArray(),
 	}

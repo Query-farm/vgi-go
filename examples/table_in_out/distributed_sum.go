@@ -24,6 +24,7 @@ func (f *DistributedSumFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Distributed sum using simple callback API",
 		Stability:   vgi.StabilityConsistent,
+		HasFinalize: true,
 	}
 }
 

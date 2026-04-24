@@ -57,6 +57,7 @@ func (f *SumAllColumnsFunction) Metadata() vgi.FunctionMetadata {
 		Description: "Computes column-wise sums across all batches",
 		Stability:   vgi.StabilityConsistent,
 		Categories:  []string{"aggregation", "numeric"},
+		HasFinalize: true,
 	}
 }
 

@@ -23,6 +23,7 @@ func (f *ExceptionFinalizeFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Test function that raises exception during finalize",
 		Stability:   vgi.StabilityConsistent,
+		HasFinalize: true,
 	}
 }
 

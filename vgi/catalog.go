@@ -521,6 +521,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		for _, fn := range fns {
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs()) // table-in-out registers as "table"
+			fi.HasFinalize = meta.HasFinalize
 			mainSchema.functions = append(mainSchema.functions, fi)
 		}
 	}

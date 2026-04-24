@@ -125,6 +125,7 @@ func main() {
 	w.RegisterScalar(&scalar.SmartFormatWidthFunction{})
 	w.RegisterScalar(&scalar.SmartFormatPrefixFunction{})
 	w.RegisterScalar(&scalar.SumValuesFunction{})
+	w.RegisterScalar(&scalar.UnnestTensorFunction{})
 	w.RegisterScalar(&scalar.UpperCaseFunction{})
 	w.RegisterScalar(&scalar.WhoAmIFunction{})
 
@@ -136,13 +137,20 @@ func main() {
 	w.RegisterTable(table.NewSpatialFilterExampleFunction())
 	w.RegisterTable(table.NewColorsScanFunction())
 	w.RegisterTable(table.NewExpressionFilterTestFunction())
-	w.RegisterTable(table.NewGeoPointsScanFunction())
+	// Note: geo_points is introspected via vgi_table_statistics only; no
+	// separate scan function is registered (matches the vgi-python example
+	// worker inventory). Direct `SELECT * FROM data.geo_points` will error
+	// because the backing scan function is not exposed.
 
 	// Aggregate functions
 	aggregate.RegisterAll(w)
 
-	// Writable catalog (in-memory, per-process state).
-	w.RegisterWritableCatalog(vgi.NewWritableCatalog("writable"))
+	// Writable catalog (in-memory, per-process state). Gated off by default so
+	// the example worker's function inventory matches the reference vgi-python
+	// worker; set VGI_WORKER_ENABLE_WRITABLE=1 to exercise the writable tests.
+	if os.Getenv("VGI_WORKER_ENABLE_WRITABLE") != "" {
+		w.RegisterWritableCatalog(vgi.NewWritableCatalog("writable"))
+	}
 	w.RegisterTable(table.NewDoubleSequenceFunction())
 	w.RegisterTable(table.NewDynamicFilterEchoFunction())
 	w.RegisterTable(table.NewGeneratorExceptionFunction())
@@ -184,6 +192,7 @@ func main() {
 	w.RegisterTableInOut(table_in_out.NewFilterBySettingFunction())
 	w.RegisterTableInOut(table_in_out.NewRepeatInputsFunction())
 	w.RegisterTableInOut(table_in_out.NewSumAllColumnsFunction())
+	w.RegisterTableInOut(table_in_out.NewUnnestTensorRowsFunction())
 
 	// Catalog tables
 

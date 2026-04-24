@@ -22,6 +22,7 @@ func init() {
 	gob.Register(&PercentileState{})
 	gob.Register(&SumAllState{})
 	gob.Register(&GenericSumState{})
+	gob.Register(&NestTensorState{})
 }
 
 // RegisterAll registers every example aggregate on the worker.
@@ -41,4 +42,5 @@ func RegisterAll(w *vgi.Worker) {
 	w.RegisterAggregate(&WindowSumFunction{})
 	w.RegisterAggregate(&WindowMedianFunction{})
 	w.RegisterAggregate(&WindowListAggFunction{})
+	w.RegisterAggregate(&NestTensorFunction{})
 }

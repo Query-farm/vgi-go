@@ -22,6 +22,7 @@ func (f *BufferInputFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Collects all input batches and emits during finalization",
 		Stability:   vgi.StabilityConsistent,
+		HasFinalize: true,
 	}
 }
 
