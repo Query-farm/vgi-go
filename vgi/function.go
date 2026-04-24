@@ -78,6 +78,16 @@ type FunctionMetadata struct {
 	// function can absorb into its scan (e.g. "&&", "list_contains",
 	// "starts_with"). Without this, DuckDB inserts a separate FILTER node.
 	SupportedExpressionFilters []string
+	// SupportsWindow indicates an aggregate also implements the windowed
+	// callbacks (window_init, window, window_destructor). Ignored for
+	// non-aggregate functions.
+	SupportsWindow bool
+	// OrderDependent declares whether the aggregate result depends on the
+	// row order. Empty defaults to NOT_ORDER_DEPENDENT.
+	OrderDependent string
+	// DistinctDependent declares whether DISTINCT changes the result.
+	// Empty defaults to NOT_DISTINCT_DEPENDENT.
+	DistinctDependent string
 	// AutoApplyFilters indicates the framework should auto-apply pushdown filters.
 	AutoApplyFilters bool
 	// Categories is a list of classification tags for the function.

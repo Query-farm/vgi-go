@@ -483,6 +483,24 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		}
 	}
 
+	for name, fns := range w.aggregates {
+		for _, fn := range fns {
+			meta := fn.Metadata()
+			fi := buildFunctionInfo(name, FunctionTypeAggregate, meta, fn.ArgumentSpecs())
+			if meta.ReturnType != nil {
+				fi.OutputSchema = arrow.NewSchema([]arrow.Field{
+					{Name: "result", Type: meta.ReturnType},
+				}, nil)
+			} else {
+				fi.OutputSchema = dynamicOutputSchema
+			}
+			fi.SupportsWindow = meta.SupportsWindow
+			fi.OrderDependent = meta.OrderDependent
+			fi.DistinctDependent = meta.DistinctDependent
+			mainSchema.functions = append(mainSchema.functions, fi)
+		}
+	}
+
 	cat.schemas["main"] = mainSchema
 
 	// Add "data" schema (empty, for catalog compatibility)
@@ -791,10 +809,14 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				if req.Type != "" {
 					wantScalar := req.Type == "scalar" || req.Type == "SCALAR_FUNCTION"
 					wantTable := req.Type == "table" || req.Type == "TABLE_FUNCTION"
+					wantAggregate := req.Type == "aggregate" || req.Type == "AGGREGATE_FUNCTION"
 					if wantScalar && fi.FunctionType != FunctionTypeScalar {
 						continue
 					}
 					if wantTable && fi.FunctionType != FunctionTypeTable {
+						continue
+					}
+					if wantAggregate && fi.FunctionType != FunctionTypeAggregate {
 						continue
 					}
 				}

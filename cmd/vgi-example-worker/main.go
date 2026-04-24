@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Query-farm/vgi-go/examples/aggregate"
 	"github.com/Query-farm/vgi-go/examples/scalar"
 	"github.com/Query-farm/vgi-go/examples/table"
 	table_in_out "github.com/Query-farm/vgi-go/examples/table_in_out"
@@ -122,6 +123,9 @@ func main() {
 	w.RegisterTable(table.NewOrderEchoFunction())
 	w.RegisterTable(table.NewSampleEchoFunction())
 	w.RegisterTable(table.NewSpatialFilterExampleFunction())
+
+	// Aggregate functions
+	aggregate.RegisterAll(w)
 	w.RegisterTable(table.NewDoubleSequenceFunction())
 	w.RegisterTable(table.NewGeneratorExceptionFunction())
 	w.RegisterTable(table.NewLoggingGeneratorFunction())

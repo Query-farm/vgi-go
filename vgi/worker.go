@@ -282,6 +282,8 @@ type Worker struct {
 	scalars                map[string][]ScalarFunction
 	tables                 map[string][]TableFunction
 	tableInOuts            map[string][]TableInOutFunction
+	aggregates             map[string][]AggregateFunction
+	aggStorage             *aggregateStorage
 	catalogName            string
 	catalog                *DefaultReadOnlyCatalog
 	storages               sync.Map // map[hex execution ID string]*ExecutionStorage
@@ -344,6 +346,8 @@ func NewWorker(opts ...WorkerOption) *Worker {
 		scalars:       make(map[string][]ScalarFunction),
 		tables:        make(map[string][]TableFunction),
 		tableInOuts:   make(map[string][]TableInOutFunction),
+		aggregates:    make(map[string][]AggregateFunction),
+		aggStorage:    newAggregateStorage(),
 		catalogTables: make(map[string][]CatalogTable),
 		catalogViews:  make(map[string][]CatalogView),
 		catalogMacros: make(map[string][]CatalogMacro),
@@ -368,6 +372,13 @@ func (w *Worker) RegisterTable(f TableFunction) {
 // RegisterTableInOut registers a table-in-out function.
 func (w *Worker) RegisterTableInOut(f TableInOutFunction) {
 	w.tableInOuts[f.Name()] = append(w.tableInOuts[f.Name()], f)
+}
+
+// RegisterAggregate registers an aggregate function. Multiple registrations
+// with the same Name() are kept as overloads — distinguished by their
+// ArgumentSpecs at catalog-discovery time.
+func (w *Worker) RegisterAggregate(f AggregateFunction) {
+	w.aggregates[f.Name()] = append(w.aggregates[f.Name()], f)
 }
 
 // RegisterCatalogTable registers a table in the given schema of the catalog.
@@ -445,6 +456,9 @@ func (w *Worker) buildServer(isHTTP bool) *vgirpc.Server {
 
 	// Register all catalog methods
 	w.registerCatalogMethods(s)
+
+	// Register aggregate RPC handlers
+	w.registerAggregateRPCs(s)
 
 	return s
 }
