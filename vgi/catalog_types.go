@@ -10,24 +10,42 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+
+	"github.com/Query-farm/vgi-go/vgi/generated"
 )
+
+// CatalogExample is a usage example attached to a FunctionInfo.
+type CatalogExample struct {
+	SQL            string
+	Description    string
+	ExpectedOutput *string
+}
 
 // FunctionInfo describes a function in the catalog.
 type FunctionInfo struct {
-	Name               string
-	SchemaName         string
-	FunctionType       FunctionType
-	ArgSchema          *arrow.Schema // argument schema
-	OutputSchema       *arrow.Schema // return schema
-	Stability          FunctionStability
-	NullHandling       NullHandling
-	Description        string
-	Comment            string
-	Tags               map[string]string
-	Categories         []string
-	ProjectionPushdown *bool
-	FilterPushdown     *bool
-	RequiredSecrets    []SecretRequirement
+	Name                        string
+	SchemaName                  string
+	FunctionType                FunctionType
+	ArgSchema                   *arrow.Schema // argument schema
+	OutputSchema                *arrow.Schema // return schema
+	Stability                   FunctionStability
+	NullHandling                NullHandling
+	Description                 string
+	Comment                     string
+	Tags                        map[string]string
+	Examples                    []CatalogExample
+	Categories                  []string
+	ProjectionPushdown          *bool
+	FilterPushdown              *bool
+	SamplingPushdown            *bool
+	SupportedExpressionFilters  []string
+	OrderPreservation           string // "" = null
+	MaxWorkers                  int32
+	OrderDependent              string // dictionary, default "NOT_ORDER_DEPENDENT"
+	DistinctDependent           string // dictionary, default "NOT_DISTINCT_DEPENDENT"
+	SupportsWindow              bool
+	RequiredSettings            []string
+	RequiredSecrets             []SecretRequirement
 }
 
 var dictType = &arrow.DictionaryType{
@@ -35,30 +53,21 @@ var dictType = &arrow.DictionaryType{
 	ValueType: arrow.BinaryTypes.String,
 }
 
-// functionInfoSchema matches Python MRO: CatalogObject(comment,tags) + CatalogSchemaObject(name,schema_name) + FunctionInfo fields
-var functionInfoSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "comment", Type: arrow.BinaryTypes.String, Nullable: true},
-	{Name: "tags", Type: arrow.MapOf(arrow.BinaryTypes.String, arrow.BinaryTypes.String)},
-	{Name: "name", Type: arrow.BinaryTypes.String},
-	{Name: "schema_name", Type: arrow.BinaryTypes.String},
-	{Name: "function_type", Type: dictType},
-	{Name: "arguments", Type: arrow.BinaryTypes.Binary},
-	{Name: "output_schema", Type: arrow.BinaryTypes.Binary},
-	{Name: "stability", Type: dictType, Nullable: true},
-	{Name: "null_handling", Type: dictType, Nullable: true},
-	{Name: "description", Type: arrow.BinaryTypes.String},
-	{Name: "examples", Type: arrow.ListOf(arrow.BinaryTypes.Binary)},
-	{Name: "categories", Type: arrow.ListOf(arrow.BinaryTypes.String)},
-	{Name: "projection_pushdown", Type: &arrow.BooleanType{}, Nullable: true},
-	{Name: "filter_pushdown", Type: &arrow.BooleanType{}, Nullable: true},
-	{Name: "order_preservation", Type: dictType, Nullable: true},
-	{Name: "max_workers", Type: arrow.PrimitiveTypes.Int32, Nullable: true},
-	{Name: "required_secrets", Type: arrow.ListOf(arrow.StructOf(
-		arrow.Field{Name: "secret_type", Type: arrow.BinaryTypes.String},
-		arrow.Field{Name: "secret_name", Type: arrow.BinaryTypes.String, Nullable: true},
-		arrow.Field{Name: "scope", Type: arrow.BinaryTypes.String, Nullable: true},
-	)), Nullable: true},
-}, nil)
+// exampleStructType is the struct type for one CatalogExample.
+var exampleStructType = arrow.StructOf(
+	arrow.Field{Name: "sql", Type: arrow.BinaryTypes.String},
+	arrow.Field{Name: "description", Type: arrow.BinaryTypes.String},
+	arrow.Field{Name: "expected_output", Type: arrow.BinaryTypes.String, Nullable: true},
+)
+
+// requiredSecretStructType is the struct type for one required-secret entry.
+var requiredSecretStructType = arrow.StructOf(
+	arrow.Field{Name: "secret_type", Type: arrow.BinaryTypes.String},
+	arrow.Field{Name: "scope", Type: arrow.BinaryTypes.String, Nullable: true},
+	arrow.Field{Name: "secret_name", Type: arrow.BinaryTypes.String, Nullable: true},
+)
+
+var functionInfoSchema = generated.FunctionInfoSchema
 
 // SerializeFunctionInfo serializes a FunctionInfo to IPC bytes.
 func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
@@ -154,10 +163,21 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	defer descBuilder.Release()
 	descBuilder.Append(info.Description)
 
-	// examples (empty list)
-	examplesBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.Binary)
+	// examples
+	examplesBuilder := array.NewListBuilder(mem, exampleStructType)
 	defer examplesBuilder.Release()
-	examplesBuilder.Append(true) // non-null empty list
+	examplesBuilder.Append(true)
+	exSb := examplesBuilder.ValueBuilder().(*array.StructBuilder)
+	for _, ex := range info.Examples {
+		exSb.Append(true)
+		exSb.FieldBuilder(0).(*array.StringBuilder).Append(ex.SQL)
+		exSb.FieldBuilder(1).(*array.StringBuilder).Append(ex.Description)
+		if ex.ExpectedOutput != nil {
+			exSb.FieldBuilder(2).(*array.StringBuilder).Append(*ex.ExpectedOutput)
+		} else {
+			exSb.FieldBuilder(2).(*array.StringBuilder).AppendNull()
+		}
+	}
 
 	// categories
 	categoriesBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
@@ -188,43 +208,88 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		fpBuilder.AppendNull()
 	}
 
+	// sampling_pushdown
+	spBuilder := array.NewBooleanBuilder(mem)
+	defer spBuilder.Release()
+	if info.SamplingPushdown != nil {
+		spBuilder.Append(*info.SamplingPushdown)
+	} else {
+		spBuilder.AppendNull()
+	}
+
+	// supported_expression_filters
+	sefBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer sefBuilder.Release()
+	sefBuilder.Append(true)
+	sefVb := sefBuilder.ValueBuilder().(*array.StringBuilder)
+	for _, f := range info.SupportedExpressionFilters {
+		sefVb.Append(f)
+	}
+
 	// order_preservation
 	opBuilder := array.NewDictionaryBuilder(mem, dictType)
 	defer opBuilder.Release()
-	opBuilder.AppendNull()
+	if info.OrderPreservation != "" {
+		opBuilder.(*array.BinaryDictionaryBuilder).AppendString(info.OrderPreservation)
+	} else {
+		opBuilder.AppendNull()
+	}
 
-	// max_workers
+	// max_workers (non-null)
 	mwBuilder := array.NewInt32Builder(mem)
 	defer mwBuilder.Release()
-	mwBuilder.AppendNull()
+	mwBuilder.Append(info.MaxWorkers)
 
-	// required_secrets
-	rsStructType := arrow.StructOf(
-		arrow.Field{Name: "secret_type", Type: arrow.BinaryTypes.String},
-		arrow.Field{Name: "secret_name", Type: arrow.BinaryTypes.String, Nullable: true},
-		arrow.Field{Name: "scope", Type: arrow.BinaryTypes.String, Nullable: true},
-	)
-	rsBuilder := array.NewListBuilder(mem, rsStructType)
-	defer rsBuilder.Release()
-	if len(info.RequiredSecrets) > 0 {
-		rsBuilder.Append(true)
-		sb := rsBuilder.ValueBuilder().(*array.StructBuilder)
-		for _, rs := range info.RequiredSecrets {
-			sb.Append(true)
-			sb.FieldBuilder(0).(*array.StringBuilder).Append(rs.SecretType)
-			if rs.SecretName != "" {
-				sb.FieldBuilder(1).(*array.StringBuilder).Append(rs.SecretName)
-			} else {
-				sb.FieldBuilder(1).(*array.StringBuilder).AppendNull()
-			}
-			if rs.Scope != "" {
-				sb.FieldBuilder(2).(*array.StringBuilder).Append(rs.Scope)
-			} else {
-				sb.FieldBuilder(2).(*array.StringBuilder).AppendNull()
-			}
+	// order_dependent (non-null dict)
+	odBuilder := array.NewDictionaryBuilder(mem, dictType)
+	defer odBuilder.Release()
+	od := info.OrderDependent
+	if od == "" {
+		od = "NOT_ORDER_DEPENDENT"
+	}
+	odBuilder.(*array.BinaryDictionaryBuilder).AppendString(od)
+
+	// distinct_dependent (non-null dict)
+	ddBuilder := array.NewDictionaryBuilder(mem, dictType)
+	defer ddBuilder.Release()
+	dd := info.DistinctDependent
+	if dd == "" {
+		dd = "NOT_DISTINCT_DEPENDENT"
+	}
+	ddBuilder.(*array.BinaryDictionaryBuilder).AppendString(dd)
+
+	// supports_window
+	swBuilder := array.NewBooleanBuilder(mem)
+	defer swBuilder.Release()
+	swBuilder.Append(info.SupportsWindow)
+
+	// required_settings
+	reqSettingsBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer reqSettingsBuilder.Release()
+	reqSettingsBuilder.Append(true)
+	rsVb := reqSettingsBuilder.ValueBuilder().(*array.StringBuilder)
+	for _, s := range info.RequiredSettings {
+		rsVb.Append(s)
+	}
+
+	// required_secrets (non-null list)
+	rsListBuilder := array.NewListBuilder(mem, requiredSecretStructType)
+	defer rsListBuilder.Release()
+	rsListBuilder.Append(true)
+	rsSb := rsListBuilder.ValueBuilder().(*array.StructBuilder)
+	for _, rs := range info.RequiredSecrets {
+		rsSb.Append(true)
+		rsSb.FieldBuilder(0).(*array.StringBuilder).Append(rs.SecretType)
+		if rs.Scope != "" {
+			rsSb.FieldBuilder(1).(*array.StringBuilder).Append(rs.Scope)
+		} else {
+			rsSb.FieldBuilder(1).(*array.StringBuilder).AppendNull()
 		}
-	} else {
-		rsBuilder.AppendNull()
+		if rs.SecretName != "" {
+			rsSb.FieldBuilder(2).(*array.StringBuilder).Append(rs.SecretName)
+		} else {
+			rsSb.FieldBuilder(2).(*array.StringBuilder).AppendNull()
+		}
 	}
 
 	cols := []arrow.Array{
@@ -242,9 +307,15 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		categoriesBuilder.NewArray(),
 		ppBuilder.NewArray(),
 		fpBuilder.NewArray(),
+		spBuilder.NewArray(),
+		sefBuilder.NewArray(),
 		opBuilder.NewArray(),
 		mwBuilder.NewArray(),
-		rsBuilder.NewArray(),
+		odBuilder.NewArray(),
+		ddBuilder.NewArray(),
+		swBuilder.NewArray(),
+		reqSettingsBuilder.NewArray(),
+		rsListBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {
@@ -274,13 +345,7 @@ type SchemaInfo struct {
 	AttachID []byte
 }
 
-// Field order matches Python MRO: CatalogObject(comment, tags) then SchemaInfo(attach_id, name)
-var schemaInfoSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "comment", Type: arrow.BinaryTypes.String, Nullable: true},
-	{Name: "tags", Type: arrow.MapOf(arrow.BinaryTypes.String, arrow.BinaryTypes.String)},
-	{Name: "attach_id", Type: arrow.BinaryTypes.Binary},
-	{Name: "name", Type: arrow.BinaryTypes.String},
-}, nil)
+var schemaInfoSchema = generated.SchemaInfoSchema
 
 // SerializeSchemaInfo serializes a SchemaInfo to IPC bytes.
 func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error) {

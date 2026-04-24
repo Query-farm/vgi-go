@@ -13,6 +13,8 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+
+	"github.com/Query-farm/vgi-go/vgi/generated"
 )
 
 // Sql represents a raw SQL expression that should be passed through verbatim
@@ -102,12 +104,7 @@ type ScanArg struct {
 }
 
 // scanFunctionResultSchema is the wire format for ScanFunctionResult.
-// Matches Python ScanFunctionResult.ARROW_SCHEMA.
-var scanFunctionResultSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "function_name", Type: arrow.BinaryTypes.String},
-	{Name: "arguments", Type: arrow.BinaryTypes.Binary},
-	{Name: "required_extensions", Type: arrow.ListOf(arrow.BinaryTypes.String)},
-}, nil)
+var scanFunctionResultSchema = generated.ScanFunctionResultSchema
 
 // SerializeScanFunctionResult serializes a ScanFunctionResult to IPC bytes.
 func SerializeScanFunctionResult(result *ScanFunctionResult) ([]byte, error) {

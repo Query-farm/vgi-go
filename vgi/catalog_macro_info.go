@@ -11,6 +11,8 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+
+	"github.com/Query-farm/vgi-go/vgi/generated"
 )
 
 // MacroType identifies the kind of macro.
@@ -50,17 +52,7 @@ type MacroInfo struct {
 	Definition             string
 }
 
-// Field order matches Python MRO: CatalogObject(comment,tags) + CatalogSchemaObject(name,schema_name) + MacroInfo fields
-var macroInfoSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "comment", Type: arrow.BinaryTypes.String, Nullable: true},
-	{Name: "tags", Type: arrow.MapOf(arrow.BinaryTypes.String, arrow.BinaryTypes.String)},
-	{Name: "name", Type: arrow.BinaryTypes.String},
-	{Name: "schema_name", Type: arrow.BinaryTypes.String},
-	{Name: "macro_type", Type: dictType},
-	{Name: "parameters", Type: arrow.ListOf(arrow.BinaryTypes.String)},
-	{Name: "parameter_default_values", Type: arrow.BinaryTypes.Binary, Nullable: true},
-	{Name: "definition", Type: arrow.BinaryTypes.String},
-}, nil)
+var macroInfoSchema = generated.MacroInfoSchema
 
 // SerializeMacroInfo serializes a MacroInfo to IPC bytes.
 func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
@@ -114,13 +106,13 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 		}
 	}
 
-	// parameter_default_values (binary, nullable)
+	// parameter_default_values (binary, non-null; empty bytes when no defaults)
 	pdvBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
 	defer pdvBuilder.Release()
 	if info.ParameterDefaultValues != nil {
 		pdvBuilder.Append(info.ParameterDefaultValues)
 	} else {
-		pdvBuilder.AppendNull()
+		pdvBuilder.Append([]byte{})
 	}
 
 	// definition

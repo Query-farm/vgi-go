@@ -1,6 +1,6 @@
 module github.com/Query-farm/vgi-go
 
-go 1.24.0
+go 1.25.0
 
 replace github.com/apache/arrow-go/v18 => github.com/rustyconover/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4
 

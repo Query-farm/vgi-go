@@ -21,9 +21,9 @@ type SerializedItems = [][]byte
 // Catalog wire types
 // ---------------------------------------------------------------------------
 
-// CatalogsResponseWire wraps the list of catalog names.
+// CatalogsResponseWire wraps the list of serialized CatalogInfo records.
 type CatalogsResponseWire struct {
-	Items []string `vgirpc:"items"`
+	Items SerializedItems `vgirpc:"items"`
 }
 
 // CatalogAttachRequestWire is the wire type for catalog_attach.
@@ -34,15 +34,20 @@ type CatalogAttachRequestWire struct {
 
 // CatalogAttachResultWire is the wire type for catalog_attach result.
 type CatalogAttachResultWire struct {
-	AttachID             []byte          `vgirpc:"attach_id"`
-	SupportsTransactions bool            `vgirpc:"supports_transactions"`
-	SupportsTimeTravel   bool            `vgirpc:"supports_time_travel"`
-	CatalogVersionFrozen bool            `vgirpc:"catalog_version_frozen"`
-	CatalogVersion       int64           `vgirpc:"catalog_version"`
-	AttachIDRequired     bool            `vgirpc:"attach_id_required"`
-	DefaultSchema        string          `vgirpc:"default_schema"`
-	Settings             SerializedItems `vgirpc:"settings"`
-	SecretTypes          SerializedItems `vgirpc:"secret_types"`
+	AttachID                      []byte            `vgirpc:"attach_id"`
+	SupportsTransactions          bool              `vgirpc:"supports_transactions"`
+	SupportsTimeTravel            bool              `vgirpc:"supports_time_travel"`
+	CatalogVersionFrozen          bool              `vgirpc:"catalog_version_frozen"`
+	CatalogVersion                int64             `vgirpc:"catalog_version"`
+	AttachIDRequired              bool              `vgirpc:"attach_id_required"`
+	DefaultSchema                 string            `vgirpc:"default_schema"`
+	Settings                      SerializedItems   `vgirpc:"settings"`
+	SecretTypes                   SerializedItems   `vgirpc:"secret_types"`
+	Comment                       *string           `vgirpc:"comment"`
+	Tags                          map[string]string `vgirpc:"tags"`
+	SupportsColumnStatistics      bool              `vgirpc:"supports_column_statistics"`
+	ResolvedDataVersion           *string           `vgirpc:"resolved_data_version"`
+	ResolvedImplementationVersion *string           `vgirpc:"resolved_implementation_version"`
 }
 
 // CatalogVersionRequestWire is the wire type for catalog_version.
@@ -546,7 +551,12 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_catalogs
 	vgirpc.Unary[struct{}, CatalogsResponseWire](s, "catalog_catalogs",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, _ struct{}) (CatalogsResponseWire, error) {
-			return CatalogsResponseWire{Items: []string{w.catalogName}}, nil
+			info := &CatalogInfo{Name: w.catalogName}
+			data, err := SerializeCatalogInfo(info)
+			if err != nil {
+				return CatalogsResponseWire{}, err
+			}
+			return CatalogsResponseWire{Items: SerializedItems{data}}, nil
 		})
 
 	// catalog_attach
@@ -622,6 +632,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				DefaultSchema:        "main",
 				Settings:             serializedSettings,
 				SecretTypes:          serializedSecretTypes,
+				Tags:                 map[string]string{},
 			}, nil
 		})
 

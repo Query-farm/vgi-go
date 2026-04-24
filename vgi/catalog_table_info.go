@@ -10,35 +10,29 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+
+	"github.com/Query-farm/vgi-go/vgi/generated"
 )
 
 // TableInfo describes a table in the catalog for wire serialization.
 type TableInfo struct {
-	Name                  string
-	SchemaName            string
-	Comment               string
-	Tags                  map[string]string
-	Columns               *arrow.Schema // serialized as IPC schema bytes
-	NotNullConstraints    []int32
-	UniqueConstraints     [][]int32
-	CheckConstraints      []string
-	PrimaryKeyConstraints [][]int32
-	ForeignKeyConstraints [][]byte // each []byte is an IPC-serialized FK RecordBatch
+	Name                     string
+	SchemaName               string
+	Comment                  string
+	Tags                     map[string]string
+	Columns                  *arrow.Schema // serialized as IPC schema bytes
+	NotNullConstraints       []int32
+	UniqueConstraints        [][]int32
+	CheckConstraints         []string
+	PrimaryKeyConstraints    [][]int32
+	ForeignKeyConstraints    [][]byte // each []byte is an IPC-serialized FK RecordBatch
+	SupportsInsert           bool
+	SupportsUpdate           bool
+	SupportsDelete           bool
+	SupportsColumnStatistics bool
 }
 
-// Field order matches Python MRO: CatalogObject(comment,tags) + CatalogSchemaObject(name,schema_name) + TableInfo fields
-var tableInfoSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "comment", Type: arrow.BinaryTypes.String, Nullable: true},
-	{Name: "tags", Type: arrow.MapOf(arrow.BinaryTypes.String, arrow.BinaryTypes.String)},
-	{Name: "name", Type: arrow.BinaryTypes.String},
-	{Name: "schema_name", Type: arrow.BinaryTypes.String},
-	{Name: "columns", Type: arrow.BinaryTypes.Binary},
-	{Name: "not_null_constraints", Type: arrow.ListOf(arrow.PrimitiveTypes.Int32)},
-	{Name: "unique_constraints", Type: arrow.ListOf(arrow.ListOf(arrow.PrimitiveTypes.Int32))},
-	{Name: "check_constraints", Type: arrow.ListOf(arrow.BinaryTypes.String)},
-	{Name: "primary_key_constraints", Type: arrow.ListOf(arrow.ListOf(arrow.PrimitiveTypes.Int32))},
-	{Name: "foreign_key_constraints", Type: arrow.ListOf(arrow.BinaryTypes.Binary)},
-}, nil)
+var tableInfoSchema = generated.TableInfoSchema
 
 // SerializeTableInfo serializes a TableInfo to IPC bytes.
 func SerializeTableInfo(info *TableInfo) ([]byte, error) {
@@ -152,6 +146,22 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		}
 	}
 
+	siBuilder := array.NewBooleanBuilder(mem)
+	defer siBuilder.Release()
+	siBuilder.Append(info.SupportsInsert)
+
+	suBuilder := array.NewBooleanBuilder(mem)
+	defer suBuilder.Release()
+	suBuilder.Append(info.SupportsUpdate)
+
+	sdBuilder := array.NewBooleanBuilder(mem)
+	defer sdBuilder.Release()
+	sdBuilder.Append(info.SupportsDelete)
+
+	scsBuilder := array.NewBooleanBuilder(mem)
+	defer scsBuilder.Release()
+	scsBuilder.Append(info.SupportsColumnStatistics)
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
@@ -163,6 +173,10 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		checkBuilder.NewArray(),
 		pkBuilder.NewArray(),
 		fkBuilder.NewArray(),
+		siBuilder.NewArray(),
+		suBuilder.NewArray(),
+		sdBuilder.NewArray(),
+		scsBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

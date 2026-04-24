@@ -33,11 +33,11 @@ type BindRequestWire struct {
 
 // BindResponseWire is the wire format for bind responses.
 type BindResponseWire struct {
-	OutputSchema      *[]byte   `vgirpc:"output_schema"`
-	OpaqueData        *[]byte   `vgirpc:"opaque_data"`
-	LookupSecretTypes *[]string `vgirpc:"lookup_secret_types"`
-	LookupScopes      *[]string `vgirpc:"lookup_scopes"`
-	LookupNames       *[]string `vgirpc:"lookup_names"`
+	OutputSchema      []byte   `vgirpc:"output_schema"`
+	OpaqueData        []byte   `vgirpc:"opaque_data"`
+	LookupSecretTypes []string `vgirpc:"lookup_secret_types"`
+	LookupScopes      []string `vgirpc:"lookup_scopes"`
+	LookupNames       []string `vgirpc:"lookup_names"`
 }
 
 // InitRequestWire is the wire format for init requests.
@@ -240,9 +240,9 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 			names[i] = sl.SecretName
 		}
 		return BindResponseWire{
-			LookupSecretTypes: &types,
-			LookupScopes:      &scopes,
-			LookupNames:       &names,
+			LookupSecretTypes: types,
+			LookupScopes:      scopes,
+			LookupNames:       names,
 		}, nil
 	}
 
@@ -252,10 +252,8 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 	}
 
 	resp := BindResponseWire{
-		OutputSchema: &outputSchemaBytes,
-	}
-	if len(bindResp.OpaqueData) > 0 {
-		resp.OpaqueData = &bindResp.OpaqueData
+		OutputSchema: outputSchemaBytes,
+		OpaqueData:   bindResp.OpaqueData,
 	}
 	return resp, nil
 }

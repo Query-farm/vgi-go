@@ -10,6 +10,8 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+
+	"github.com/Query-farm/vgi-go/vgi/generated"
 )
 
 // CatalogView describes a view to register in the catalog.
@@ -31,14 +33,7 @@ type ViewInfo struct {
 	Definition string
 }
 
-// Field order matches Python MRO: CatalogObject(comment,tags) + CatalogSchemaObject(name,schema_name) + ViewInfo fields
-var viewInfoSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "comment", Type: arrow.BinaryTypes.String, Nullable: true},
-	{Name: "tags", Type: arrow.MapOf(arrow.BinaryTypes.String, arrow.BinaryTypes.String)},
-	{Name: "name", Type: arrow.BinaryTypes.String},
-	{Name: "schema_name", Type: arrow.BinaryTypes.String},
-	{Name: "definition", Type: arrow.BinaryTypes.String},
-}, nil)
+var viewInfoSchema = generated.ViewInfoSchema
 
 // SerializeViewInfo serializes a ViewInfo to IPC bytes.
 func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
