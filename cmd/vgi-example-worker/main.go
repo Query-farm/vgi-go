@@ -263,6 +263,16 @@ func main() {
 		StatisticsCacheMaxAgeSeconds: &statsTTL0,
 	})
 
+	// Table with NO declared statistics — stats must come from the underlying
+	// scan function (SequenceFunction.Statistics) via table_function_statistics RPC.
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "funny_numbers",
+		Comment: "123456 integers; stats served by the sequence function, not the table",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "n", Type: arrow.PrimitiveTypes.Int64},
+		}, nil),
+	})
+
 	// Generated-column example: physical column `n` from sequence(10),
 	// with `doubled` and `label` materialized by DuckDB from SQL expressions.
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
@@ -541,6 +551,14 @@ func main() {
 				FunctionName: "sequence",
 				PositionalArguments: []vgi.ScanArg{
 					{Value: int64(100), Type: arrow.PrimitiveTypes.Int64},
+				},
+			}, nil
+		}
+		if schemaName == "data" && tableName == "funny_numbers" {
+			return &vgi.ScanFunctionResult{
+				FunctionName: "sequence",
+				PositionalArguments: []vgi.ScanArg{
+					{Value: int64(123456), Type: arrow.PrimitiveTypes.Int64},
 				},
 			}, nil
 		}

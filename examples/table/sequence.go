@@ -53,6 +53,24 @@ func (f *SequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardin
 	return &vgi.TableCardinality{Estimate: count, Max: count}, nil
 }
 
+func (f *SequenceFunction) Statistics(params *vgi.BindParams) ([]vgi.ColumnStatistics, error) {
+	count, err := params.Args.GetScalarInt64(0)
+	if err != nil || count <= 0 {
+		return nil, nil
+	}
+	increment := vgi.OptionalInt64(params.Args, "increment", 1)
+	maxValue := (count - 1) * increment
+	return []vgi.ColumnStatistics{{
+		ColumnName:    "n",
+		Type:          arrow.PrimitiveTypes.Int64,
+		Min:           int64(0),
+		Max:           maxValue,
+		HasNull:       false,
+		HasNotNull:    true,
+		DistinctCount: count,
+	}}, nil
+}
+
 type sequenceState struct {
 	vgi.BatchState
 	Increment int64

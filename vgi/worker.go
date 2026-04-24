@@ -468,6 +468,11 @@ func (w *Worker) buildServer(isHTTP bool) *vgirpc.Server {
 	// Register table_function_cardinality (unary)
 	vgirpc.Unary[CardinalityRequestWire, TableCardinality](s, "table_function_cardinality", w.handleCardinality)
 
+	// Register table_function_statistics (unary). Uses []byte result to avoid
+	// vgi-rpc-go's struct-to-IPC double-wrap — the C++ extension parses the
+	// IPC payload directly (see catalog_table_column_statistics_get).
+	vgirpc.Unary[CardinalityRequestWire, []byte](s, "table_function_statistics", w.handleTableFunctionStatistics)
+
 	// Register all catalog methods
 	w.registerCatalogMethods(s)
 

@@ -44,6 +44,13 @@ type CardinalityEstimator interface {
 	Cardinality(params *BindParams) (*TableCardinality, error)
 }
 
+// StatisticsProvider is an optional interface for TypedTableFunc
+// implementations that can report per-column output statistics to the
+// optimizer (min/max, null-ness, distinct count, string length).
+type StatisticsProvider interface {
+	Statistics(params *BindParams) ([]ColumnStatistics, error)
+}
+
 // AsTableFunction wraps a TypedTableFunc into a TableFunction for registration
 // with Worker.RegisterTable. The adapter:
 //   - Provides type-safe state casting (returns error instead of panic)
@@ -62,6 +69,9 @@ func AsTableFunction[S any](f TypedTableFunc[S]) TableFunction {
 	if init, ok := any(f).(OnIniter); ok {
 		base.onInit = init.OnInit
 	}
+	if stats, ok := any(f).(StatisticsProvider); ok {
+		base.statsProvider = stats
+	}
 
 	if card, ok := any(f).(CardinalityEstimator); ok {
 		return &typedTableAdapterWithCard[S]{
@@ -74,8 +84,16 @@ func AsTableFunction[S any](f TypedTableFunc[S]) TableFunction {
 
 // typedTableAdapter implements TableFunction by delegating to a TypedTableFunc[S].
 type typedTableAdapter[S any] struct {
-	inner  TypedTableFunc[S]
-	onInit func(*InitParams) (*GlobalInitResponse, error)
+	inner         TypedTableFunc[S]
+	onInit        func(*InitParams) (*GlobalInitResponse, error)
+	statsProvider StatisticsProvider
+}
+
+func (a *typedTableAdapter[S]) Statistics(params *BindParams) ([]ColumnStatistics, error) {
+	if a.statsProvider == nil {
+		return nil, nil
+	}
+	return a.statsProvider.Statistics(params)
 }
 
 func (a *typedTableAdapter[S]) Name() string               { return a.inner.Name() }

@@ -35,3 +35,11 @@ type TableFunctionWithCardinality interface {
 	// Cardinality returns an estimated row count for query optimization.
 	Cardinality(params *BindParams) (*TableCardinality, error)
 }
+
+// TableFunctionWithStatistics extends TableFunction with per-column statistics
+// that help the optimizer fold or skip filters before running the scan.
+type TableFunctionWithStatistics interface {
+	TableFunction
+	// Statistics returns per-output-column stats (empty slice or nil = unknown).
+	Statistics(params *BindParams) ([]ColumnStatistics, error)
+}

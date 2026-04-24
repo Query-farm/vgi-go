@@ -49,6 +49,24 @@ func (f *DoubleSequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.Table
 	return &vgi.TableCardinality{Estimate: count, Max: count}, nil
 }
 
+func (f *DoubleSequenceFunction) Statistics(params *vgi.BindParams) ([]vgi.ColumnStatistics, error) {
+	count, err := params.Args.GetScalarInt64(0)
+	if err != nil || count <= 0 {
+		return nil, nil
+	}
+	increment := vgi.OptionalFloat64(params.Args, "increment", 1.0)
+	maxValue := float64(count-1) * increment
+	return []vgi.ColumnStatistics{{
+		ColumnName:    "n",
+		Type:          arrow.PrimitiveTypes.Float64,
+		Min:           0.0,
+		Max:           maxValue,
+		HasNull:       false,
+		HasNotNull:    true,
+		DistinctCount: count,
+	}}, nil
+}
+
 type doubleSequenceState struct {
 	vgi.BatchState
 	Increment float64

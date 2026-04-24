@@ -691,6 +691,38 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 	}, nil
 }
 
+// handleTableFunctionStatistics processes a table_function_statistics RPC
+// request, returning serialized per-column statistics IPC bytes (or nil when
+// unknown).
+func (w *Worker) handleTableFunctionStatistics(ctx context.Context, callCtx *vgirpc.CallContext, req CardinalityRequestWire) ([]byte, error) {
+	bindReq, err := w.deserializeBindRequest(req.BindCall)
+	if err != nil {
+		return nil, fmt.Errorf("deserializing bind_call: %w", err)
+	}
+	bindParams, err := w.parseBindRequest(*bindReq)
+	if err != nil {
+		return nil, err
+	}
+	bindParams.Auth = callCtx.Auth
+
+	fn, err := w.resolveFunctionWithOverload(bindReq.FunctionName, FunctionType(bindReq.FunctionType), bindParams.Args, bindParams.InputSchema)
+	if err != nil {
+		return nil, err
+	}
+	statsFn, ok := fn.(TableFunctionWithStatistics)
+	if !ok {
+		return nil, nil
+	}
+	stats, err := statsFn.Statistics(bindParams)
+	if err != nil {
+		return nil, err
+	}
+	if len(stats) == 0 {
+		return nil, nil
+	}
+	return SerializeColumnStatistics(stats, nil)
+}
+
 // handleCardinality processes a table_function_cardinality RPC request.
 func (w *Worker) handleCardinality(ctx context.Context, callCtx *vgirpc.CallContext, req CardinalityRequestWire) (TableCardinality, error) {
 	bindReq, err := w.deserializeBindRequest(req.BindCall)
