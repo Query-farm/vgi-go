@@ -308,6 +308,9 @@ type Worker struct {
 	// Functions not present in the map are visible to every catalog.
 	catalogFunctionScope          map[string]string
 	storages                      sync.Map // map[hex execution ID string]*ExecutionStorage
+	fsOnce                        sync.Once
+	fs                            FunctionStorage
+	fsErr                         error
 	settings                      []SettingSpec
 	catalogTables                 map[string][]CatalogTable // schema_name → tables
 	catalogViews                  map[string][]CatalogView  // schema_name → views
@@ -754,7 +757,11 @@ func newExecutionID() []byte {
 	return id[:]
 }
 
-// getOrCreateStorage returns or creates an ExecutionStorage for the given execution ID.
+// getOrCreateStorage returns or creates an ExecutionStorage for the given
+// execution ID. The wrapper binds against the worker's shared FunctionStorage
+// backend (initialized lazily on first call) so every execution in the
+// worker uses one backend — one SQLite DB shared across all executions and
+// across worker subprocesses spawned for parallel scans.
 func (w *Worker) getOrCreateStorage(ctx context.Context, executionID []byte) (*ExecutionStorage, error) {
 	key := hex.EncodeToString(executionID)
 	if tracker, ok := ctx.Value(storageTrackerKey).(*storageTracker); ok {
@@ -763,14 +770,31 @@ func (w *Worker) getOrCreateStorage(ctx context.Context, executionID []byte) (*E
 	if s, ok := w.storages.Load(key); ok {
 		return s.(*ExecutionStorage), nil
 	}
+	back, err := w.functionStorage()
+	if err != nil {
+		return nil, err
+	}
 	s := NewExecutionStorage()
+	s.SetBackend(back)
 	if err := s.SetExecutionID(executionID); err != nil {
 		return nil, err
 	}
-	actual, loaded := w.storages.LoadOrStore(key, s)
-	if loaded {
-		// Another goroutine beat us; close our duplicate
-		s.Cleanup()
-	}
+	actual, _ := w.storages.LoadOrStore(key, s)
 	return actual.(*ExecutionStorage), nil
+}
+
+// functionStorage returns the worker's shared FunctionStorage backend,
+// constructed on first call. Today this is always a SQLite backend at the
+// per-user default path; an env-driven selector ("VGI_WORKER_SHARED_STORAGE")
+// can be added later to pick alternative backends (Cloudflare DO, etc.).
+func (w *Worker) functionStorage() (FunctionStorage, error) {
+	w.fsOnce.Do(func() {
+		s, err := NewSQLiteStorage(SQLiteStorageOptions{})
+		if err != nil {
+			w.fsErr = err
+			return
+		}
+		w.fs = s
+	})
+	return w.fs, w.fsErr
 }

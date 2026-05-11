@@ -7,10 +7,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -44,10 +43,15 @@ type SQLiteStorageOptions struct {
 }
 
 // sqliteStorage implements FunctionStorage against a single SQLite database.
+// Concurrency is handled entirely by database/sql + SQLite WAL:
+//   - Within-process: MaxOpenConns(1) serializes operations through one
+//     connection. database/sql queues callers transparently — no Go-level
+//     mutex needed.
+//   - Cross-process: WAL mode + busy_timeout=30000 lets multiple worker
+//     subprocesses share the file. The per-conn busy_timeout means writers
+//     wait up to 30s for the file lock before returning SQLITE_BUSY.
 type sqliteStorage struct {
 	db                *sql.DB
-	mu                sync.Mutex
-	rng               *rand.Rand
 	cleanupSampleRate float64
 	cleanupMaxAge     time.Duration
 }
@@ -118,7 +122,6 @@ func NewSQLiteStorage(opts SQLiteStorageOptions) (FunctionStorage, error) {
 	}
 	return &sqliteStorage{
 		db:                db,
-		rng:               rand.New(rand.NewSource(time.Now().UnixNano())),
 		cleanupSampleRate: rate,
 		cleanupMaxAge:     maxAge,
 	}, nil
@@ -210,13 +213,14 @@ func initSQLiteSchema(db *sql.DB) error {
 	return nil
 }
 
-// maybeCleanup opportunistically prunes old rows. Called from mutation paths.
-// Holds no lock — the caller must not be holding s.mu.
+// maybeCleanup opportunistically prunes old rows on write paths. Uses
+// math/rand/v2's goroutine-safe top-level Float64. No-op when the sample
+// rate is 0 (the default).
 func (s *sqliteStorage) maybeCleanup() {
-	s.mu.Lock()
-	r := s.rng.Float64()
-	s.mu.Unlock()
-	if r < s.cleanupSampleRate {
+	if s.cleanupSampleRate <= 0 {
+		return
+	}
+	if rand.Float64() < s.cleanupSampleRate {
 		_, _ = s.CleanupOldEntries(s.cleanupMaxAge)
 	}
 }
@@ -227,8 +231,6 @@ func (s *sqliteStorage) maybeCleanup() {
 
 func (s *sqliteStorage) WorkerPut(executionID []byte, workerID int64, state []byte) error {
 	s.maybeCleanup()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO worker_state (execution_id, worker_id, state_data, created_at)
 		 VALUES (?, ?, ?, julianday('now'))`,
@@ -238,8 +240,6 @@ func (s *sqliteStorage) WorkerPut(executionID []byte, workerID int64, state []by
 }
 
 func (s *sqliteStorage) WorkerCollect(executionID []byte) ([][]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -271,8 +271,6 @@ func (s *sqliteStorage) WorkerCollect(executionID []byte) ([][]byte, error) {
 }
 
 func (s *sqliteStorage) WorkerScan(executionID []byte) ([]WorkerStateEntry, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(
 		`SELECT worker_id, state_data FROM worker_state WHERE execution_id = ? ORDER BY worker_id`,
 		executionID,
@@ -298,8 +296,6 @@ func (s *sqliteStorage) WorkerScan(executionID []byte) ([]WorkerStateEntry, erro
 
 func (s *sqliteStorage) ScanWorkerPut(executionID, streamID, state []byte) error {
 	s.maybeCleanup()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO scan_worker_state (execution_id, stream_id, state_data, created_at)
 		 VALUES (?, ?, ?, julianday('now'))`,
@@ -309,8 +305,6 @@ func (s *sqliteStorage) ScanWorkerPut(executionID, streamID, state []byte) error
 }
 
 func (s *sqliteStorage) ScanWorkerScan(executionID []byte) ([]ScanWorkerStateEntry, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	rows, err := s.db.Query(
 		`SELECT stream_id, state_data FROM scan_worker_state WHERE execution_id = ?`,
 		executionID,
@@ -336,8 +330,6 @@ func (s *sqliteStorage) ScanWorkerScan(executionID []byte) ([]ScanWorkerStateEnt
 
 func (s *sqliteStorage) QueuePush(executionID []byte, items [][]byte) (int, error) {
 	s.maybeCleanup()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -372,50 +364,45 @@ func (s *sqliteStorage) QueuePush(executionID []byte, items [][]byte) (int, erro
 }
 
 func (s *sqliteStorage) QueuePop(executionID []byte) ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	tx, err := s.db.Begin()
-	if err != nil {
+	// Fast path: single DELETE ... RETURNING claims the next item atomically
+	// without a separate transaction. Holds the writer lock only for the
+	// duration of one statement — short enough that even busy file-level
+	// contention across worker subprocesses fits inside busy_timeout.
+	var item []byte
+	err := s.db.QueryRow(
+		`DELETE FROM work_queue
+		 WHERE id = (
+		     SELECT id FROM work_queue
+		     WHERE execution_id = ?
+		     ORDER BY id ASC LIMIT 1
+		 )
+		 RETURNING work_item`,
+		executionID,
+	).Scan(&item)
+	if err == nil {
+		return item, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	// Reject unknown invocations.
+	// No row returned — disambiguate "empty queue" from "unknown invocation".
+	// This second query only fires when the queue is exhausted, so it doesn't
+	// add cost to the steady-state pop path.
 	var registered int
-	err = tx.QueryRow(
+	err = s.db.QueryRow(
 		`SELECT 1 FROM invocation_registry WHERE execution_id = ?`,
 		executionID,
 	).Scan(&registered)
 	if errors.Is(err, sql.ErrNoRows) {
-		_ = tx.Rollback()
 		return nil, ErrUnknownInvocation
 	}
 	if err != nil {
-		_ = tx.Rollback()
 		return nil, err
 	}
-	var id int64
-	var item []byte
-	err = tx.QueryRow(
-		`SELECT id, work_item FROM work_queue WHERE execution_id = ? ORDER BY id LIMIT 1`,
-		executionID,
-	).Scan(&id, &item)
-	if errors.Is(err, sql.ErrNoRows) {
-		_ = tx.Rollback()
-		return nil, nil // empty queue
-	}
-	if err != nil {
-		_ = tx.Rollback()
-		return nil, err
-	}
-	if _, err := tx.Exec(`DELETE FROM work_queue WHERE id = ?`, id); err != nil {
-		_ = tx.Rollback()
-		return nil, err
-	}
-	return item, tx.Commit()
+	return nil, nil // registered but empty
 }
 
 func (s *sqliteStorage) QueueClear(executionID []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -442,8 +429,6 @@ func (s *sqliteStorage) AggregateStateGet(executionID []byte, groupIDs []int64) 
 	if len(groupIDs) == 0 {
 		return out, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	stmt, err := s.db.Prepare(
 		`SELECT state_data FROM aggregate_state WHERE execution_id = ? AND group_id = ?`,
 	)
@@ -470,8 +455,6 @@ func (s *sqliteStorage) AggregateStatePut(executionID []byte, entries []Aggregat
 		return nil
 	}
 	s.maybeCleanup()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -495,8 +478,6 @@ func (s *sqliteStorage) AggregateStatePut(executionID []byte, entries []Aggregat
 }
 
 func (s *sqliteStorage) AggregateStateClear(executionID []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	_, err := s.db.Exec(`DELETE FROM aggregate_state WHERE execution_id = ?`, executionID)
 	return err
 }
@@ -506,8 +487,6 @@ func (s *sqliteStorage) AggregateStateClear(executionID []byte) error {
 // ---------------------------------------------------------------------------
 
 func (s *sqliteStorage) AggregateConstArgsPut(executionID []byte, functionName string, args []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO aggregate_const_args (execution_id, function_name, args, created_at)
 		 VALUES (?, ?, ?, julianday('now'))`,
@@ -517,8 +496,6 @@ func (s *sqliteStorage) AggregateConstArgsPut(executionID []byte, functionName s
 }
 
 func (s *sqliteStorage) AggregateConstArgsGet(executionID []byte, functionName string) ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var data []byte
 	err := s.db.QueryRow(
 		`SELECT args FROM aggregate_const_args WHERE execution_id = ? AND function_name = ?`,
@@ -536,8 +513,6 @@ func (s *sqliteStorage) AggregateConstArgsGet(executionID []byte, functionName s
 
 func (s *sqliteStorage) AggregateWindowPartitionPut(executionID []byte, partitionID int64, data []byte) error {
 	s.maybeCleanup()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO aggregate_window_partitions (execution_id, partition_id, payload, created_at)
 		 VALUES (?, ?, ?, julianday('now'))`,
@@ -547,8 +522,6 @@ func (s *sqliteStorage) AggregateWindowPartitionPut(executionID []byte, partitio
 }
 
 func (s *sqliteStorage) AggregateWindowPartitionGet(executionID []byte, partitionID int64) ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var data []byte
 	err := s.db.QueryRow(
 		`SELECT payload FROM aggregate_window_partitions WHERE execution_id = ? AND partition_id = ?`,
@@ -561,8 +534,6 @@ func (s *sqliteStorage) AggregateWindowPartitionGet(executionID []byte, partitio
 }
 
 func (s *sqliteStorage) AggregateWindowPartitionDelete(executionID []byte, partitionID int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	_, err := s.db.Exec(
 		`DELETE FROM aggregate_window_partitions WHERE execution_id = ? AND partition_id = ?`,
 		executionID, partitionID,
@@ -571,8 +542,6 @@ func (s *sqliteStorage) AggregateWindowPartitionDelete(executionID []byte, parti
 }
 
 func (s *sqliteStorage) AggregateWindowPartitionClear(executionID []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	_, err := s.db.Exec(
 		`DELETE FROM aggregate_window_partitions WHERE execution_id = ?`,
 		executionID,
@@ -589,8 +558,6 @@ func (s *sqliteStorage) TransactionStateGet(transactionID []byte, keys [][]byte)
 	if len(keys) == 0 {
 		return out, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	stmt, err := s.db.Prepare(
 		`SELECT value FROM transaction_state WHERE transaction_id = ? AND key = ?`,
 	)
@@ -617,8 +584,6 @@ func (s *sqliteStorage) TransactionStatePut(transactionID []byte, items []Transa
 		return nil
 	}
 	s.maybeCleanup()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -642,8 +607,6 @@ func (s *sqliteStorage) TransactionStatePut(transactionID []byte, items []Transa
 }
 
 func (s *sqliteStorage) TransactionStateClear(transactionID []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	_, err := s.db.Exec(`DELETE FROM transaction_state WHERE transaction_id = ?`, transactionID)
 	return err
 }
@@ -653,8 +616,6 @@ func (s *sqliteStorage) TransactionStateClear(transactionID []byte) error {
 // ---------------------------------------------------------------------------
 
 func (s *sqliteStorage) CleanupOldEntries(maxAge time.Duration) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	// julianday math: 1 day = 1.0; convert maxAge to days.
 	days := maxAge.Hours() / 24.0
 	total := 0
@@ -682,8 +643,6 @@ func (s *sqliteStorage) CleanupOldEntries(maxAge time.Duration) (int, error) {
 }
 
 func (s *sqliteStorage) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.db == nil {
 		return nil
 	}
