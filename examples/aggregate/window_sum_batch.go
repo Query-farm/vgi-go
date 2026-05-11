@@ -40,10 +40,13 @@ func (WindowSumBatchFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// windowSumBatchArgs is the typed argument schema for vgi_window_sum_batch().
+type windowSumBatchArgs struct {
+	Value int64 `vgi:"pos=0,const=false,doc=Column to sum"`
+}
+
 func (WindowSumBatchFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "int64", Doc: "Column to sum"},
-	}
+	return vgi.DeriveArgSpecs(windowSumBatchArgs{})
 }
 
 func (WindowSumBatchFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {

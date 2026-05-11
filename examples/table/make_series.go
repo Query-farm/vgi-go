@@ -17,6 +17,30 @@ var makeSeriesOutputSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "value", Type: arrow.PrimitiveTypes.Int64},
 }, nil)
 
+// Typed argument schemas for each make_series overload.
+type makeSeriesCountArgs struct {
+	Count int64 `vgi:"pos=0,doc=Number of integers"`
+}
+
+type makeSeriesRangeArgs struct {
+	Start int64 `vgi:"pos=0,doc=Start value (inclusive)"`
+	Stop  int64 `vgi:"pos=1,doc=Stop value (exclusive)"`
+}
+
+type makeSeriesStepArgs struct {
+	Start int64 `vgi:"pos=0,doc=Start value (inclusive)"`
+	Stop  int64 `vgi:"pos=1,doc=Stop value (exclusive)"`
+	Step  int64 `vgi:"pos=2,doc=Step increment"`
+}
+
+type makeSeriesCsvArgs struct {
+	Values string `vgi:"pos=0,doc=Comma-separated integers"`
+}
+
+type makeSeriesFloatStepArgs struct {
+	Step float64 `vgi:"pos=0,doc=Step size between values"`
+}
+
 // ---------------------------------------------------------------------------
 // make_series(count) — generate 0..count-1
 // ---------------------------------------------------------------------------
@@ -35,9 +59,7 @@ func (f *MakeSeriesCountFunction) Metadata() vgi.FunctionMetadata {
 }
 
 func (f *MakeSeriesCountFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of integers", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(makeSeriesCountArgs{})
 }
 
 func (f *MakeSeriesCountFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -51,12 +73,15 @@ type makeSeriesState struct {
 }
 
 func (f *MakeSeriesCountFunction) NewState(params *vgi.ProcessParams) (*makeSeriesState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	if count < 0 {
-		count = 0
+	var args makeSeriesCountArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	if args.Count < 0 {
+		args.Count = 0
 	}
 	return &makeSeriesState{
-		BatchState: vgi.NewBatchState(count, 1024),
+		BatchState: vgi.NewBatchState(args.Count, 1024),
 		Start:      0,
 		Step:       1,
 	}, nil
@@ -94,10 +119,7 @@ func (f *MakeSeriesRangeFunction) Metadata() vgi.FunctionMetadata {
 }
 
 func (f *MakeSeriesRangeFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "start", Position: 0, ArrowType: "int64", Doc: "Start value (inclusive)", IsConst: true},
-		{Name: "stop", Position: 1, ArrowType: "int64", Doc: "Stop value (exclusive)", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(makeSeriesRangeArgs{})
 }
 
 func (f *MakeSeriesRangeFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -105,15 +127,17 @@ func (f *MakeSeriesRangeFunction) OnBind(params *vgi.BindParams) (*vgi.BindRespo
 }
 
 func (f *MakeSeriesRangeFunction) NewState(params *vgi.ProcessParams) (*makeSeriesState, error) {
-	start, _ := params.Args.GetScalarInt64(0)
-	stop, _ := params.Args.GetScalarInt64(1)
-	count := stop - start
+	var args makeSeriesRangeArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	count := args.Stop - args.Start
 	if count < 0 {
 		count = 0
 	}
 	return &makeSeriesState{
 		BatchState: vgi.NewBatchState(count, 1024),
-		Start:      start,
+		Start:      args.Start,
 		Step:       1,
 	}, nil
 }
@@ -149,11 +173,7 @@ func (f *MakeSeriesStepFunction) Metadata() vgi.FunctionMetadata {
 }
 
 func (f *MakeSeriesStepFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "start", Position: 0, ArrowType: "int64", Doc: "Start value (inclusive)", IsConst: true},
-		{Name: "stop", Position: 1, ArrowType: "int64", Doc: "Stop value (exclusive)", IsConst: true},
-		{Name: "step", Position: 2, ArrowType: "int64", Doc: "Step increment", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(makeSeriesStepArgs{})
 }
 
 func (f *MakeSeriesStepFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -161,19 +181,21 @@ func (f *MakeSeriesStepFunction) OnBind(params *vgi.BindParams) (*vgi.BindRespon
 }
 
 func (f *MakeSeriesStepFunction) NewState(params *vgi.ProcessParams) (*makeSeriesState, error) {
-	start, _ := params.Args.GetScalarInt64(0)
-	stop, _ := params.Args.GetScalarInt64(1)
-	step, _ := params.Args.GetScalarInt64(2)
+	var args makeSeriesStepArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	step := args.Step
 	if step <= 0 {
 		step = 1
 	}
-	count := (stop - start + step - 1) / step
+	count := (args.Stop - args.Start + step - 1) / step
 	if count < 0 {
 		count = 0
 	}
 	return &makeSeriesState{
 		BatchState: vgi.NewBatchState(count, 1024),
-		Start:      start,
+		Start:      args.Start,
 		Step:       step,
 	}, nil
 }
@@ -210,9 +232,7 @@ func (f *MakeSeriesCsvFunction) Metadata() vgi.FunctionMetadata {
 }
 
 func (f *MakeSeriesCsvFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "values", Position: 0, ArrowType: "varchar", Doc: "Comma-separated integers", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(makeSeriesCsvArgs{})
 }
 
 func (f *MakeSeriesCsvFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -225,8 +245,11 @@ type makeSeriesCsvState struct {
 }
 
 func (f *MakeSeriesCsvFunction) NewState(params *vgi.ProcessParams) (*makeSeriesCsvState, error) {
-	csv, _ := params.Args.GetScalarString(0)
-	parts := strings.Split(csv, ",")
+	var args makeSeriesCsvArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	parts := strings.Split(args.Values, ",")
 	var values []int64
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
@@ -286,9 +309,7 @@ func (f *MakeSeriesFloatStepFunction) Metadata() vgi.FunctionMetadata {
 }
 
 func (f *MakeSeriesFloatStepFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "step", Position: 0, ArrowType: "double", Doc: "Step size between values", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(makeSeriesFloatStepArgs{})
 }
 
 func (f *MakeSeriesFloatStepFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -296,10 +317,13 @@ func (f *MakeSeriesFloatStepFunction) OnBind(params *vgi.BindParams) (*vgi.BindR
 }
 
 func (f *MakeSeriesFloatStepFunction) NewState(params *vgi.ProcessParams) (*makeSeriesFloatState, error) {
-	step, _ := params.Args.GetScalarFloat64(0)
+	var args makeSeriesFloatStepArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &makeSeriesFloatState{
 		BatchState: vgi.NewBatchState(10, 1024),
-		Step:       step,
+		Step:       args.Step,
 	}, nil
 }
 

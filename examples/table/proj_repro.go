@@ -84,6 +84,11 @@ func buildEmptyHeadersList(n int64) arrow.Array {
 	return listBuilder.NewArray()
 }
 
+// projReproArgs is the shared typed argument schema for all proj_repro variants.
+type projReproArgs struct {
+	N int64 `vgi:"pos=0,doc=Number of rows"`
+}
+
 // ProjReproStrictFunction emits batches built from params.OutputSchema only.
 type ProjReproStrictFunction struct{}
 
@@ -102,20 +107,24 @@ func (f *ProjReproStrictFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 func (f *ProjReproStrictFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "n", Position: 0, ArrowType: "int64", Doc: "Number of rows", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(projReproArgs{})
 }
 func (f *ProjReproStrictFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
 	return vgi.BindSchema(projReproWideSchema)
 }
 func (f *ProjReproStrictFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
-	n, _ := params.Args.GetScalarInt64(0)
-	return &vgi.TableCardinality{Estimate: n, Max: n}, nil
+	var args projReproArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	return &vgi.TableCardinality{Estimate: args.N, Max: args.N}, nil
 }
 func (f *ProjReproStrictFunction) NewState(params *vgi.ProcessParams) (*projReproState, error) {
-	n, _ := params.Args.GetScalarInt64(0)
-	return &projReproState{BatchState: vgi.NewBatchState(n, n)}, nil
+	var args projReproArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	return &projReproState{BatchState: vgi.NewBatchState(args.N, args.N)}, nil
 }
 func (f *ProjReproStrictFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *projReproState, out *vgirpc.OutputCollector) error {
 	return vgi.GenerateBatch(&state.BatchState, out, func(size int64) ([]arrow.Array, error) {
@@ -156,20 +165,24 @@ func (f *ProjReproFullSchemaFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 func (f *ProjReproFullSchemaFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "n", Position: 0, ArrowType: "int64", Doc: "Number of rows", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(projReproArgs{})
 }
 func (f *ProjReproFullSchemaFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
 	return vgi.BindSchema(projReproWideSchema)
 }
 func (f *ProjReproFullSchemaFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
-	n, _ := params.Args.GetScalarInt64(0)
-	return &vgi.TableCardinality{Estimate: n, Max: n}, nil
+	var args projReproArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	return &vgi.TableCardinality{Estimate: args.N, Max: args.N}, nil
 }
 func (f *ProjReproFullSchemaFunction) NewState(params *vgi.ProcessParams) (*projReproState, error) {
-	n, _ := params.Args.GetScalarInt64(0)
-	return &projReproState{BatchState: vgi.NewBatchState(n, n)}, nil
+	var args projReproArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	return &projReproState{BatchState: vgi.NewBatchState(args.N, args.N)}, nil
 }
 func (f *ProjReproFullSchemaFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *projReproState, out *vgirpc.OutputCollector) error {
 	// Always emit all 12 columns (full FIXED_SCHEMA), then let the
@@ -202,20 +215,24 @@ func (f *ProjReproChunkedFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 func (f *ProjReproChunkedFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "n", Position: 0, ArrowType: "int64", Doc: "Number of rows", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(projReproArgs{})
 }
 func (f *ProjReproChunkedFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
 	return vgi.BindSchema(projReproWideSchema)
 }
 func (f *ProjReproChunkedFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
-	n, _ := params.Args.GetScalarInt64(0)
-	return &vgi.TableCardinality{Estimate: n, Max: n}, nil
+	var args projReproArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	return &vgi.TableCardinality{Estimate: args.N, Max: args.N}, nil
 }
 func (f *ProjReproChunkedFunction) NewState(params *vgi.ProcessParams) (*projReproState, error) {
-	n, _ := params.Args.GetScalarInt64(0)
-	return &projReproState{BatchState: vgi.NewBatchState(n, 2)}, nil
+	var args projReproArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	return &projReproState{BatchState: vgi.NewBatchState(args.N, 2)}, nil
 }
 func (f *ProjReproChunkedFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *projReproState, out *vgirpc.OutputCollector) error {
 	return vgi.GenerateBatch(&state.BatchState, out, func(size int64) ([]arrow.Array, error) {
@@ -247,23 +264,27 @@ func (f *ProjReproMultiWorkerFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 func (f *ProjReproMultiWorkerFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "n", Position: 0, ArrowType: "int64", Doc: "Number of rows", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(projReproArgs{})
 }
 func (f *ProjReproMultiWorkerFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
 	return vgi.BindSchema(projReproWideSchema)
 }
 func (f *ProjReproMultiWorkerFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
-	n, _ := params.Args.GetScalarInt64(0)
-	return &vgi.TableCardinality{Estimate: n, Max: n}, nil
+	var args projReproArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	return &vgi.TableCardinality{Estimate: args.N, Max: args.N}, nil
 }
 func (f *ProjReproMultiWorkerFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
 	return &vgi.GlobalInitResponse{MaxWorkers: 4}, nil
 }
 func (f *ProjReproMultiWorkerFunction) NewState(params *vgi.ProcessParams) (*projReproState, error) {
-	n, _ := params.Args.GetScalarInt64(0)
-	return &projReproState{BatchState: vgi.NewBatchState(n, 2)}, nil
+	var args projReproArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	return &projReproState{BatchState: vgi.NewBatchState(args.N, 2)}, nil
 }
 func (f *ProjReproMultiWorkerFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *projReproState, out *vgirpc.OutputCollector) error {
 	return vgi.GenerateBatch(&state.BatchState, out, func(size int64) ([]arrow.Array, error) {

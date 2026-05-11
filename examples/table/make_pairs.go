@@ -21,6 +21,22 @@ var makePairsIntOutputSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "b", Type: arrow.PrimitiveTypes.Int64},
 }, nil)
 
+// Typed argument schemas for each make_pairs overload.
+type makePairsIntArgs struct {
+	Start int64 `vgi:"pos=0,doc=Start value (inclusive)"`
+	Stop  int64 `vgi:"pos=1,doc=Stop value (exclusive)"`
+}
+
+type makePairsStrArgs struct {
+	Prefix string `vgi:"pos=0,doc=Prefix string"`
+	Suffix string `vgi:"pos=1,doc=Suffix string"`
+}
+
+type makePairsMixedArgs struct {
+	Start int64  `vgi:"pos=0,doc=Start integer value"`
+	Label string `vgi:"pos=1,doc=String label prefix"`
+}
+
 type MakePairsIntFunction struct{}
 
 var _ vgi.TypedTableFunc[makePairsIntState] = (*MakePairsIntFunction)(nil)
@@ -35,10 +51,7 @@ func (f *MakePairsIntFunction) Metadata() vgi.FunctionMetadata {
 }
 
 func (f *MakePairsIntFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "start", Position: 0, ArrowType: "int64", Doc: "Start value (inclusive)", IsConst: true},
-		{Name: "stop", Position: 1, ArrowType: "int64", Doc: "Stop value (exclusive)", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(makePairsIntArgs{})
 }
 
 func (f *MakePairsIntFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -51,15 +64,17 @@ type makePairsIntState struct {
 }
 
 func (f *MakePairsIntFunction) NewState(params *vgi.ProcessParams) (*makePairsIntState, error) {
-	start, _ := params.Args.GetScalarInt64(0)
-	stop, _ := params.Args.GetScalarInt64(1)
-	count := stop - start
+	var args makePairsIntArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	count := args.Stop - args.Start
 	if count < 0 {
 		count = 0
 	}
 	return &makePairsIntState{
 		BatchState: vgi.NewBatchState(count, 1024),
-		Start:      start,
+		Start:      args.Start,
 	}, nil
 }
 
@@ -100,10 +115,7 @@ func (f *MakePairsStrFunction) Metadata() vgi.FunctionMetadata {
 }
 
 func (f *MakePairsStrFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "prefix", Position: 0, ArrowType: "varchar", Doc: "Prefix string", IsConst: true},
-		{Name: "suffix", Position: 1, ArrowType: "varchar", Doc: "Suffix string", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(makePairsStrArgs{})
 }
 
 func (f *MakePairsStrFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -117,12 +129,14 @@ type makePairsStrState struct {
 }
 
 func (f *MakePairsStrFunction) NewState(params *vgi.ProcessParams) (*makePairsStrState, error) {
-	prefix, _ := params.Args.GetScalarString(0)
-	suffix, _ := params.Args.GetScalarString(1)
+	var args makePairsStrArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &makePairsStrState{
 		BatchState: vgi.NewBatchState(5, 1024),
-		Prefix:     prefix,
-		Suffix:     suffix,
+		Prefix:     args.Prefix,
+		Suffix:     args.Suffix,
 	}, nil
 }
 
@@ -169,10 +183,7 @@ func (f *MakePairsMixedFunction) Metadata() vgi.FunctionMetadata {
 }
 
 func (f *MakePairsMixedFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "start", Position: 0, ArrowType: "int64", Doc: "Start integer value", IsConst: true},
-		{Name: "label", Position: 1, ArrowType: "varchar", Doc: "String label prefix", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(makePairsMixedArgs{})
 }
 
 func (f *MakePairsMixedFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -180,12 +191,14 @@ func (f *MakePairsMixedFunction) OnBind(params *vgi.BindParams) (*vgi.BindRespon
 }
 
 func (f *MakePairsMixedFunction) NewState(params *vgi.ProcessParams) (*makePairsMixedState, error) {
-	start, _ := params.Args.GetScalarInt64(0)
-	label, _ := params.Args.GetScalarString(1)
+	var args makePairsMixedArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &makePairsMixedState{
 		BatchState: vgi.NewBatchState(5, 1024),
-		Start:      start,
-		Label:      label,
+		Start:      args.Start,
+		Label:      args.Label,
 	}, nil
 }
 

@@ -27,10 +27,13 @@ func (f *GeneratorExceptionFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// generatorExceptionArgs is the typed argument schema for generator_exception().
+type generatorExceptionArgs struct {
+	FailAfter int64 `vgi:"pos=0,doc=Number of batches before failure"`
+}
+
 func (f *GeneratorExceptionFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "fail_after", Position: 0, ArrowType: "int64", Doc: "Number of batches before failure", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(generatorExceptionArgs{})
 }
 
 func (f *GeneratorExceptionFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -45,8 +48,11 @@ type generatorExceptionState struct {
 }
 
 func (f *GeneratorExceptionFunction) NewState(params *vgi.ProcessParams) (*generatorExceptionState, error) {
-	failAfter, _ := params.Args.GetScalarInt64(0)
-	return &generatorExceptionState{BatchCount: 0, FailAfter: failAfter}, nil
+	var args generatorExceptionArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	return &generatorExceptionState{BatchCount: 0, FailAfter: args.FailAfter}, nil
 }
 
 func (f *GeneratorExceptionFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *generatorExceptionState, out *vgirpc.OutputCollector) error {

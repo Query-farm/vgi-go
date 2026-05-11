@@ -37,11 +37,14 @@ func (f *FilterEchoFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// filterEchoArgs is the typed argument schema for filter_echo().
+type filterEchoArgs struct {
+	Count     int64 `vgi:"pos=0,doc=Number of rows to generate"`
+	BatchSize int64 `vgi:"default=2048,doc=Batch size for output"`
+}
+
 func (f *FilterEchoFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
-		{Name: "batch_size", Position: -1, ArrowType: "int64", Doc: "Batch size for output", HasDefault: true, DefaultValue: "2048", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(filterEchoArgs{})
 }
 
 func (f *FilterEchoFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -62,8 +65,10 @@ type filterEchoState struct {
 }
 
 func (f *FilterEchoFunction) NewState(params *vgi.ProcessParams) (*filterEchoState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	batchSize := vgi.OptionalInt64(params.Args, "batch_size", 2048)
+	var args filterEchoArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 
 	filterStr := "(none)"
 	if params.PushdownFilters != nil {
@@ -74,7 +79,7 @@ func (f *FilterEchoFunction) NewState(params *vgi.ProcessParams) (*filterEchoSta
 	}
 
 	return &filterEchoState{
-		BatchState: vgi.NewBatchState(count, batchSize),
+		BatchState: vgi.NewBatchState(args.Count, args.BatchSize),
 		FilterStr:  filterStr,
 	}, nil
 }

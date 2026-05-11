@@ -75,25 +75,32 @@ func (f *VersionedConstraintsScanFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// versionedConstraintsArgs is the typed argument schema for versioned_constraints_scan().
+var versionedConstraintsDefault = fmt.Sprintf("%d", versionedConstraintsCurrentVersion)
+
+type versionedConstraintsArgs struct {
+	Version int64 `vgi:"pos=0,doc=Data version to return"`
+}
+
 func (f *VersionedConstraintsScanFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "version", Position: 0, ArrowType: "int64", Doc: "Data version to return", IsConst: true,
-			HasDefault: true, DefaultValue: fmt.Sprintf("%d", versionedConstraintsCurrentVersion)},
-	}
+	specs := vgi.DeriveArgSpecs(versionedConstraintsArgs{})
+	specs[0].HasDefault = true
+	specs[0].DefaultValue = versionedConstraintsDefault
+	return specs
 }
 
 func (f *VersionedConstraintsScanFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	version := int64(versionedConstraintsCurrentVersion)
-	if len(params.Args.Positional) > 0 {
-		v, err := params.Args.GetScalarInt64(0)
-		if err != nil {
-			return nil, err
-		}
-		version = v
+	var args versionedConstraintsArgs
+	args.Version = versionedConstraintsCurrentVersion
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
 	}
-	schema, ok := VersionedConstraintsSchemas[version]
+	if args.Version == 0 {
+		args.Version = versionedConstraintsCurrentVersion
+	}
+	schema, ok := VersionedConstraintsSchemas[args.Version]
 	if !ok {
-		return nil, fmt.Errorf("Unknown version: %d", version)
+		return nil, fmt.Errorf("Unknown version: %d", args.Version)
 	}
 	return vgi.BindSchema(schema)
 }
@@ -104,15 +111,15 @@ type versionedConstraintsState struct {
 }
 
 func (f *VersionedConstraintsScanFunction) NewState(params *vgi.ProcessParams) (*versionedConstraintsState, error) {
-	version := int64(versionedConstraintsCurrentVersion)
-	if len(params.Args.Positional) > 0 {
-		v, err := params.Args.GetScalarInt64(0)
-		if err != nil {
-			return nil, err
-		}
-		version = v
+	var args versionedConstraintsArgs
+	args.Version = versionedConstraintsCurrentVersion
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
 	}
-	return &versionedConstraintsState{Version: version}, nil
+	if args.Version == 0 {
+		args.Version = versionedConstraintsCurrentVersion
+	}
+	return &versionedConstraintsState{Version: args.Version}, nil
 }
 
 func (f *VersionedConstraintsScanFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *versionedConstraintsState, out *vgirpc.OutputCollector) error {

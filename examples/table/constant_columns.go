@@ -28,11 +28,17 @@ func (f *ConstantColumnsFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// constantColumnsArgs is the typed argument schema for constant_columns().
+// Values is declared as []any varargs so the spec advertises the right shape;
+// the function reads the raw arrow.Array values from params.Args.Positional
+// directly (BindArgs leaves []any varargs slices nil).
+type constantColumnsArgs struct {
+	Count  int64 `vgi:"pos=0,doc=Number of rows to generate"`
+	Values []any `vgi:"pos=1,varargs,doc=Values to fill each column"`
+}
+
 func (f *ConstantColumnsFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
-		{Name: "values", Position: 1, ArrowType: "any", Doc: "Values to fill each column", IsVarargs: true, IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(constantColumnsArgs{})
 }
 
 func (f *ConstantColumnsFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -63,9 +69,12 @@ type constantColumnsState struct {
 const constantColumnsBatchSize = 2048
 
 func (f *ConstantColumnsFunction) NewState(params *vgi.ProcessParams) (*constantColumnsState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
+	var args constantColumnsArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &constantColumnsState{
-		BatchState: vgi.NewBatchState(count, constantColumnsBatchSize),
+		BatchState: vgi.NewBatchState(args.Count, constantColumnsBatchSize),
 	}, nil
 }
 

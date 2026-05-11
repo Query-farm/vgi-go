@@ -40,12 +40,15 @@ func (f *NestedSequenceFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// nestedSequenceArgs is the typed argument schema for nested_sequence().
+type nestedSequenceArgs struct {
+	Count       int64 `vgi:"pos=0,doc=Number of rows to generate"`
+	BatchSize   int64 `vgi:"default=1000,doc=Batch size for output"`
+	HistorySize int64 `vgi:"default=20,doc=Max items in history list"`
+}
+
 func (f *NestedSequenceFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
-		{Name: "batch_size", Position: -1, ArrowType: "int64", Doc: "Batch size for output", HasDefault: true, DefaultValue: "1000", IsConst: true},
-		{Name: "history_size", Position: -1, ArrowType: "int64", Doc: "Max items in history list", HasDefault: true, DefaultValue: "20", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(nestedSequenceArgs{})
 }
 
 func (f *NestedSequenceFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -53,11 +56,11 @@ func (f *NestedSequenceFunction) OnBind(params *vgi.BindParams) (*vgi.BindRespon
 }
 
 func (f *NestedSequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
-	count, err := params.Args.GetScalarInt64(0)
-	if err != nil {
+	var args nestedSequenceArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
 		return nil, err
 	}
-	return &vgi.TableCardinality{Estimate: count, Max: count}, nil
+	return &vgi.TableCardinality{Estimate: args.Count, Max: args.Count}, nil
 }
 
 type nestedSequenceState struct {
@@ -66,10 +69,13 @@ type nestedSequenceState struct {
 }
 
 func (f *NestedSequenceFunction) NewState(params *vgi.ProcessParams) (*nestedSequenceState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
+	var args nestedSequenceArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &nestedSequenceState{
-		BatchState:  vgi.NewBatchState(count, vgi.OptionalInt64(params.Args, "batch_size", 1000)),
-		HistorySize: vgi.OptionalInt64(params.Args, "history_size", 20),
+		BatchState:  vgi.NewBatchState(args.Count, args.BatchSize),
+		HistorySize: args.HistorySize,
 	}, nil
 }
 

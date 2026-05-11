@@ -68,10 +68,13 @@ func (WindowSumFunction) Window(rid int64, subframes [][2]int64, partition *vgi.
 
 type WindowMedianFunction struct{ AvgFunction }
 
+// windowMedianArgs is the typed argument schema for vgi_window_median().
+type windowMedianArgs struct {
+	Value float64 `vgi:"pos=0,const=false,doc=Numeric column"`
+}
+
 func (WindowMedianFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "double", Doc: "Numeric column"},
-	}
+	return vgi.DeriveArgSpecs(windowMedianArgs{})
 }
 
 // Override Update so non-window calls (DuckDB invokes both update and window

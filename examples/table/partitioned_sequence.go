@@ -31,11 +31,14 @@ func (f *PartitionedSequenceFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// partitionedSequenceArgs is the typed argument schema for partitioned_sequence().
+type partitionedSequenceArgs struct {
+	Count     int64 `vgi:"pos=0,doc=Total number of integers to generate"`
+	Increment int64 `vgi:"default=1,doc=Step between values"`
+}
+
 func (f *PartitionedSequenceFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Total number of integers to generate", IsConst: true},
-		{Name: "increment", Position: -1, ArrowType: "int64", Doc: "Step between values", HasDefault: true, DefaultValue: "1", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(partitionedSequenceArgs{})
 }
 
 func (f *PartitionedSequenceFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -45,14 +48,17 @@ func (f *PartitionedSequenceFunction) OnBind(params *vgi.BindParams) (*vgi.BindR
 }
 
 func (f *PartitionedSequenceFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	count, _ := params.Args.GetScalarInt64(0)
+	var args partitionedSequenceArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 
 	// Create work items for each chunk
 	var workItems [][]byte
-	for startIdx := int64(0); startIdx < count; startIdx += partitionChunkSize {
+	for startIdx := int64(0); startIdx < args.Count; startIdx += partitionChunkSize {
 		endIdx := startIdx + partitionChunkSize
-		if endIdx > count {
-			endIdx = count
+		if endIdx > args.Count {
+			endIdx = args.Count
 		}
 		item := make([]byte, 16)
 		binary.BigEndian.PutUint64(item[0:8], uint64(startIdx))
@@ -70,11 +76,11 @@ func (f *PartitionedSequenceFunction) OnInit(params *vgi.InitParams) (*vgi.Globa
 }
 
 func (f *PartitionedSequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
-	count, err := params.Args.GetScalarInt64(0)
-	if err != nil {
+	var args partitionedSequenceArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
 		return nil, err
 	}
-	return &vgi.TableCardinality{Estimate: count, Max: count}, nil
+	return &vgi.TableCardinality{Estimate: args.Count, Max: args.Count}, nil
 }
 
 type partitionedSequenceState struct {
@@ -86,8 +92,12 @@ type partitionedSequenceState struct {
 }
 
 func (f *PartitionedSequenceFunction) NewState(params *vgi.ProcessParams) (*partitionedSequenceState, error) {
+	var args partitionedSequenceArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &partitionedSequenceState{
-		Increment: vgi.OptionalInt64(params.Args, "increment", 1),
+		Increment: args.Increment,
 	}, nil
 }
 

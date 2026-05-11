@@ -43,11 +43,14 @@ func (f *OrderEchoFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// orderEchoArgs is the typed argument schema for order_echo().
+type orderEchoArgs struct {
+	Count     int64 `vgi:"pos=0,default=10,doc=Number of rows to generate"`
+	BatchSize int64 `vgi:"default=2048,doc=Batch size for output"`
+}
+
 func (f *OrderEchoFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true, HasDefault: true, DefaultValue: "10"},
-		{Name: "batch_size", Position: -1, ArrowType: "int64", Doc: "Batch size for output", HasDefault: true, DefaultValue: "2048", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(orderEchoArgs{})
 }
 
 func (f *OrderEchoFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -55,11 +58,11 @@ func (f *OrderEchoFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, e
 }
 
 func (f *OrderEchoFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
-	count, err := params.Args.GetScalarInt64(0)
-	if err != nil {
+	var args orderEchoArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
 		return nil, err
 	}
-	return &vgi.TableCardinality{Estimate: count, Max: count}, nil
+	return &vgi.TableCardinality{Estimate: args.Count, Max: args.Count}, nil
 }
 
 type orderEchoState struct {
@@ -71,8 +74,10 @@ type orderEchoState struct {
 }
 
 func (f *OrderEchoFunction) NewState(params *vgi.ProcessParams) (*orderEchoState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	batchSize := vgi.OptionalInt64(params.Args, "batch_size", 2048)
+	var args orderEchoArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 
 	col, dir, null := "(none)", "(none)", "(none)"
 	limit := int64(-1)
@@ -88,7 +93,7 @@ func (f *OrderEchoFunction) NewState(params *vgi.ProcessParams) (*orderEchoState
 	}
 
 	return &orderEchoState{
-		BatchState:     vgi.NewBatchState(count, batchSize),
+		BatchState:     vgi.NewBatchState(args.Count, args.BatchSize),
 		OrderColumn:    col,
 		OrderDirection: dir,
 		OrderNullOrder: null,

@@ -100,25 +100,34 @@ func (f *VersionedDataFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// versionedDataArgs is the typed argument schema for versioned_data_scan().
+// The default value string is rendered once via fmt.Sprintf so the catalog
+// spec always reflects currentVersion.
+var versionedDataDefault = fmt.Sprintf("%d", currentVersion)
+
+type versionedDataArgs struct {
+	Version int64 `vgi:"pos=0,doc=Data version to return"`
+}
+
 func (f *VersionedDataFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "version", Position: 0, ArrowType: "int64", Doc: "Data version to return", IsConst: true,
-			HasDefault: true, DefaultValue: fmt.Sprintf("%d", currentVersion)},
-	}
+	specs := vgi.DeriveArgSpecs(versionedDataArgs{})
+	specs[0].HasDefault = true
+	specs[0].DefaultValue = versionedDataDefault
+	return specs
 }
 
 func (f *VersionedDataFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	version := int64(currentVersion)
-	if len(params.Args.Positional) > 0 {
-		v, err := params.Args.GetScalarInt64(0)
-		if err != nil {
-			return nil, err
-		}
-		version = v
+	var args versionedDataArgs
+	args.Version = currentVersion
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
 	}
-	schema, ok := versionedSchemas[version]
+	if args.Version == 0 {
+		args.Version = currentVersion
+	}
+	schema, ok := versionedSchemas[args.Version]
 	if !ok {
-		return nil, fmt.Errorf("Unknown version: %d", version)
+		return nil, fmt.Errorf("Unknown version: %d", args.Version)
 	}
 	return vgi.BindSchema(schema)
 }
@@ -129,15 +138,15 @@ type versionedDataState struct {
 }
 
 func (f *VersionedDataFunction) NewState(params *vgi.ProcessParams) (*versionedDataState, error) {
-	version := int64(currentVersion)
-	if len(params.Args.Positional) > 0 {
-		v, err := params.Args.GetScalarInt64(0)
-		if err != nil {
-			return nil, err
-		}
-		version = v
+	var args versionedDataArgs
+	args.Version = currentVersion
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
 	}
-	return &versionedDataState{Version: version}, nil
+	if args.Version == 0 {
+		args.Version = currentVersion
+	}
+	return &versionedDataState{Version: args.Version}, nil
 }
 
 func (f *VersionedDataFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *versionedDataState, out *vgirpc.OutputCollector) error {

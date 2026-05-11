@@ -26,10 +26,13 @@ func (f *LoggingGeneratorFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// loggingGeneratorArgs is the typed argument schema for logging_generator().
+type loggingGeneratorArgs struct {
+	Count int64 `vgi:"pos=0,doc=Number of values to generate"`
+}
+
 func (f *LoggingGeneratorFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of values to generate", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(loggingGeneratorArgs{})
 }
 
 func (f *LoggingGeneratorFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -44,8 +47,11 @@ type loggingGeneratorState struct {
 }
 
 func (f *LoggingGeneratorFunction) NewState(params *vgi.ProcessParams) (*loggingGeneratorState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	return &loggingGeneratorState{Index: 0, Count: count}, nil
+	var args loggingGeneratorArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	return &loggingGeneratorState{Index: 0, Count: args.Count}, nil
 }
 
 func (f *LoggingGeneratorFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *loggingGeneratorState, out *vgirpc.OutputCollector) error {

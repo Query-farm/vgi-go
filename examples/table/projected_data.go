@@ -34,10 +34,13 @@ func (f *ProjectedDataFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// projectedDataArgs is the typed argument schema for projected_data().
+type projectedDataArgs struct {
+	Count int64 `vgi:"pos=0,doc=Number of rows to generate"`
+}
+
 func (f *ProjectedDataFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(projectedDataArgs{})
 }
 
 func (f *ProjectedDataFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -45,11 +48,11 @@ func (f *ProjectedDataFunction) OnBind(params *vgi.BindParams) (*vgi.BindRespons
 }
 
 func (f *ProjectedDataFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
-	count, err := params.Args.GetScalarInt64(0)
-	if err != nil {
+	var args projectedDataArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
 		return nil, err
 	}
-	return &vgi.TableCardinality{Estimate: count, Max: count}, nil
+	return &vgi.TableCardinality{Estimate: args.Count, Max: args.Count}, nil
 }
 
 type projectedDataState struct {
@@ -59,9 +62,12 @@ type projectedDataState struct {
 const projectedDataBatchSize = 1000
 
 func (f *ProjectedDataFunction) NewState(params *vgi.ProcessParams) (*projectedDataState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
+	var args projectedDataArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &projectedDataState{
-		BatchState: vgi.NewBatchState(count, projectedDataBatchSize),
+		BatchState: vgi.NewBatchState(args.Count, projectedDataBatchSize),
 	}, nil
 }
 

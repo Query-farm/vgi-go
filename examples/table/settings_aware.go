@@ -27,10 +27,13 @@ func (f *SettingsAwareFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// settingsAwareArgs is the typed argument schema for settings_aware().
+type settingsAwareArgs struct {
+	Count int64 `vgi:"pos=0,doc=Number of rows to generate"`
+}
+
 func (f *SettingsAwareFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(settingsAwareArgs{})
 }
 
 func (f *SettingsAwareFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -74,9 +77,12 @@ type settingsAwareState struct {
 const settingsAwareBatchSize = 1000
 
 func (f *SettingsAwareFunction) NewState(params *vgi.ProcessParams) (*settingsAwareState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
+	var args settingsAwareArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &settingsAwareState{
-		BatchState: vgi.NewBatchState(count, settingsAwareBatchSize),
+		BatchState: vgi.NewBatchState(args.Count, settingsAwareBatchSize),
 	}, nil
 }
 

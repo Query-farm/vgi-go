@@ -31,11 +31,14 @@ func (f *DynamicFilterEchoFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// dynamicFilterEchoArgs is the typed argument schema for dynamic_filter_echo().
+type dynamicFilterEchoArgs struct {
+	Count     int64 `vgi:"pos=0,doc=Number of rows to generate"`
+	BatchSize int64 `vgi:"default=100,doc=Batch size for output"`
+}
+
 func (f *DynamicFilterEchoFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
-		{Name: "batch_size", Position: -1, ArrowType: "int64", Doc: "Batch size for output", HasDefault: true, DefaultValue: "100", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(dynamicFilterEchoArgs{})
 }
 
 var dynamicFilterEchoSchema = arrow.NewSchema([]arrow.Field{
@@ -62,10 +65,13 @@ type dynamicFilterEchoState struct {
 }
 
 func (f *DynamicFilterEchoFunction) NewState(params *vgi.ProcessParams) (*dynamicFilterEchoState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
+	var args dynamicFilterEchoArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &dynamicFilterEchoState{
-		Total:     count,
-		BatchSize: vgi.OptionalInt64(params.Args, "batch_size", 100),
+		Total:     args.Count,
+		BatchSize: args.BatchSize,
 	}, nil
 }
 

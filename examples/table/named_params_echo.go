@@ -28,14 +28,17 @@ func (f *NamedParamsEchoFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// namedParamsEchoArgs is the typed argument schema for named_params_echo.
+type namedParamsEchoArgs struct {
+	Count      int64   `vgi:"pos=0,doc=Number of rows to generate"`
+	Greeting   string  `vgi:"default=hello,doc=Greeting text echoed in output"`
+	Multiplier int64   `vgi:"default=1,doc=Multiplier for value column"`
+	Scale      float64 `vgi:"default=1.0,doc=Scale factor for float_value column"`
+	Enabled    bool    `vgi:"default=true,doc=Boolean echoed in output"`
+}
+
 func (f *NamedParamsEchoFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
-		{Name: "greeting", Position: -1, ArrowType: "varchar", Doc: "Greeting text echoed in output", HasDefault: true, DefaultValue: "hello", IsConst: true},
-		{Name: "multiplier", Position: -1, ArrowType: "int64", Doc: "Multiplier for value column", HasDefault: true, DefaultValue: "1", IsConst: true},
-		{Name: "scale", Position: -1, ArrowType: "double", Doc: "Scale factor for float_value column", HasDefault: true, DefaultValue: "1.0", IsConst: true},
-		{Name: "enabled", Position: -1, ArrowType: "bool", Doc: "Boolean echoed in output", HasDefault: true, DefaultValue: "true", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(namedParamsEchoArgs{})
 }
 
 var namedParamsEchoOutputSchema = arrow.NewSchema([]arrow.Field{
@@ -67,13 +70,16 @@ type namedParamsEchoState struct {
 }
 
 func (f *NamedParamsEchoFunction) NewState(params *vgi.ProcessParams) (*namedParamsEchoState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
+	var args namedParamsEchoArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &namedParamsEchoState{
-		BatchState: vgi.NewBatchState(count, 1000),
-		Greeting:   vgi.OptionalString(params.Args, "greeting", "hello"),
-		Multiplier: vgi.OptionalInt64(params.Args, "multiplier", 1),
-		Scale:      vgi.OptionalFloat64(params.Args, "scale", 1.0),
-		Enabled:    vgi.OptionalBool(params.Args, "enabled", true),
+		BatchState: vgi.NewBatchState(args.Count, 1000),
+		Greeting:   args.Greeting,
+		Multiplier: args.Multiplier,
+		Scale:      args.Scale,
+		Enabled:    args.Enabled,
 	}, nil
 }
 

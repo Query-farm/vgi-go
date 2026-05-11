@@ -30,10 +30,13 @@ func (f *ScopedSecretDemoFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// scopedSecretDemoArgs is the typed argument schema for scoped_secret_demo().
+type scopedSecretDemoArgs struct {
+	Path string `vgi:"pos=0,doc=Path for scoped secret lookup"`
+}
+
 func (f *ScopedSecretDemoFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "path", Position: 0, ArrowType: "varchar", Doc: "Path for scoped secret lookup", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(scopedSecretDemoArgs{})
 }
 
 var scopedSecretDemoOutputSchema = arrow.NewSchema([]arrow.Field{
@@ -43,8 +46,8 @@ var scopedSecretDemoOutputSchema = arrow.NewSchema([]arrow.Field{
 }, nil)
 
 func (f *ScopedSecretDemoFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	path, err := params.Args.GetScalarString(0)
-	if err != nil {
+	var args scopedSecretDemoArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
 		return nil, err
 	}
 
@@ -52,7 +55,7 @@ func (f *ScopedSecretDemoFunction) OnBind(params *vgi.BindParams) (*vgi.BindResp
 		// Phase 1: request scoped secret lookup
 		return &vgi.BindResponse{
 			SecretScopeRequest: []vgi.SecretLookup{
-				{SecretType: "vgi_example", Scope: path},
+				{SecretType: "vgi_example", Scope: args.Path},
 			},
 		}, nil
 	}
@@ -68,9 +71,12 @@ type scopedSecretDemoState struct {
 }
 
 func (f *ScopedSecretDemoFunction) NewState(params *vgi.ProcessParams) (*scopedSecretDemoState, error) {
-	path, _ := params.Args.GetScalarString(0)
+	var args scopedSecretDemoArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	state := &scopedSecretDemoState{
-		Scope: path,
+		Scope: args.Path,
 	}
 
 	if params.Secrets != nil {

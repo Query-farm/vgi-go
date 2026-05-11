@@ -66,11 +66,14 @@ func (NestTensorFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// nestTensorArgs is the typed argument schema for vgi_nest_tensor().
+type nestTensorArgs struct {
+	Value any `vgi:"pos=0,const=false,doc=Cell value"`
+	Axes  any `vgi:"pos=1,const=false,doc=Axis coordinates (struct)"`
+}
+
 func (NestTensorFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "any", Doc: "Cell value"},
-		{Name: "axes", Position: 1, ArrowType: "any", Doc: "Axis coordinates (struct)"},
-	}
+	return vgi.DeriveArgSpecs(nestTensorArgs{})
 }
 
 func (NestTensorFunction) OnBind(params *vgi.AggregateBindParams) (*vgi.BindResponse, error) {

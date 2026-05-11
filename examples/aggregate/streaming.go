@@ -46,10 +46,13 @@ func (StreamingSumFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// streamingSumArgs is the typed argument schema for vgi_streaming_sum().
+type streamingSumArgs struct {
+	Value int64 `vgi:"pos=0,const=false,doc=Column to sum"`
+}
+
 func (StreamingSumFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "int64", Doc: "Column to sum"},
-	}
+	return vgi.DeriveArgSpecs(streamingSumArgs{})
 }
 
 func (StreamingSumFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {

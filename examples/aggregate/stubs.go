@@ -89,11 +89,14 @@ func (DynamicAggFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// dynamicAggArgs is the typed argument schema for vgi_dynamic_agg().
+type dynamicAggArgs struct {
+	Code  string  `vgi:"pos=0,doc=Dynamic aggregate code"`
+	Value float64 `vgi:"pos=1,const=false,doc=Value column"`
+}
+
 func (DynamicAggFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "code", Position: 0, ArrowType: "varchar", Doc: "Dynamic aggregate code", IsConst: true},
-		{Name: "value", Position: 1, ArrowType: "double", Doc: "Value column"},
-	}
+	return vgi.DeriveArgSpecs(dynamicAggArgs{})
 }
 
 func (DynamicAggFunction) NewState(*vgi.AggregateProcessParams) interface{} { return &stubState{} }
@@ -126,11 +129,14 @@ func (DynamicMLAggFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// dynamicMLAggArgs is the typed argument schema for vgi_dynamic_ml_agg().
+type dynamicMLAggArgs struct {
+	Code  string  `vgi:"pos=0,doc=Dynamic ML code"`
+	Value float64 `vgi:"pos=1,const=false,doc=Value column"`
+}
+
 func (DynamicMLAggFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "code", Position: 0, ArrowType: "varchar", Doc: "Dynamic ML code", IsConst: true},
-		{Name: "value", Position: 1, ArrowType: "double", Doc: "Value column"},
-	}
+	return vgi.DeriveArgSpecs(dynamicMLAggArgs{})
 }
 
 func (DynamicMLAggFunction) NewState(*vgi.AggregateProcessParams) interface{} {

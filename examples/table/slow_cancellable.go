@@ -30,12 +30,17 @@ func (f *SlowCancellableFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// slowCancellableArgs is the typed argument schema for slow_cancellable().
+// probe_path is intentionally non-const (matches the pre-typed-args wire
+// shape used by cancellation tests).
+type slowCancellableArgs struct {
+	ProbePath string `vgi:"pos=0,const=false,doc=Path to append to when on_cancel fires"`
+	SleepMs   int64  `vgi:"default=50,doc=Sleep per batch (ms)"`
+	Count     int64  `vgi:"default=1000000,doc=Total rows to produce"`
+}
+
 func (f *SlowCancellableFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "probe_path", Position: 0, ArrowType: "varchar", Doc: "Path to append to when on_cancel fires"},
-		{Name: "sleep_ms", Position: -1, ArrowType: "int64", Doc: "Sleep per batch (ms)", HasDefault: true, DefaultValue: "50", IsConst: true},
-		{Name: "count", Position: -1, ArrowType: "int64", Doc: "Total rows to produce", HasDefault: true, DefaultValue: "1000000", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(slowCancellableArgs{})
 }
 
 func (f *SlowCancellableFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -53,14 +58,16 @@ func (f *SlowCancellableFunction) NewState(params *vgi.ProcessParams) (*slowCanc
 }
 
 func (f *SlowCancellableFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *slowCancellableState, out *vgirpc.OutputCollector) error {
-	count := vgi.OptionalInt64(params.Args, "count", 1_000_000)
-	if state.Emitted >= count {
+	var args slowCancellableArgs
+	// probe_path is non-const so BindArgs will leave it zero; SleepMs/Count
+	// come from defaults if absent.
+	_ = vgi.BindArgs(params.Args, &args)
+	if state.Emitted >= args.Count {
 		return out.Finish()
 	}
-	sleepMs := vgi.OptionalInt64(params.Args, "sleep_ms", 50)
-	if sleepMs > 0 {
+	if args.SleepMs > 0 {
 		select {
-		case <-time.After(time.Duration(sleepMs) * time.Millisecond):
+		case <-time.After(time.Duration(args.SleepMs) * time.Millisecond):
 		case <-ctx.Done():
 			return ctx.Err()
 		}

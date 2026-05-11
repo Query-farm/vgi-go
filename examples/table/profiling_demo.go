@@ -34,12 +34,15 @@ func (f *ProfilingDemoFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// profilingDemoArgs is the typed argument schema for profiling_demo().
+type profilingDemoArgs struct {
+	Count     int64 `vgi:"pos=0,doc=Number of rows to generate"`
+	BatchSize int64 `vgi:"default=1000,doc=Rows per batch"`
+	Increment int64 `vgi:"default=1,doc=Increment between values"`
+}
+
 func (f *ProfilingDemoFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
-		{Name: "batch_size", Position: -1, ArrowType: "int64", Doc: "Rows per batch", HasDefault: true, DefaultValue: "1000", IsConst: true},
-		{Name: "increment", Position: -1, ArrowType: "int64", Doc: "Increment between values", HasDefault: true, DefaultValue: "1", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(profilingDemoArgs{})
 }
 
 func (f *ProfilingDemoFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -82,11 +85,13 @@ func unpackSnapshot(b []byte) (rows, batches, startedNs int64) {
 }
 
 func (f *ProfilingDemoFunction) NewState(params *vgi.ProcessParams) (*profilingDemoState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	batchSize := vgi.OptionalInt64(params.Args, "batch_size", 1000)
+	var args profilingDemoArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &profilingDemoState{
-		BatchState: vgi.NewBatchState(count, batchSize),
-		Increment:  vgi.OptionalInt64(params.Args, "increment", 1),
+		BatchState: vgi.NewBatchState(args.Count, args.BatchSize),
+		Increment:  args.Increment,
 		StartedNs:  time.Now().UnixNano(),
 	}, nil
 }

@@ -102,10 +102,13 @@ func (SumFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// sumArgs is the typed argument schema for vgi_sum().
+type sumArgs struct {
+	Value int64 `vgi:"pos=0,const=false,doc=Column to sum"`
+}
+
 func (SumFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "int64", Doc: "Column to sum"},
-	}
+	return vgi.DeriveArgSpecs(sumArgs{})
 }
 
 func (SumFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {
@@ -183,10 +186,13 @@ func (AvgFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// avgArgs is the typed argument schema for vgi_avg().
+type avgArgs struct {
+	Value int64 `vgi:"pos=0,const=false,doc=Column to average"`
+}
+
 func (AvgFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "int64", Doc: "Column to average"},
-	}
+	return vgi.DeriveArgSpecs(avgArgs{})
 }
 
 func (AvgFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {

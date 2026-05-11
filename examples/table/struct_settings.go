@@ -26,10 +26,13 @@ func (f *StructSettingsFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// structSettingsArgs is the typed argument schema for struct_settings().
+type structSettingsArgs struct {
+	Count int64 `vgi:"pos=0,doc=Number of rows to generate"`
+}
+
 func (f *StructSettingsFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(structSettingsArgs{})
 }
 
 func (f *StructSettingsFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -57,7 +60,10 @@ type structSettingsState struct {
 const structSettingsBatchSize = 1000
 
 func (f *StructSettingsFunction) NewState(params *vgi.ProcessParams) (*structSettingsState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
+	var args structSettingsArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 
 	start := int64(0)
 	step := int64(1)
@@ -80,7 +86,7 @@ func (f *StructSettingsFunction) NewState(params *vgi.ProcessParams) (*structSet
 	}
 
 	return &structSettingsState{
-		BatchState: vgi.NewBatchState(count, structSettingsBatchSize),
+		BatchState: vgi.NewBatchState(args.Count, structSettingsBatchSize),
 		Start:      start,
 		Step:       step,
 		Label:      label,

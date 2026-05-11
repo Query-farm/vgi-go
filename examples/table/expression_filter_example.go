@@ -36,10 +36,13 @@ func (*ExpressionFilterTestFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// expressionFilterTestArgs is the typed argument schema for expression_filter_test().
+type expressionFilterTestArgs struct {
+	Count int64 `vgi:"pos=0,doc=Number of rows to generate"`
+}
+
 func (*ExpressionFilterTestFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(expressionFilterTestArgs{})
 }
 
 var expressionFilterTestSchema = arrow.NewSchema([]arrow.Field{
@@ -54,11 +57,11 @@ func (*ExpressionFilterTestFunction) OnBind(p *vgi.BindParams) (*vgi.BindRespons
 }
 
 func (*ExpressionFilterTestFunction) Cardinality(p *vgi.BindParams) (*vgi.TableCardinality, error) {
-	count, err := p.Args.GetScalarInt64(0)
-	if err != nil {
+	var args expressionFilterTestArgs
+	if err := vgi.BindArgs(p.Args, &args); err != nil {
 		return nil, err
 	}
-	return &vgi.TableCardinality{Estimate: count, Max: count}, nil
+	return &vgi.TableCardinality{Estimate: args.Count, Max: args.Count}, nil
 }
 
 type expressionFilterState struct {
@@ -66,8 +69,11 @@ type expressionFilterState struct {
 }
 
 func (*ExpressionFilterTestFunction) NewState(p *vgi.ProcessParams) (*expressionFilterState, error) {
-	count, _ := p.Args.GetScalarInt64(0)
-	return &expressionFilterState{BatchState: vgi.NewBatchState(count, 2048)}, nil
+	var args expressionFilterTestArgs
+	if err := vgi.BindArgs(p.Args, &args); err != nil {
+		return nil, err
+	}
+	return &expressionFilterState{BatchState: vgi.NewBatchState(args.Count, 2048)}, nil
 }
 
 func (*ExpressionFilterTestFunction) Process(ctx context.Context, p *vgi.ProcessParams, state *expressionFilterState, out *vgirpc.OutputCollector) error {

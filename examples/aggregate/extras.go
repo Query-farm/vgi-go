@@ -39,11 +39,14 @@ func (WeightedSumFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// weightedSumArgs is the typed argument schema for vgi_weighted_sum().
+type weightedSumArgs struct {
+	Value  float64 `vgi:"pos=0,const=false,doc=Value"`
+	Weight float64 `vgi:"pos=1,const=false,doc=Weight"`
+}
+
 func (WeightedSumFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "double", Doc: "Value"},
-		{Name: "weight", Position: 1, ArrowType: "double", Doc: "Weight"},
-	}
+	return vgi.DeriveArgSpecs(weightedSumArgs{})
 }
 
 func (WeightedSumFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {
@@ -123,10 +126,13 @@ func (ListAggFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// listAggArgs is the typed argument schema for vgi_list_agg().
+type listAggArgs struct {
+	Value string `vgi:"pos=0,const=false,doc=String to concatenate"`
+}
+
 func (ListAggFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "varchar", Doc: "String to concatenate"},
-	}
+	return vgi.DeriveArgSpecs(listAggArgs{})
 }
 
 func (ListAggFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {
@@ -205,11 +211,14 @@ func (PercentileFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// percentileArgs is the typed argument schema for vgi_percentile().
+type percentileArgs struct {
+	Value float64 `vgi:"pos=0,const=false,doc=Value column"`
+	P     float64 `vgi:"pos=1,doc=Percentile (0-1)"`
+}
+
 func (PercentileFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "double", Doc: "Value column"},
-		{Name: "p", Position: 1, ArrowType: "double", Doc: "Percentile (0-1)", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(percentileArgs{})
 }
 
 func (PercentileFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {
@@ -318,10 +327,13 @@ func (SumAllFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// sumAllArgs is the typed argument schema for vgi_sum_all().
+type sumAllArgs struct {
+	Values []float64 `vgi:"pos=0,varargs,const=false,doc=Numeric inputs"`
+}
+
 func (SumAllFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "values", Position: 0, ArrowType: "double", Doc: "Numeric inputs", IsVarargs: true},
-	}
+	return vgi.DeriveArgSpecs(sumAllArgs{})
 }
 
 func (SumAllFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {
@@ -405,10 +417,13 @@ func (GenericSumFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// genericSumArgs is the typed argument schema for vgi_generic_sum().
+type genericSumArgs struct {
+	Value any `vgi:"pos=0,const=false,doc=Numeric column"`
+}
+
 func (GenericSumFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "any", Doc: "Numeric column"},
-	}
+	return vgi.DeriveArgSpecs(genericSumArgs{})
 }
 
 func (GenericSumFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {

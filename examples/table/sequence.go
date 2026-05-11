@@ -30,12 +30,15 @@ func (f *SequenceFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// sequenceArgs is the typed argument schema for sequence().
+type sequenceArgs struct {
+	Count     int64 `vgi:"pos=0,doc=Number of integers to generate"`
+	BatchSize int64 `vgi:"default=1000,doc=Batch size for output"`
+	Increment int64 `vgi:"default=1,doc=Step between values"`
+}
+
 func (f *SequenceFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of integers to generate", IsConst: true},
-		{Name: "batch_size", Position: -1, ArrowType: "int64", Doc: "Batch size for output", HasDefault: true, DefaultValue: "1000", IsConst: true},
-		{Name: "increment", Position: -1, ArrowType: "int64", Doc: "Step between values", HasDefault: true, DefaultValue: "1", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(sequenceArgs{})
 }
 
 var sequenceOutputSchema = arrow.NewSchema([]arrow.Field{
@@ -81,12 +84,11 @@ func (f *SequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardin
 }
 
 func (f *SequenceFunction) Statistics(params *vgi.BindParams) ([]vgi.ColumnStatistics, error) {
-	count, err := params.Args.GetScalarInt64(0)
-	if err != nil || count <= 0 {
+	var args sequenceArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil || args.Count <= 0 {
 		return nil, nil
 	}
-	increment := vgi.OptionalInt64(params.Args, "increment", 1)
-	maxValue := (count - 1) * increment
+	maxValue := (args.Count - 1) * args.Increment
 	return []vgi.ColumnStatistics{{
 		ColumnName:    "n",
 		Type:          arrow.PrimitiveTypes.Int64,
@@ -94,7 +96,7 @@ func (f *SequenceFunction) Statistics(params *vgi.BindParams) ([]vgi.ColumnStati
 		Max:           maxValue,
 		HasNull:       false,
 		HasNotNull:    true,
-		DistinctCount: count,
+		DistinctCount: args.Count,
 	}}, nil
 }
 
@@ -104,10 +106,13 @@ type sequenceState struct {
 }
 
 func (f *SequenceFunction) NewState(params *vgi.ProcessParams) (*sequenceState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
+	var args sequenceArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &sequenceState{
-		BatchState: vgi.NewBatchState(count, vgi.OptionalInt64(params.Args, "batch_size", 1000)),
-		Increment:  vgi.OptionalInt64(params.Args, "increment", 1),
+		BatchState: vgi.NewBatchState(args.Count, args.BatchSize),
+		Increment:  args.Increment,
 	}, nil
 }
 

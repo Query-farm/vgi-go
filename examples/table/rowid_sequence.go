@@ -36,12 +36,15 @@ func (f *RowIdSequenceFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// rowIdSequenceArgs is the typed argument schema for rowid_sequence().
+type rowIdSequenceArgs struct {
+	Count     int64  `vgi:"pos=0,doc=Number of rows to generate"`
+	Layout    string `vgi:"default=first,doc=Row ID column position: first, middle, last"`
+	RowIdType string `vgi:"name=row_id_type,default=int64,doc=Row ID type: int64, string, struct"`
+}
+
 func (f *RowIdSequenceFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true},
-		{Name: "layout", Position: -1, ArrowType: "varchar", Doc: "Row ID column position: first, middle, last", HasDefault: true, DefaultValue: "first", IsConst: true},
-		{Name: "row_id_type", Position: -1, ArrowType: "varchar", Doc: "Row ID type: int64, string, struct", HasDefault: true, DefaultValue: "int64", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(rowIdSequenceArgs{})
 }
 
 func rowIDField(ridType string) arrow.Field {
@@ -75,21 +78,17 @@ func buildRowIDSchema(layout, ridType string) *arrow.Schema {
 }
 
 func (f *RowIdSequenceFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	layout := "first"
-	if v, err := params.Args.GetScalarString("layout"); err == nil && v != "" {
-		layout = v
+	var args rowIdSequenceArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
 	}
-	if layout != "first" && layout != "middle" && layout != "last" {
-		return nil, fmt.Errorf("layout must be one of the allowed choices: first, middle, last (got %q)", layout)
+	if args.Layout != "first" && args.Layout != "middle" && args.Layout != "last" {
+		return nil, fmt.Errorf("layout must be one of the allowed choices: first, middle, last (got %q)", args.Layout)
 	}
-	ridType := "int64"
-	if v, err := params.Args.GetScalarString("row_id_type"); err == nil && v != "" {
-		ridType = v
+	if args.RowIdType != "int64" && args.RowIdType != "string" && args.RowIdType != "struct" {
+		return nil, fmt.Errorf("row_id_type must be one of the allowed choices: int64, string, struct (got %q)", args.RowIdType)
 	}
-	if ridType != "int64" && ridType != "string" && ridType != "struct" {
-		return nil, fmt.Errorf("row_id_type must be one of the allowed choices: int64, string, struct (got %q)", ridType)
-	}
-	schema := buildRowIDSchema(layout, ridType)
+	schema := buildRowIDSchema(args.Layout, args.RowIdType)
 	return &vgi.BindResponse{OutputSchema: schema}, nil
 }
 
@@ -100,22 +99,17 @@ type rowIDState struct {
 }
 
 func (f *RowIdSequenceFunction) NewState(params *vgi.ProcessParams) (*rowIDState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	if count < 0 {
-		count = 0
+	var args rowIdSequenceArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
 	}
-	layout := "first"
-	if v, err := params.Args.GetScalarString("layout"); err == nil && v != "" {
-		layout = v
-	}
-	ridType := "int64"
-	if v, err := params.Args.GetScalarString("row_id_type"); err == nil && v != "" {
-		ridType = v
+	if args.Count < 0 {
+		args.Count = 0
 	}
 	return &rowIDState{
-		BatchState: vgi.NewBatchState(count, 1024),
-		Layout:     layout,
-		RowIDType:  ridType,
+		BatchState: vgi.NewBatchState(args.Count, 1024),
+		Layout:     args.Layout,
+		RowIDType:  args.RowIdType,
 	}, nil
 }
 

@@ -43,11 +43,14 @@ func (f *SampleEchoFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// sampleEchoArgs is the typed argument schema for sample_echo().
+type sampleEchoArgs struct {
+	Count     int64 `vgi:"pos=0,default=10,doc=Number of rows to generate"`
+	BatchSize int64 `vgi:"default=2048,doc=Batch size for output"`
+}
+
 func (f *SampleEchoFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows to generate", IsConst: true, HasDefault: true, DefaultValue: "10"},
-		{Name: "batch_size", Position: -1, ArrowType: "int64", Doc: "Batch size for output", HasDefault: true, DefaultValue: "2048", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(sampleEchoArgs{})
 }
 
 func (f *SampleEchoFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -55,11 +58,11 @@ func (f *SampleEchoFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, 
 }
 
 func (f *SampleEchoFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
-	count, err := params.Args.GetScalarInt64(0)
-	if err != nil {
+	var args sampleEchoArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
 		return nil, err
 	}
-	return &vgi.TableCardinality{Estimate: count, Max: count}, nil
+	return &vgi.TableCardinality{Estimate: args.Count, Max: args.Count}, nil
 }
 
 type sampleEchoState struct {
@@ -69,8 +72,10 @@ type sampleEchoState struct {
 }
 
 func (f *SampleEchoFunction) NewState(params *vgi.ProcessParams) (*sampleEchoState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	batchSize := vgi.OptionalInt64(params.Args, "batch_size", 2048)
+	var args sampleEchoArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 
 	pct, seed := -1.0, int64(-1)
 	if h := params.TableSampleHint; h != nil {
@@ -78,7 +83,7 @@ func (f *SampleEchoFunction) NewState(params *vgi.ProcessParams) (*sampleEchoSta
 		seed = h.Seed
 	}
 	return &sampleEchoState{
-		BatchState: vgi.NewBatchState(count, batchSize),
+		BatchState: vgi.NewBatchState(args.Count, args.BatchSize),
 		Percentage: pct,
 		Seed:       seed,
 	}, nil

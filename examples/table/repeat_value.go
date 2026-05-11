@@ -29,11 +29,14 @@ func (f *RepeatValueIntFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// repeatValueIntArgs is the typed argument schema for repeat_value(int, ...).
+type repeatValueIntArgs struct {
+	Count  int64   `vgi:"pos=0,doc=Number of rows"`
+	Values []int64 `vgi:"pos=1,varargs,doc=Integer values to repeat"`
+}
+
 func (f *RepeatValueIntFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows", IsConst: true},
-		{Name: "values", Position: 1, ArrowType: "int64", Doc: "Integer values to repeat", IsConst: true, IsVarargs: true},
-	}
+	return vgi.DeriveArgSpecs(repeatValueIntArgs{})
 }
 
 func (f *RepeatValueIntFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -55,18 +58,16 @@ type repeatValueIntState struct {
 }
 
 func (f *RepeatValueIntFunction) NewState(params *vgi.ProcessParams) (*repeatValueIntState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	if count < 0 {
-		count = 0
+	var args repeatValueIntArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
 	}
-	var values []int64
-	for i := 1; i < len(params.Args.Positional); i++ {
-		v, _ := params.Args.GetScalarInt64(i)
-		values = append(values, v)
+	if args.Count < 0 {
+		args.Count = 0
 	}
 	return &repeatValueIntState{
-		BatchState: vgi.NewBatchState(count, 1024),
-		Values:     values,
+		BatchState: vgi.NewBatchState(args.Count, 1024),
+		Values:     args.Values,
 	}, nil
 }
 
@@ -102,11 +103,14 @@ func (f *RepeatValueStrFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// repeatValueStrArgs is the typed argument schema for repeat_value(str, ...).
+type repeatValueStrArgs struct {
+	Count  int64    `vgi:"pos=0,doc=Number of rows"`
+	Values []string `vgi:"pos=1,varargs,doc=String values to repeat"`
+}
+
 func (f *RepeatValueStrFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of rows", IsConst: true},
-		{Name: "values", Position: 1, ArrowType: "varchar", Doc: "String values to repeat", IsConst: true, IsVarargs: true},
-	}
+	return vgi.DeriveArgSpecs(repeatValueStrArgs{})
 }
 
 func (f *RepeatValueStrFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -127,18 +131,16 @@ type repeatValueStrState struct {
 }
 
 func (f *RepeatValueStrFunction) NewState(params *vgi.ProcessParams) (*repeatValueStrState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	if count < 0 {
-		count = 0
+	var args repeatValueStrArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
 	}
-	var values []string
-	for i := 1; i < len(params.Args.Positional); i++ {
-		v, _ := params.Args.GetScalarString(i)
-		values = append(values, v)
+	if args.Count < 0 {
+		args.Count = 0
 	}
 	return &repeatValueStrState{
-		BatchState: vgi.NewBatchState(count, 1024),
-		Values:     values,
+		BatchState: vgi.NewBatchState(args.Count, 1024),
+		Values:     args.Values,
 	}, nil
 }
 

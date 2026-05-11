@@ -42,10 +42,14 @@ func (f *partitionedOrderModeFunc) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// partitionedOrderModeArgs is the typed argument schema for the
+// partitioned_*_order family.
+type partitionedOrderModeArgs struct {
+	Count int64 `vgi:"pos=0,doc=Total number of integers to generate"`
+}
+
 func (f *partitionedOrderModeFunc) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Total number of integers to generate", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(partitionedOrderModeArgs{})
 }
 
 func (f *partitionedOrderModeFunc) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -55,20 +59,23 @@ func (f *partitionedOrderModeFunc) OnBind(params *vgi.BindParams) (*vgi.BindResp
 }
 
 func (f *partitionedOrderModeFunc) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
-	count, err := params.Args.GetScalarInt64(0)
-	if err != nil {
+	var args partitionedOrderModeArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
 		return nil, err
 	}
-	return &vgi.TableCardinality{Estimate: count, Max: count}, nil
+	return &vgi.TableCardinality{Estimate: args.Count, Max: args.Count}, nil
 }
 
 func (f *partitionedOrderModeFunc) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	count, _ := params.Args.GetScalarInt64(0)
+	var args partitionedOrderModeArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	var workItems [][]byte
-	for startIdx := int64(0); startIdx < count; startIdx += partitionChunkSize {
+	for startIdx := int64(0); startIdx < args.Count; startIdx += partitionChunkSize {
 		endIdx := startIdx + partitionChunkSize
-		if endIdx > count {
-			endIdx = count
+		if endIdx > args.Count {
+			endIdx = args.Count
 		}
 		item := make([]byte, 16)
 		binary.BigEndian.PutUint64(item[0:8], uint64(startIdx))

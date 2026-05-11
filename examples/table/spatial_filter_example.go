@@ -69,11 +69,14 @@ func (f *SpatialFilterExampleFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// spatialFilterExampleArgs is the typed argument schema for spatial_filter_example().
+type spatialFilterExampleArgs struct {
+	Count     int64 `vgi:"pos=0,doc=Number of points to generate"`
+	BatchSize int64 `vgi:"default=1024,doc=Rows per batch"`
+}
+
 func (f *SpatialFilterExampleFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of points to generate", IsConst: true},
-		{Name: "batch_size", Position: -1, ArrowType: "int64", Doc: "Rows per batch", HasDefault: true, DefaultValue: "1024", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(spatialFilterExampleArgs{})
 }
 
 func (f *SpatialFilterExampleFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
@@ -81,11 +84,11 @@ func (f *SpatialFilterExampleFunction) OnBind(params *vgi.BindParams) (*vgi.Bind
 }
 
 func (f *SpatialFilterExampleFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
-	count, err := params.Args.GetScalarInt64(0)
-	if err != nil {
+	var args spatialFilterExampleArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
 		return nil, err
 	}
-	return &vgi.TableCardinality{Estimate: count, Max: count}, nil
+	return &vgi.TableCardinality{Estimate: args.Count, Max: args.Count}, nil
 }
 
 type spatialFilterState struct {
@@ -94,14 +97,16 @@ type spatialFilterState struct {
 }
 
 func (f *SpatialFilterExampleFunction) NewState(params *vgi.ProcessParams) (*spatialFilterState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
-	batchSize := vgi.OptionalInt64(params.Args, "batch_size", 1024)
-	cols := int64(math.Ceil(math.Sqrt(float64(count))))
+	var args spatialFilterExampleArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	cols := int64(math.Ceil(math.Sqrt(float64(args.Count))))
 	if cols < 1 {
 		cols = 1
 	}
 	return &spatialFilterState{
-		BatchState: vgi.NewBatchState(count, batchSize),
+		BatchState: vgi.NewBatchState(args.Count, args.BatchSize),
 		Cols:       cols,
 	}, nil
 }

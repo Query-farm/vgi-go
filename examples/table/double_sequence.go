@@ -25,12 +25,15 @@ func (f *DoubleSequenceFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
+// doubleSequenceArgs is the typed argument schema for double_sequence().
+type doubleSequenceArgs struct {
+	Count     int64   `vgi:"pos=0,doc=Number of values to generate"`
+	BatchSize int64   `vgi:"default=1000,doc=Batch size for output"`
+	Increment float64 `vgi:"default=1.0,doc=Step between values"`
+}
+
 func (f *DoubleSequenceFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "count", Position: 0, ArrowType: "int64", Doc: "Number of values to generate", IsConst: true},
-		{Name: "batch_size", Position: -1, ArrowType: "int64", Doc: "Batch size for output", HasDefault: true, DefaultValue: "1000", IsConst: true},
-		{Name: "increment", Position: -1, ArrowType: "double", Doc: "Step between values", HasDefault: true, DefaultValue: "1.0", IsConst: true},
-	}
+	return vgi.DeriveArgSpecs(doubleSequenceArgs{})
 }
 
 var doubleSequenceOutputSchema = arrow.NewSchema([]arrow.Field{
@@ -50,12 +53,11 @@ func (f *DoubleSequenceFunction) Cardinality(params *vgi.BindParams) (*vgi.Table
 }
 
 func (f *DoubleSequenceFunction) Statistics(params *vgi.BindParams) ([]vgi.ColumnStatistics, error) {
-	count, err := params.Args.GetScalarInt64(0)
-	if err != nil || count <= 0 {
+	var args doubleSequenceArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil || args.Count <= 0 {
 		return nil, nil
 	}
-	increment := vgi.OptionalFloat64(params.Args, "increment", 1.0)
-	maxValue := float64(count-1) * increment
+	maxValue := float64(args.Count-1) * args.Increment
 	return []vgi.ColumnStatistics{{
 		ColumnName:    "n",
 		Type:          arrow.PrimitiveTypes.Float64,
@@ -63,7 +65,7 @@ func (f *DoubleSequenceFunction) Statistics(params *vgi.BindParams) ([]vgi.Colum
 		Max:           maxValue,
 		HasNull:       false,
 		HasNotNull:    true,
-		DistinctCount: count,
+		DistinctCount: args.Count,
 	}}, nil
 }
 
@@ -73,10 +75,13 @@ type doubleSequenceState struct {
 }
 
 func (f *DoubleSequenceFunction) NewState(params *vgi.ProcessParams) (*doubleSequenceState, error) {
-	count, _ := params.Args.GetScalarInt64(0)
+	var args doubleSequenceArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
 	return &doubleSequenceState{
-		BatchState: vgi.NewBatchState(count, vgi.OptionalInt64(params.Args, "batch_size", 1000)),
-		Increment:  vgi.OptionalFloat64(params.Args, "increment", 1.0),
+		BatchState: vgi.NewBatchState(args.Count, args.BatchSize),
+		Increment:  args.Increment,
 	}, nil
 }
 
