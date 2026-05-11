@@ -12,8 +12,8 @@ require (
 	github.com/Query-farm/vgi-rpc v0.0.0
 	github.com/Query-farm/vgi-rpc/vgirpc/jwtauth v0.0.0-00010101000000-000000000000
 	github.com/apache/arrow-go/v18 v18.5.2
+	github.com/duckdb/duckdb-go/v2 v2.10502.0
 	github.com/google/uuid v1.6.0
-	github.com/marcboeker/go-duckdb/v2 v2.4.3
 	modernc.org/sqlite v1.46.1
 )
 
@@ -22,14 +22,14 @@ require (
 	github.com/MicahParks/keyfunc/v3 v3.3.5 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/apache/thrift v0.22.0 // indirect
-	github.com/duckdb/duckdb-go-bindings v0.1.21 // indirect
-	github.com/duckdb/duckdb-go-bindings/darwin-amd64 v0.1.21 // indirect
-	github.com/duckdb/duckdb-go-bindings/darwin-arm64 v0.1.21 // indirect
-	github.com/duckdb/duckdb-go-bindings/linux-amd64 v0.1.21 // indirect
-	github.com/duckdb/duckdb-go-bindings/linux-arm64 v0.1.21 // indirect
-	github.com/duckdb/duckdb-go-bindings/windows-amd64 v0.1.21 // indirect
+	github.com/duckdb/duckdb-go-bindings v0.10502.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/darwin-amd64 v0.10502.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/darwin-arm64 v0.10502.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/linux-amd64 v0.10502.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/linux-arm64 v0.10502.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/windows-amd64 v0.10502.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
@@ -37,8 +37,6 @@ require (
 	github.com/klauspost/asmfmt v1.3.2 // indirect
 	github.com/klauspost/compress v1.18.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
-	github.com/marcboeker/go-duckdb/arrowmapping v0.0.21 // indirect
-	github.com/marcboeker/go-duckdb/mapping v0.0.21 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/minio/asm2plan9s v0.0.0-20200509001527-cdd76441f9d8 // indirect
 	github.com/minio/c2goasm v0.0.0-20190812172519-36a3d3bbc4f3 // indirect
