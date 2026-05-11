@@ -8,6 +8,7 @@ import (
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/decimal128"
 )
 
 // NumericDispatch creates a result batch by dispatching to the appropriate
@@ -74,6 +75,53 @@ func NumericDispatch(
 			func(cols []arrow.Array, i int) float32 { return float32(floatFn(cols, i)) })
 	case arrow.FLOAT64:
 		resultArr = numericBuild(array.NewFloat64Builder(mem), cols, n, anyNull, floatFn)
+	case arrow.DECIMAL128:
+		// Decimal arithmetic via element-wise add. The user's intFn is
+		// designed for int64 outputs; for decimal we replay the same shape:
+		//   double(x)   — single decimal column → emit value + value
+		//   sum_values  — N decimal columns     → emit sum of all column values
+		// (Both are "addition of inputs"; PromoteForAddition is the gatekeeper
+		// for which scalar functions land here at all.) Mixed decimal/non-decimal
+		// inputs fall back through intFn and are coerced via FromI64.
+		decType := outputType.(*arrow.Decimal128Type)
+		decBuilder := array.NewDecimal128Builder(mem, decType)
+		defer decBuilder.Release()
+
+		// Detect the "double" pattern: one input column whose type matches the
+		// output exactly modulo the +1 precision bump we applied. In that case
+		// we add the value to itself instead of just appending it once.
+		doubleSemantics := false
+		if len(cols) == 1 {
+			if d, ok := cols[0].DataType().(*arrow.Decimal128Type); ok && d.Scale == decType.Scale {
+				doubleSemantics = true
+			}
+		}
+
+		for i := 0; i < n; i++ {
+			if anyNull(i) {
+				decBuilder.AppendNull()
+				continue
+			}
+			var sum decimal128.Num
+			for _, c := range cols {
+				if d, ok := c.(*array.Decimal128); ok {
+					sum = sum.Add(d.Value(i))
+				} else {
+					sum = sum.Add(decimal128.FromI64(intFn(cols, i)))
+					break
+				}
+			}
+			if doubleSemantics {
+				if d, ok := cols[0].(*array.Decimal128); ok {
+					sum = sum.Add(d.Value(i))
+				}
+			}
+			if !sum.FitsInPrecision(decType.Precision) {
+				return nil, fmt.Errorf("decimal value does not fit in precision %d", decType.Precision)
+			}
+			decBuilder.Append(sum)
+		}
+		resultArr = decBuilder.NewArray()
 	default:
 		return nil, fmt.Errorf("unsupported numeric output type: %v", outputType)
 	}

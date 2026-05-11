@@ -279,20 +279,34 @@ func buildDefaultValueBatch(mem memory.Allocator, schema *arrow.Schema, dt arrow
 
 // Worker is the main VGI worker that hosts functions and serves RPC.
 type Worker struct {
-	scalars        map[string][]ScalarFunction
-	tables         map[string][]TableFunction
-	tableInOuts    map[string][]TableInOutFunction
-	aggregates     map[string][]AggregateFunction
-	aggStorage     *aggregateStorage
-	catalogName    string
-	catalogComment string
-	catalogTags    map[string]string
-	schemaComments map[string]string
-	catalog        *DefaultReadOnlyCatalog
+	scalars     map[string][]ScalarFunction
+	tables      map[string][]TableFunction
+	tableInOuts map[string][]TableInOutFunction
+	aggregates  map[string][]AggregateFunction
+	aggStorage  *aggregateStorage
+	// streamingSessions tracks per-execution_id state for streaming-partitioned
+	// aggregates (aggregate_streaming_open/_chunk/_close).
+	streamingSessions streamingSessionStore
+	catalogName       string
+	catalogComment    string
+	catalogTags       map[string]string
+	schemaComments    map[string]string
+	catalog           *DefaultReadOnlyCatalog
 	// extraCatalogs are additional catalog names this worker accepts via
 	// catalog_attach. They share the worker's registered functions but
 	// have their own (writable) table/schema state. Indexed by name.
-	extraCatalogs                map[string]*WritableCatalog
+	extraCatalogs map[string]*WritableCatalog
+	// catalogAliases are extra catalog names that ATTACH against the
+	// worker's primary read-only catalog (no separate writable state, no
+	// distinct catalog implementation). Useful for fixture workers that
+	// publish multiple cross-language reproducer catalogs (e.g.
+	// projection_repro) sharing one binary.
+	catalogAliases map[string]struct{}
+	// catalogFunctionScope maps function-name → catalog-name when a
+	// function is restricted to a single catalog (e.g. proj_repro_* only
+	// appears under the ``projection_repro`` catalog, not ``example``).
+	// Functions not present in the map are visible to every catalog.
+	catalogFunctionScope         map[string]string
 	storages                     sync.Map // map[hex execution ID string]*ExecutionStorage
 	settings                     []SettingSpec
 	catalogTables                map[string][]CatalogTable // schema_name → tables
@@ -321,6 +335,22 @@ type WorkerOption func(*Worker)
 func WithCatalogName(name string) WorkerOption {
 	return func(w *Worker) {
 		w.catalogName = name
+	}
+}
+
+// WithCatalogAliases adds extra catalog names this worker accepts via
+// catalog_attach. Each alias resolves to the same primary read-only
+// catalog (same registered functions, no separate state). Useful for
+// fixture workers that publish multiple cross-language reproducer
+// catalogs out of one binary (projection_repro, schema_reconcile, ...).
+func WithCatalogAliases(names ...string) WorkerOption {
+	return func(w *Worker) {
+		if w.catalogAliases == nil {
+			w.catalogAliases = make(map[string]struct{})
+		}
+		for _, n := range names {
+			w.catalogAliases[n] = struct{}{}
+		}
 	}
 }
 
@@ -490,16 +520,18 @@ func WithLogHandler(h slog.Handler) WorkerOption {
 // NewWorker creates a new VGI worker.
 func NewWorker(opts ...WorkerOption) *Worker {
 	w := &Worker{
-		scalars:       make(map[string][]ScalarFunction),
-		tables:        make(map[string][]TableFunction),
-		tableInOuts:   make(map[string][]TableInOutFunction),
-		aggregates:    make(map[string][]AggregateFunction),
-		aggStorage:    newAggregateStorage(),
-		extraCatalogs: make(map[string]*WritableCatalog),
-		catalogTables: make(map[string][]CatalogTable),
-		catalogViews:  make(map[string][]CatalogView),
-		catalogMacros: make(map[string][]CatalogMacro),
-		catalogName:   "example",
+		scalars:              make(map[string][]ScalarFunction),
+		tables:               make(map[string][]TableFunction),
+		tableInOuts:          make(map[string][]TableInOutFunction),
+		aggregates:           make(map[string][]AggregateFunction),
+		aggStorage:           newAggregateStorage(),
+		extraCatalogs:        make(map[string]*WritableCatalog),
+		catalogAliases:       make(map[string]struct{}),
+		catalogFunctionScope: make(map[string]string),
+		catalogTables:        make(map[string][]CatalogTable),
+		catalogViews:         make(map[string][]CatalogView),
+		catalogMacros:        make(map[string][]CatalogMacro),
+		catalogName:          "example",
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -515,6 +547,17 @@ func (w *Worker) RegisterScalar(f ScalarFunction) {
 // RegisterTable registers a table function.
 func (w *Worker) RegisterTable(f TableFunction) {
 	w.tables[f.Name()] = append(w.tables[f.Name()], f)
+}
+
+// RegisterTableForCatalog registers a table function scoped to a single
+// catalog name. The function is invokable as normal but only surfaces in
+// catalog_schema_contents_functions / duckdb_functions for ATTACH calls
+// against the named catalog. Use for fixture functions that should only
+// be visible to their own reproducer catalog (e.g. proj_repro_* under
+// “projection_repro“).
+func (w *Worker) RegisterTableForCatalog(catalogName string, f TableFunction) {
+	w.tables[f.Name()] = append(w.tables[f.Name()], f)
+	w.catalogFunctionScope[f.Name()] = catalogName
 }
 
 // RegisterTableInOut registers a table-in-out function.
@@ -620,6 +663,10 @@ func (w *Worker) buildServer(isHTTP bool) *vgirpc.Server {
 
 	// Register aggregate RPC handlers
 	w.registerAggregateRPCs(s)
+	w.registerAggregateStreamingRPCs(s)
+
+	// Optional table-function profiling hook (EXPLAIN ANALYZE Extra Info).
+	w.registerDynamicToStringRPCs(s)
 
 	return s
 }

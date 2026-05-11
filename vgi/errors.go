@@ -5,6 +5,7 @@ package vgi
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -35,12 +36,19 @@ type TypeBoundError struct {
 	ArgName   string
 	Position  int
 	FieldType arrow.DataType
+	// PredicateNames are the runtime-resolved names of the failed predicates,
+	// e.g. ["IsMultipliableType"]. Empty when reflection couldn't recover them.
+	PredicateNames []string
 }
 
 func (e *TypeBoundError) Error() string {
 	name := e.ArgName
 	if name == "" {
 		name = fmt.Sprintf("position %d", e.Position)
+	}
+	if len(e.PredicateNames) > 0 {
+		return fmt.Sprintf("argument '%s': column type %v does not satisfy %s",
+			name, e.FieldType, strings.Join(e.PredicateNames, " OR "))
 	}
 	return fmt.Sprintf("argument '%s': column type %v does not match type bound constraints", name, e.FieldType)
 }

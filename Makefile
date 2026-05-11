@@ -90,8 +90,20 @@ vet:
 # test/sql/integration/attach/versioning*.test and versioned_tables*.test
 # run against the Go workers too. The ~writable glob excludes the
 # writable-catalog tests (opt-in via VGI_WORKER_ENABLE_WRITABLE).
+#
+# VGI_SYNC_INIT_GLOBAL=1 forces the C++ extension's init_global RPC to run
+# synchronously rather than on a background future. Without this, the
+# extension reports max_processes=1 to DuckDB at pipeline-schedule time
+# (the actual max_workers comes back from the worker after EnsureInitApplied,
+# but by then the scheduler has already committed to a single-thread plan),
+# so multi-conn parallel-init tests (partitioned_sequence,
+# filter_echo_partitioned, order_preservation_modes, vgi_integration) only
+# observe a single connection. Default async mode is fine for production
+# (async hides RPC latency); the tests assert what max_workers _should_
+# yield, so we run the suite with sync init to exercise that path.
 test: build
 	cd $(VGI_EXT_DIR) && \
+	    VGI_SYNC_INIT_GLOBAL=1 \
 	    VGI_TEST_WORKER=$(WORKER_PATH) \
 	    VGI_VERSIONED_WORKER=$(VERSIONED_WORKER_PATH) \
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
@@ -103,6 +115,7 @@ test: build
 #   make test-single TEST=test/sql/integration/scalar/add_values.test
 test-single: build
 	cd $(VGI_EXT_DIR) && \
+	    VGI_SYNC_INIT_GLOBAL=1 \
 	    VGI_TEST_WORKER=$(WORKER_PATH) \
 	    VGI_VERSIONED_WORKER=$(VERSIONED_WORKER_PATH) \
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \

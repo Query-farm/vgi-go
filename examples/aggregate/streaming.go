@@ -5,6 +5,7 @@ package aggregate
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -100,4 +101,92 @@ func (StreamingSumFunction) Finalize(gids []int64, states map[int64]interface{},
 	col := b.NewArray()
 	defer col.Release()
 	return array.NewRecordBatch(p.OutputSchema, []arrow.Array{col}, int64(len(gids))), nil
+}
+
+// streamingSumSession holds per-execution running totals keyed by partition
+// hash. The map is accessed from a single goroutine per session (the chunk
+// RPC handler), but the framework is free to demote the session to a
+// different OS thread between chunks; the mutex makes that safe.
+type streamingSumSession struct {
+	mu   sync.Mutex
+	sums map[uint64]int64
+}
+
+var _ vgi.StreamingAggregateFunction = (*StreamingSumFunction)(nil)
+
+func (StreamingSumFunction) StreamingOpen(_ *vgi.AggregateProcessParams) (interface{}, error) {
+	return &streamingSumSession{sums: make(map[uint64]int64)}, nil
+}
+
+func (StreamingSumFunction) StreamingChunk(state interface{}, chunk arrow.RecordBatch, partitionKeyCount, orderKeyCount int, params *vgi.AggregateProcessParams) (arrow.Array, error) {
+	sess := state.(*streamingSumSession)
+	// Value column is the first non-key, non-order column.
+	valueIdx := partitionKeyCount + orderKeyCount
+	if int(chunk.NumCols()) <= valueIdx {
+		return nil, fmt.Errorf("vgi_streaming_sum: chunk has %d cols, expected value column at index %d", chunk.NumCols(), valueIdx)
+	}
+	valCol, ok := chunk.Column(valueIdx).(*array.Int64)
+	if !ok {
+		return nil, fmt.Errorf("vgi_streaming_sum: value column is %T, expected int64", chunk.Column(valueIdx))
+	}
+
+	mem := memory.NewGoAllocator()
+	b := array.NewInt64Builder(mem)
+	defer b.Release()
+	b.Reserve(int(chunk.NumRows()))
+
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	for i := 0; i < int(chunk.NumRows()); i++ {
+		key := vgi.PartitionKey(chunk, partitionKeyCount, i)
+		if !valCol.IsNull(i) {
+			sess.sums[key] = sess.sums[key] + valCol.Value(i)
+		}
+		// Cumulative running sum. Even when the current row's value is NULL,
+		// the running total reflects all prior non-null contributions.
+		b.Append(sess.sums[key])
+	}
+	return b.NewArray(), nil
+}
+
+func (StreamingSumFunction) StreamingClose(_ interface{}, _ *vgi.AggregateProcessParams) error {
+	return nil
+}
+
+// AggregateWindowFunction implementation lets DuckDB fall back to the
+// per-row window callback when the streaming-window optimizer rule is
+// disabled or when the frame shape isn't streaming-eligible (sliding
+// frames, etc).
+var _ vgi.AggregateWindowFunction = (*StreamingSumFunction)(nil)
+
+func (StreamingSumFunction) WindowInit(_ *vgi.WindowPartition, _ *vgi.AggregateProcessParams) (interface{}, error) {
+	return nil, nil
+}
+
+func (StreamingSumFunction) Window(_ int64, subframes [][2]int64, partition *vgi.WindowPartition, _ interface{}, _ *vgi.AggregateProcessParams) (interface{}, error) {
+	if partition.Inputs.NumCols() == 0 {
+		return nil, fmt.Errorf("vgi_streaming_sum.Window: partition has no input column")
+	}
+	col, ok := partition.Inputs.Column(0).(*array.Int64)
+	if !ok {
+		return nil, fmt.Errorf("vgi_streaming_sum.Window: input column is %T, expected int64", partition.Inputs.Column(0))
+	}
+	var total int64
+	var hasValue bool
+	for _, sf := range subframes {
+		for i := sf[0]; i < sf[1]; i++ {
+			if partition.FilterMask != nil && !partition.FilterMask[i] {
+				continue
+			}
+			if col.IsNull(int(i)) {
+				continue
+			}
+			total += col.Value(int(i))
+			hasValue = true
+		}
+	}
+	if !hasValue {
+		return nil, nil
+	}
+	return total, nil
 }

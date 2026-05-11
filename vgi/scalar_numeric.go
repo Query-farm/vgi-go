@@ -6,7 +6,9 @@ package vgi
 import "github.com/apache/arrow-go/v18/arrow"
 
 // PromoteForAddition returns the promoted output type for addition operations.
-// Integer types promote to the next wider type; floating point types stay the same.
+// Integer types promote to the next wider type; floating point types stay the
+// same; decimal128 types add one digit of precision (capped at 38, decimal128's
+// limit; values that overflow at the cap fault at compute time).
 func PromoteForAddition(dt arrow.DataType) arrow.DataType {
 	switch dt.ID() {
 	case arrow.INT8:
@@ -25,6 +27,13 @@ func PromoteForAddition(dt arrow.DataType) arrow.DataType {
 		return arrow.PrimitiveTypes.Float64
 	case arrow.FLOAT64:
 		return dt
+	case arrow.DECIMAL128:
+		d := dt.(*arrow.Decimal128Type)
+		newP := d.Precision + 1
+		if newP > 38 {
+			newP = 38
+		}
+		return &arrow.Decimal128Type{Precision: newP, Scale: d.Scale}
 	default:
 		return dt
 	}
@@ -121,4 +130,11 @@ func IsTemporalType(dt arrow.DataType) bool {
 // Matches Python's _is_addable_type: integer, floating, decimal, or temporal.
 func IsAddableType(dt arrow.DataType) bool {
 	return IsIntegerType(dt) || IsFloatingType(dt) || IsDecimalType(dt) || IsTemporalType(dt)
+}
+
+// IsMultipliableType checks if an Arrow type supports multiplication.
+// Matches Python's _is_multipliable_type: integer, floating, or decimal.
+// Temporal types are excluded — doubling a date is not well-defined.
+func IsMultipliableType(dt arrow.DataType) bool {
+	return IsIntegerType(dt) || IsFloatingType(dt) || IsDecimalType(dt)
 }

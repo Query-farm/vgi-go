@@ -193,6 +193,27 @@ func BuildBinaryArray(n int64, fn func(i int64) []byte) arrow.Array {
 	return builder.NewArray()
 }
 
+// BuildInt32Array creates an int32 array by calling fn for each row index.
+func BuildInt32Array(n int64, fn func(i int64) int32) arrow.Array {
+	builder := array.NewInt32Builder(defaultAllocator)
+	defer builder.Release()
+	for i := int64(0); i < n; i++ {
+		builder.Append(fn(i))
+	}
+	return builder.NewArray()
+}
+
+// BuildAllNullArray creates an n-row all-NULL array of the given type. The
+// type is created via NewBuilder so any Arrow primitive / nested type works.
+func BuildAllNullArray(dt arrow.DataType, n int64) arrow.Array {
+	builder := array.NewBuilder(defaultAllocator, dt)
+	defer builder.Release()
+	for i := int64(0); i < n; i++ {
+		builder.AppendNull()
+	}
+	return builder.NewArray()
+}
+
 // BuildArray creates an array of any type using the ArrayBuilder generic constraint.
 // Use this for types not covered by BuildInt64Array, BuildFloat64Array, etc.
 func BuildArray[T any, B ArrayBuilder[T]](n int64, newBuilder func(memory.Allocator) B, fn func(i int64) T) arrow.Array {

@@ -197,6 +197,36 @@ func (s *ExecutionStorage) Put(data []byte) error {
 	return nil
 }
 
+// Snapshot returns all stored worker values WITHOUT removing them. Useful
+// for read-only consumers (e.g. dynamic_to_string fired per scan thread)
+// that need to see the union of every worker's contribution without
+// draining the table.
+func (s *ExecutionStorage) Snapshot() ([][]byte, error) {
+	s.mu.Lock()
+	db := s.db
+	s.mu.Unlock()
+
+	if db == nil {
+		return nil, errStorageNotInitialized
+	}
+
+	rows, err := db.Query("SELECT state_data FROM worker_state")
+	if err != nil {
+		return nil, fmt.Errorf("storage: snapshot query failed: %w", err)
+	}
+	defer rows.Close()
+
+	var result [][]byte
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			return nil, fmt.Errorf("storage: snapshot scan failed: %w", err)
+		}
+		result = append(result, data)
+	}
+	return result, nil
+}
+
 // Collect returns all stored worker values and removes them.
 func (s *ExecutionStorage) Collect() ([][]byte, error) {
 	s.mu.Lock()

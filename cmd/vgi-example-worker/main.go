@@ -37,6 +37,9 @@ func main() {
 			"main": "Example functions for testing VGI",
 			"data": "Example tables backed by functions",
 		}),
+		// Cross-language reproducer catalogs share this binary; ATTACH
+		// against any of these names succeeds (functions are catalog-agnostic).
+		vgi.WithCatalogAliases("projection_repro", "schema_reconcile"),
 		vgi.WithSecretTypes(
 			vgi.SecretTypeSpec{
 				Name:        "vgi_example",
@@ -172,6 +175,14 @@ func main() {
 	w.RegisterTable(table.NewPartitionedNoOrderGuaranteeFunction())
 	w.RegisterTable(table.NewProfilingDemoFunction())
 	w.RegisterTable(table.NewSlowCancellableFunction())
+	// Scope projection-pushdown reproducer functions to the
+	// ``projection_repro`` catalog only — they're invisible to the
+	// ``example`` catalog's function listing (function_registration.test
+	// asserts an exact 54-function count there).
+	w.RegisterTableForCatalog("projection_repro", table.NewProjReproStrictFunction())
+	w.RegisterTableForCatalog("projection_repro", table.NewProjReproFullSchemaFunction())
+	w.RegisterTableForCatalog("projection_repro", table.NewProjReproChunkedFunction())
+	w.RegisterTableForCatalog("projection_repro", table.NewProjReproMultiWorkerFunction())
 	w.RegisterTable(table.NewProjectedDataFunction())
 	w.RegisterTable(table.NewRepeatValueIntFunction())
 	w.RegisterTable(table.NewRowIdSequenceFunction())

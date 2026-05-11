@@ -89,6 +89,17 @@ type typedTableAdapter[S any] struct {
 	statsProvider StatisticsProvider
 }
 
+// DynamicToString forwards to the inner typed function when it implements the
+// hook. The framework's RPC handler does the interface check on the
+// adapter (the user-facing TableFunction); without this forwarder a typed
+// function's hook would be invisible.
+func (a *typedTableAdapter[S]) DynamicToString(ctx context.Context, params *DynamicToStringParams) ([]string, []string, error) {
+	if h, ok := any(a.inner).(DynamicToStringHook); ok {
+		return h.DynamicToString(ctx, params)
+	}
+	return nil, nil, nil
+}
+
 func (a *typedTableAdapter[S]) Statistics(params *BindParams) ([]ColumnStatistics, error) {
 	if a.statsProvider == nil {
 		return nil, nil

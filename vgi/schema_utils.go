@@ -7,6 +7,9 @@ import (
 	"bytes"
 	"fmt"
 	"log/slog"
+	"reflect"
+	"runtime"
+	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -351,9 +354,10 @@ func ValidateTypeBounds(specs []ArgSpec, inputSchema *arrow.Schema) error {
 				fieldType := inputSchema.Field(i).Type
 				if !matchesAnyBound(fieldType, spec.TypeBound) {
 					return &TypeBoundError{
-						ArgName:   spec.Name,
-						Position:  i,
-						FieldType: fieldType,
+						ArgName:        spec.Name,
+						Position:       i,
+						FieldType:      fieldType,
+						PredicateNames: predicateNames(spec.TypeBound),
 					}
 				}
 			}
@@ -364,9 +368,10 @@ func ValidateTypeBounds(specs []ArgSpec, inputSchema *arrow.Schema) error {
 			fieldType := inputSchema.Field(spec.Position).Type
 			if !matchesAnyBound(fieldType, spec.TypeBound) {
 				return &TypeBoundError{
-					ArgName:   spec.Name,
-					Position:  spec.Position,
-					FieldType: fieldType,
+					ArgName:        spec.Name,
+					Position:       spec.Position,
+					FieldType:      fieldType,
+					PredicateNames: predicateNames(spec.TypeBound),
 				}
 			}
 		}
@@ -381,4 +386,39 @@ func matchesAnyBound(fieldType arrow.DataType, bounds []TypeBoundPredicate) bool
 		}
 	}
 	return false
+}
+
+// predicateNames recovers the symbolic name of each TypeBoundPredicate via
+// runtime reflection. Used in TypeBoundError messages to keep the wire-level
+// error text aligned with vgi-python's "_is_multipliable_type" / "_is_addable_type"
+// convention (the SQL tests assert on these substrings).
+func predicateNames(bounds []TypeBoundPredicate) []string {
+	names := make([]string, 0, len(bounds))
+	for _, pred := range bounds {
+		fn := runtime.FuncForPC(reflect.ValueOf(pred).Pointer())
+		if fn == nil {
+			continue
+		}
+		raw := fn.Name() // e.g. github.com/Query-farm/vgi-go/vgi.IsMultipliableType
+		short := raw
+		if i := strings.LastIndex(raw, "."); i >= 0 {
+			short = raw[i+1:]
+		}
+		// Convert PascalCase Go names to the snake_case Python style the
+		// integration tests assert on: IsMultipliableType -> _is_multipliable_type.
+		var b strings.Builder
+		for i, r := range short {
+			if i > 0 && 'A' <= r && r <= 'Z' {
+				b.WriteByte('_')
+			}
+			if 'A' <= r && r <= 'Z' {
+				b.WriteRune(r - 'A' + 'a')
+			} else {
+				b.WriteRune(r)
+			}
+		}
+		py := "_" + b.String()
+		names = append(names, py)
+	}
+	return names
 }

@@ -716,11 +716,14 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			if wc, ok := w.extraCatalogs[req.Name]; ok {
 				return w.handleWritableAttach(req, wc)
 			}
-			// Validate catalog name matches
+			// Validate catalog name matches the primary or one of the
+			// declared aliases (WithCatalogAliases).
 			if req.Name != w.catalogName {
-				return CatalogAttachResultWire{}, &vgirpc.RpcError{
-					Type:    "ValueError",
-					Message: fmt.Sprintf("No worker handles catalog '%s'", req.Name),
+				if _, ok := w.catalogAliases[req.Name]; !ok {
+					return CatalogAttachResultWire{}, &vgirpc.RpcError{
+						Type:    "ValueError",
+						Message: fmt.Sprintf("No worker handles catalog '%s'", req.Name),
+					}
 				}
 			}
 			// Generate a simple attach ID
@@ -1033,6 +1036,11 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
 
+			// attach_id is set to []byte(catalog_name) in catalog_attach, so
+			// we can use it to enforce per-catalog function visibility (e.g.
+			// proj_repro_* only surfaces under the projection_repro attach).
+			catalogName := string(req.AttachID)
+
 			var items [][]byte
 			for i := range si.functions {
 				fi := &si.functions[i]
@@ -1049,6 +1057,14 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 						continue
 					}
 					if wantAggregate && fi.FunctionType != FunctionTypeAggregate {
+						continue
+					}
+				}
+				// Catalog-scoped function visibility: if this function is
+				// pinned to a specific catalog and the current attach is for
+				// a different catalog, hide it.
+				if scope, ok := w.catalogFunctionScope[fi.Name]; ok {
+					if catalogName != "" && catalogName != scope {
 						continue
 					}
 				}
