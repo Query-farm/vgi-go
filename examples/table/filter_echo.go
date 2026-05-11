@@ -80,6 +80,9 @@ func (f *FilterEchoFunction) NewState(params *vgi.ProcessParams) (*filterEchoSta
 }
 
 func (f *FilterEchoFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *filterEchoState, out *vgirpc.OutputCollector) error {
+	if params.CurrentPushdownFilters != nil && len(params.CurrentPushdownFilters.Filters) > 0 {
+		state.FilterStr = formatFiltersInline(params.CurrentPushdownFilters)
+	}
 	projected := vgi.ProjectedColumns(params.ProjectionIDs, filterEchoOutputSchema)
 	return vgi.GenerateBatchMap(&state.BatchState, out, params.OutputSchema, func(size int64) (map[string]arrow.Array, error) {
 		start := state.Index
