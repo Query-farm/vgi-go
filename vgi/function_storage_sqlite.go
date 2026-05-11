@@ -53,31 +53,65 @@ type sqliteStorage struct {
 }
 
 // NewSQLiteStorage opens (or creates) a SQLite-backed FunctionStorage. Safe
-// for concurrent use; multiple workers in the same process share one *DB.
+// for concurrent use across goroutines and across processes (WAL mode +
+// busy_timeout): when DuckDB spawns subprocess workers for one execution,
+// every subprocess opens the same database file and sees the others' rows.
+//
+// The default path is fixed per-user (not per-process) so worker subprocesses
+// of a parallel scan share state. Override with opts.Path when the caller
+// wants isolation (e.g. tests passing ":memory:").
 func NewSQLiteStorage(opts SQLiteStorageOptions) (FunctionStorage, error) {
 	path := opts.Path
 	if path == "" {
-		dir := os.TempDir()
-		path = filepath.Join(dir, fmt.Sprintf("vgi-storage-%d.db", os.Getpid()))
+		path = defaultSQLitePath()
 	}
-	dsn := path
-	if path != ":memory:" {
-		// WAL + busy-timeout play well with cross-process access; mirrors
-		// the Python defaults.
-		dsn = path + "?_journal=WAL&_busy_timeout=5000"
-	}
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("opening SQLite storage at %q: %w", path, err)
+	}
+	// One connection per process: writes serialize through it (matches
+	// Python's per-thread-connection model — each Go process is the unit
+	// of write serialization, with WAL coordinating across processes).
+	// Multiple readers within the same process don't need pool depth
+	// because reads complete fast and busy_timeout absorbs collisions.
+	db.SetMaxOpenConns(1)
+	if path != ":memory:" {
+		// Mirrors vgi-python's per-connection pragmas — these are what
+		// make multi-process write contention tolerable:
+		//
+		//   journal_mode=WAL      cross-process reader/writer concurrency
+		//   synchronous=NORMAL    skip fsync on every commit (fsync at
+		//                         WAL checkpoint only) — dominant write-
+		//                         throughput win
+		//   busy_timeout=30000    wait up to 30s for a lock before
+		//                         returning SQLITE_BUSY; matches Python
+		//   temp_store=MEMORY     small temp materializations stay in RAM
+		//   cache_size=-65536     64 MB page cache per connection
+		//
+		// With MaxOpenConns(1) the pool has at most one connection, so
+		// these pragmas apply to every operation that follows.
+		for _, p := range []string{
+			"PRAGMA journal_mode=WAL",
+			"PRAGMA synchronous=NORMAL",
+			"PRAGMA busy_timeout=30000",
+			"PRAGMA temp_store=MEMORY",
+			"PRAGMA cache_size=-65536",
+		} {
+			if _, err := db.Exec(p); err != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("applying %q: %w", p, err)
+			}
+		}
 	}
 	if err := initSQLiteSchema(db); err != nil {
 		db.Close()
 		return nil, err
 	}
+	// Opportunistic cleanup is opt-in: at 0 by default. Tests and short-
+	// lived workers don't need it; long-running deployments should set
+	// 0.01 (matches vgi-python's per-call sample rate) or call
+	// CleanupOldEntries explicitly on a timer.
 	rate := opts.CleanupSampleRate
-	if rate == 0 {
-		rate = 0.01
-	}
 	maxAge := opts.CleanupMaxAge
 	if maxAge == 0 {
 		maxAge = 24 * time.Hour
@@ -88,6 +122,27 @@ func NewSQLiteStorage(opts SQLiteStorageOptions) (FunctionStorage, error) {
 		cleanupSampleRate: rate,
 		cleanupMaxAge:     maxAge,
 	}, nil
+}
+
+// defaultSQLitePath returns a per-user, per-machine stable path for the
+// FunctionStorage SQLite database. Honors XDG_STATE_HOME, falling back to
+// ~/.local/state/vgi/storage.db on Unix or %LOCALAPPDATA%/vgi/storage.db on
+// Windows. Mirrors vgi-python's _get_default_db_path semantics. The path
+// is created if absent.
+func defaultSQLitePath() string {
+	var base string
+	if v := os.Getenv("XDG_STATE_HOME"); v != "" {
+		base = v
+	} else if v := os.Getenv("LOCALAPPDATA"); v != "" { // Windows
+		base = v
+	} else if home, err := os.UserHomeDir(); err == nil {
+		base = filepath.Join(home, ".local", "state")
+	} else {
+		base = os.TempDir()
+	}
+	dir := filepath.Join(base, "vgi")
+	_ = os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, "storage.db")
 }
 
 // initSQLiteSchema creates the eight backing tables. Idempotent.
