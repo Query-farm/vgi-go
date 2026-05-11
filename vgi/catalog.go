@@ -1429,6 +1429,13 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_insert_function_get
 	vgirpc.Unary[TableInsertFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_insert_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableInsertFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
+			if w.attachWriteFunctionGetHandler != nil {
+				if result, handled, err := w.attachWriteFunctionGetHandler("insert", req.AttachID, req.SchemaName, req.Name); err != nil {
+					return TableScanFunctionGetResponseWire{}, err
+				} else if handled {
+					return buildScanFunctionGetResponse(result)
+				}
+			}
 			if w.writableByAttachID(req.AttachID) == nil {
 				return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_id=%x len=%d, extra_catalogs=%d)", req.SchemaName, req.Name, req.AttachID, len(req.AttachID), len(w.extraCatalogs))}
 			}
@@ -1444,6 +1451,13 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_update_function_get
 	vgirpc.Unary[TableUpdateFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_update_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableUpdateFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
+			if w.attachWriteFunctionGetHandler != nil {
+				if result, handled, err := w.attachWriteFunctionGetHandler("update", req.AttachID, req.SchemaName, req.Name); err != nil {
+					return TableScanFunctionGetResponseWire{}, err
+				} else if handled {
+					return buildScanFunctionGetResponse(result)
+				}
+			}
 			if w.writableByAttachID(req.AttachID) == nil {
 				return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_id=%x len=%d, extra_catalogs=%d)", req.SchemaName, req.Name, req.AttachID, len(req.AttachID), len(w.extraCatalogs))}
 			}
@@ -1459,6 +1473,13 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_delete_function_get
 	vgirpc.Unary[TableDeleteFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_delete_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableDeleteFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
+			if w.attachWriteFunctionGetHandler != nil {
+				if result, handled, err := w.attachWriteFunctionGetHandler("delete", req.AttachID, req.SchemaName, req.Name); err != nil {
+					return TableScanFunctionGetResponseWire{}, err
+				} else if handled {
+					return buildScanFunctionGetResponse(result)
+				}
+			}
 			if w.writableByAttachID(req.AttachID) == nil {
 				return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_id=%x len=%d, extra_catalogs=%d)", req.SchemaName, req.Name, req.AttachID, len(req.AttachID), len(w.extraCatalogs))}
 			}

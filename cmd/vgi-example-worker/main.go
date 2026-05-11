@@ -14,6 +14,7 @@ import (
 
 	"github.com/Query-farm/vgi-go/examples/aggregate"
 	"github.com/Query-farm/vgi-go/examples/scalar"
+	"github.com/Query-farm/vgi-go/examples/schema_reconcile"
 	"github.com/Query-farm/vgi-go/examples/table"
 	table_in_out "github.com/Query-farm/vgi-go/examples/table_in_out"
 	"github.com/Query-farm/vgi-go/vgi"
@@ -40,6 +41,15 @@ func main() {
 		// Cross-language reproducer catalogs share this binary; ATTACH
 		// against any of these names succeeds (functions are catalog-agnostic).
 		vgi.WithCatalogAliases("projection_repro", "schema_reconcile"),
+		// schema_reconcile fixture: tables/scan-fn/insert-fn/update-fn/delete-fn
+		// resolution lives outside the static catalog because the tables are
+		// served by handlers (not declared via RegisterCatalogTable). The four
+		// handlers below are wired in registration order; they short-circuit on
+		// any other catalog name.
+		vgi.WithSchemaContentsHandler(schema_reconcile.SchemaContentsHandler),
+		vgi.WithAttachTableGetHandler(schema_reconcile.AttachTableGetHandler),
+		vgi.WithAttachScanFunctionGetHandler(schema_reconcile.AttachScanFunctionGetHandler),
+		vgi.WithAttachWriteFunctionGetHandler(schema_reconcile.AttachWriteFunctionGetHandler),
 		vgi.WithSecretTypes(
 			vgi.SecretTypeSpec{
 				Name:        "vgi_example",
@@ -210,6 +220,11 @@ func main() {
 	w.RegisterTableInOut(table_in_out.NewRepeatInputsFunction())
 	w.RegisterTableInOut(table_in_out.NewSlowCancellableInOutFunction())
 	w.RegisterTableInOut(table_in_out.NewSumAllColumnsFunction())
+
+	// schema_reconcile fixture: 3 table-in-outs (insert/update/delete) + 1
+	// table function (scan), all scoped to the schema_reconcile catalog so
+	// they don't surface in the example catalog's function listing.
+	schema_reconcile.RegisterAll(w)
 	w.RegisterTableInOut(table_in_out.NewUnnestTensorRowsFunction())
 
 	// Catalog tables

@@ -4,7 +4,6 @@
 package vgi
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -298,10 +297,5 @@ func PartitionKey(chunk arrow.RecordBatch, partitionKeyCount, i int) uint64 {
 	}
 	return h.Sum64()
 }
-
-// emptyDecimalForOpaqueArgs is a no-op helper kept here so downstream
-// generated code can compile against an empty argument list when the
-// chunk-side serializer wants to mirror Python's sink/sink encoding.
-func emptyDecimalForOpaqueArgs() *bytes.Buffer { return new(bytes.Buffer) }
 
 var _ = memory.NewGoAllocator

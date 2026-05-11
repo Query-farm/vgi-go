@@ -306,26 +306,27 @@ type Worker struct {
 	// function is restricted to a single catalog (e.g. proj_repro_* only
 	// appears under the ``projection_repro`` catalog, not ``example``).
 	// Functions not present in the map are visible to every catalog.
-	catalogFunctionScope         map[string]string
-	storages                     sync.Map // map[hex execution ID string]*ExecutionStorage
-	settings                     []SettingSpec
-	catalogTables                map[string][]CatalogTable // schema_name → tables
-	catalogViews                 map[string][]CatalogView  // schema_name → views
-	catalogMacros                map[string][]CatalogMacro // schema_name → macros
-	scanFunctionGetHandler       ScanFunctionGetHandler
-	tableGetHandler              TableGetHandler
-	catalogInfoOverride          *CatalogInfo
-	attachValidator              AttachValidator
-	schemaContentsHandler        SchemaContentsHandler
-	attachTableGetHandler        AttachTableGetHandler
-	attachScanFunctionGetHandler AttachScanFunctionGetHandler
-	catalogVersionHook           CatalogVersionHook
-	authenticateFunc             vgirpc.AuthenticateFunc
-	oauthMetadata                *vgirpc.OAuthResourceMetadata
-	secretTypes                  []SecretTypeSpec
-	attachOptions                []AttachOptionSpec
-	logLevel                     slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
-	logHandler                   slog.Handler // nil means default TextHandler to stderr
+	catalogFunctionScope          map[string]string
+	storages                      sync.Map // map[hex execution ID string]*ExecutionStorage
+	settings                      []SettingSpec
+	catalogTables                 map[string][]CatalogTable // schema_name → tables
+	catalogViews                  map[string][]CatalogView  // schema_name → views
+	catalogMacros                 map[string][]CatalogMacro // schema_name → macros
+	scanFunctionGetHandler        ScanFunctionGetHandler
+	tableGetHandler               TableGetHandler
+	catalogInfoOverride           *CatalogInfo
+	attachValidator               AttachValidator
+	schemaContentsHandler         SchemaContentsHandler
+	attachTableGetHandler         AttachTableGetHandler
+	attachScanFunctionGetHandler  AttachScanFunctionGetHandler
+	attachWriteFunctionGetHandler AttachWriteFunctionGetHandler
+	catalogVersionHook            CatalogVersionHook
+	authenticateFunc              vgirpc.AuthenticateFunc
+	oauthMetadata                 *vgirpc.OAuthResourceMetadata
+	secretTypes                   []SecretTypeSpec
+	attachOptions                 []AttachOptionSpec
+	logLevel                      slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
+	logHandler                    slog.Handler // nil means default TextHandler to stderr
 }
 
 // WorkerOption configures a Worker.
@@ -448,6 +449,25 @@ func WithAttachScanFunctionGetHandler(h AttachScanFunctionGetHandler) WorkerOpti
 	}
 }
 
+// AttachWriteFunctionGetHandler is the attach-id-aware version of
+// catalog_table_{insert,update,delete}_function_get. Op is "insert",
+// "update", or "delete". Return (result, true) to route; (nil, false) to
+// fall through to the built-in writable-catalog path or the read-only
+// rejection.
+type AttachWriteFunctionGetHandler func(op string, attachID []byte, schemaName, name string) (result *ScanFunctionResult, handled bool, err error)
+
+// WithAttachWriteFunctionGetHandler installs an attach-id-aware handler
+// that resolves the worker function backing INSERT/UPDATE/DELETE on a
+// given (attach_id, schema, table). Use this for fixture catalogs that
+// publish writable tables outside of the built-in WritableCatalog path
+// (e.g. schema_reconcile, which has its own per-table SQLite store and
+// strict-schema validators).
+func WithAttachWriteFunctionGetHandler(h AttachWriteFunctionGetHandler) WorkerOption {
+	return func(w *Worker) {
+		w.attachWriteFunctionGetHandler = h
+	}
+}
+
 // CatalogVersionHook runs on every catalog_version RPC before the response is
 // returned. Returning a non-nil error causes the RPC to fail with that
 // message (wrapped as a ValueError). The hook can inspect call-context
@@ -563,6 +583,16 @@ func (w *Worker) RegisterTableForCatalog(catalogName string, f TableFunction) {
 // RegisterTableInOut registers a table-in-out function.
 func (w *Worker) RegisterTableInOut(f TableInOutFunction) {
 	w.tableInOuts[f.Name()] = append(w.tableInOuts[f.Name()], f)
+}
+
+// RegisterTableInOutForCatalog is the catalog-scoped sibling of
+// RegisterTableInOut; the function is invokable as normal but only
+// surfaces under the named catalog's function listing. See
+// RegisterTableForCatalog for the rationale (per-catalog function
+// inventories that fixture tests assert on).
+func (w *Worker) RegisterTableInOutForCatalog(catalogName string, f TableInOutFunction) {
+	w.tableInOuts[f.Name()] = append(w.tableInOuts[f.Name()], f)
+	w.catalogFunctionScope[f.Name()] = catalogName
 }
 
 // RegisterAggregate registers an aggregate function. Multiple registrations
