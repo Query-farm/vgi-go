@@ -559,6 +559,11 @@ func NewWorker(opts ...WorkerOption) *Worker {
 	for _, opt := range opts {
 		opt(w)
 	}
+	// Wire aggregateStorage to the same shared FunctionStorage backend that
+	// ExecutionStorage uses, so aggregate state, work queues, and worker
+	// state all live in one database (or one HTTP endpoint, for cloud
+	// backends).
+	w.aggStorage.setResolver(w.functionStorage)
 	return w
 }
 

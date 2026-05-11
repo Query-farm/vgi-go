@@ -4,105 +4,76 @@
 package vgi
 
 import (
-	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
 	"sync"
-
-	_ "modernc.org/sqlite"
 )
 
-// aggregateStorage is the cross-process state backing for aggregate
-// functions. DuckDB's parallel-aggregate model spawns multiple worker
-// processes per ATTACH and expects state to flow across them
-// (worker_A.update → worker_B.combine), so an in-memory map per process
-// would lose data — see vgi-python's FunctionStorage (sqlite-backed) for
-// the same rationale.
+// ---------------------------------------------------------------------------
+// aggregateStorage: cross-process state for aggregate functions
 //
-// Implementation: a single SQLite file at $VGI_GO_AGGREGATE_DB or, by
-// default, $XDG_STATE_HOME/vgi/vgi_storage_go.db (matching vgi-python's
-// platformdirs convention). All worker processes for a user share the
-// file; SQLite's file locking handles concurrent writes.
+// DuckDB spawns multiple worker subprocesses per parallel-aggregate query and
+// expects state to flow across them (worker_A.update → worker_B.combine), so
+// in-memory state per process loses data. We delegate to the worker-shared
+// FunctionStorage backend (today: SQLite at ~/.local/state/vgi/storage.db;
+// tomorrow: Cloudflare DO / Azure SQL for HTTP deployments).
+//
+// The stateBucket type pre-binds a (function_name, execution_id) view so
+// call sites in aggregate_protocol.go stay terse. It maps onto the
+// FunctionStorage interface's aggregate methods directly.
+// ---------------------------------------------------------------------------
+
+// aggregateStorage is a thin shim that lazily resolves a FunctionStorage
+// backend from a setter and exposes the bucket(funcName, execID) pattern
+// the protocol layer uses.
 type aggregateStorage struct {
-	mu       sync.Mutex
-	db       *sql.DB
-	openErr  error
-	openOnce sync.Once
-	dbPath   string
+	mu      sync.Mutex
+	back    FunctionStorage
+	resolve func() (FunctionStorage, error) // set by the Worker
 }
 
 func newAggregateStorage() *aggregateStorage {
 	return &aggregateStorage{}
 }
 
-func defaultAggregateDBPath() string {
-	if env := os.Getenv("VGI_GO_AGGREGATE_DB"); env != "" {
-		return env
+// setResolver wires a lazy backend resolver. Called once by the Worker so
+// the FunctionStorage is shared with ExecutionStorage and any future
+// backends (Cloudflare DO, etc.).
+func (s *aggregateStorage) setResolver(r func() (FunctionStorage, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolve = r
+}
+
+// ensureOpen resolves and caches the backend on first use.
+func (s *aggregateStorage) ensureOpen() (FunctionStorage, error) {
+	s.mu.Lock()
+	if s.back != nil {
+		back := s.back
+		s.mu.Unlock()
+		return back, nil
 	}
-	var base string
-	if runtime.GOOS == "darwin" {
-		base = filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "vgi-go")
-	} else if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		base = filepath.Join(dir, "vgi-go")
+	resolver := s.resolve
+	s.mu.Unlock()
+	if resolver == nil {
+		return nil, fmt.Errorf("aggregateStorage: backend resolver not set (Worker should call setResolver)")
+	}
+	back, err := resolver()
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	if s.back == nil {
+		s.back = back
 	} else {
-		base = filepath.Join(os.Getenv("HOME"), ".local", "state", "vgi-go")
+		back = s.back
 	}
-	return filepath.Join(base, "aggregate_storage.db")
+	s.mu.Unlock()
+	return back, nil
 }
 
-func (s *aggregateStorage) ensureOpen() error {
-	s.openOnce.Do(func() {
-		path := defaultAggregateDBPath()
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			s.openErr = fmt.Errorf("create db directory: %w", err)
-			return
-		}
-		// Use shared cache + busy_timeout for cross-process serialization.
-		dsn := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)"
-		db, err := sql.Open("sqlite", dsn)
-		if err != nil {
-			s.openErr = fmt.Errorf("open sqlite: %w", err)
-			return
-		}
-		// Limit pool — SQLite is best with serialized writes.
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
-		schema := `
-CREATE TABLE IF NOT EXISTS agg_state (
-    execution_id BLOB NOT NULL,
-    function_name TEXT NOT NULL,
-    group_id INTEGER NOT NULL,
-    state BLOB NOT NULL,
-    PRIMARY KEY (execution_id, function_name, group_id)
-);
-CREATE TABLE IF NOT EXISTS agg_const_args (
-    execution_id BLOB NOT NULL,
-    function_name TEXT NOT NULL,
-    args BLOB NOT NULL,
-    PRIMARY KEY (execution_id, function_name)
-);
-CREATE TABLE IF NOT EXISTS agg_window_partition (
-    execution_id BLOB NOT NULL,
-    function_name TEXT NOT NULL,
-    partition_id INTEGER NOT NULL,
-    payload BLOB NOT NULL,
-    PRIMARY KEY (execution_id, function_name, partition_id)
-);`
-		if _, err := db.Exec(schema); err != nil {
-			s.openErr = fmt.Errorf("create schema: %w", err)
-			return
-		}
-		s.db = db
-		s.dbPath = path
-	})
-	return s.openErr
-}
-
-// stateBucket is a transactional view of the SQLite-backed storage scoped
-// to (function_name, execution_id). Methods take a closure to keep the
-// SQLite handles short-lived.
+// stateBucket binds aggregate operations to one (function_name, execution_id).
+// Mirrors the original surface so aggregate_protocol.go and aggregate_helpers.go
+// don't have to change.
 type stateBucket struct {
 	storage      *aggregateStorage
 	functionName string
@@ -113,160 +84,98 @@ func (s *aggregateStorage) bucket(funcName string, execID []byte) *stateBucket {
 	return &stateBucket{storage: s, functionName: funcName, executionID: execID}
 }
 
-// loadStates fetches all states for the given group_ids in one query.
-// Returns a map; gids absent from the result are not yet stored.
+// loadStates fetches all states for the given group_ids. Returns a map keyed
+// by group_id; gids absent from the result are not yet stored. Matches the
+// pre-shared-backend surface so callers don't change.
 func (b *stateBucket) loadStates(gids []int64) (map[int64][]byte, error) {
-	if err := b.storage.ensureOpen(); err != nil {
+	back, err := b.storage.ensureOpen()
+	if err != nil {
 		return nil, err
 	}
 	if len(gids) == 0 {
 		return map[int64][]byte{}, nil
 	}
-	b.storage.mu.Lock()
-	defer b.storage.mu.Unlock()
-	out := make(map[int64][]byte, len(gids))
-	// One query per gid — keeps the SQL simple; small N in practice.
-	stmt, err := b.storage.db.Prepare(`SELECT state FROM agg_state WHERE execution_id = ? AND function_name = ? AND group_id = ?`)
+	entries, err := back.AggregateStateGet(b.executionID, gids)
 	if err != nil {
 		return nil, err
 	}
-	defer stmt.Close()
-	for _, gid := range gids {
-		var data []byte
-		err := stmt.QueryRow(b.executionID, b.functionName, gid).Scan(&data)
-		if err == sql.ErrNoRows {
+	out := make(map[int64][]byte, len(entries))
+	for _, e := range entries {
+		if e.State == nil {
 			continue
 		}
-		if err != nil {
-			return nil, err
-		}
-		out[gid] = data
+		out[e.GroupID] = e.State
 	}
 	return out, nil
 }
 
-// saveStates writes (gid, bytes) pairs in a single transaction.
+// saveStates writes (gid, bytes) pairs.
 func (b *stateBucket) saveStates(states map[int64][]byte) error {
-	if err := b.storage.ensureOpen(); err != nil {
+	back, err := b.storage.ensureOpen()
+	if err != nil {
 		return err
 	}
 	if len(states) == 0 {
 		return nil
 	}
-	b.storage.mu.Lock()
-	defer b.storage.mu.Unlock()
-	tx, err := b.storage.db.Begin()
-	if err != nil {
-		return err
-	}
-	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO agg_state(execution_id, function_name, group_id, state) VALUES(?, ?, ?, ?)`)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
+	entries := make([]AggregateStateEntry, 0, len(states))
 	for gid, data := range states {
-		if _, err := stmt.Exec(b.executionID, b.functionName, gid, data); err != nil {
-			stmt.Close()
-			tx.Rollback()
-			return err
-		}
+		entries = append(entries, AggregateStateEntry{GroupID: gid, State: data})
 	}
-	stmt.Close()
-	return tx.Commit()
+	return back.AggregateStatePut(b.executionID, entries)
 }
 
+// clear drops aggregate state and window partition rows for this
+// execution_id. Const args are intentionally left behind: they're small,
+// keyed by (execution_id, function_name), and reaped by the FunctionStorage's
+// TTL sweep. Matches vgi-python which also has no per-call const-args clear.
 func (b *stateBucket) clear() error {
-	if err := b.storage.ensureOpen(); err != nil {
-		return err
-	}
-	b.storage.mu.Lock()
-	defer b.storage.mu.Unlock()
-	tx, err := b.storage.db.Begin()
+	back, err := b.storage.ensureOpen()
 	if err != nil {
 		return err
 	}
-	for _, q := range []string{
-		`DELETE FROM agg_state WHERE execution_id = ? AND function_name = ?`,
-		`DELETE FROM agg_const_args WHERE execution_id = ? AND function_name = ?`,
-		`DELETE FROM agg_window_partition WHERE execution_id = ? AND function_name = ?`,
-	} {
-		if _, err := tx.Exec(q, b.executionID, b.functionName); err != nil {
-			tx.Rollback()
-			return err
-		}
+	if err := back.AggregateStateClear(b.executionID); err != nil {
+		return err
 	}
-	return tx.Commit()
+	return back.AggregateWindowPartitionClear(b.executionID)
 }
 
 func (b *stateBucket) putConstArgs(args []byte) error {
-	if err := b.storage.ensureOpen(); err != nil {
+	back, err := b.storage.ensureOpen()
+	if err != nil {
 		return err
 	}
-	b.storage.mu.Lock()
-	defer b.storage.mu.Unlock()
-	_, err := b.storage.db.Exec(
-		`INSERT OR REPLACE INTO agg_const_args(execution_id, function_name, args) VALUES(?, ?, ?)`,
-		b.executionID, b.functionName, args,
-	)
-	return err
+	return back.AggregateConstArgsPut(b.executionID, b.functionName, args)
 }
 
 func (b *stateBucket) getConstArgs() ([]byte, error) {
-	if err := b.storage.ensureOpen(); err != nil {
+	back, err := b.storage.ensureOpen()
+	if err != nil {
 		return nil, err
 	}
-	b.storage.mu.Lock()
-	defer b.storage.mu.Unlock()
-	var data []byte
-	err := b.storage.db.QueryRow(
-		`SELECT args FROM agg_const_args WHERE execution_id = ? AND function_name = ?`,
-		b.executionID, b.functionName,
-	).Scan(&data)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return data, err
+	return back.AggregateConstArgsGet(b.executionID, b.functionName)
 }
 
 func (b *stateBucket) putWindowPartition(partitionID int64, payload []byte) error {
-	if err := b.storage.ensureOpen(); err != nil {
+	back, err := b.storage.ensureOpen()
+	if err != nil {
 		return err
 	}
-	b.storage.mu.Lock()
-	defer b.storage.mu.Unlock()
-	_, err := b.storage.db.Exec(
-		`INSERT OR REPLACE INTO agg_window_partition(execution_id, function_name, partition_id, payload) VALUES(?, ?, ?, ?)`,
-		b.executionID, b.functionName, partitionID, payload,
-	)
-	return err
+	return back.AggregateWindowPartitionPut(b.executionID, partitionID, payload)
 }
 
 func (b *stateBucket) getWindowPartition(partitionID int64) ([]byte, error) {
-	if err := b.storage.ensureOpen(); err != nil {
+	back, err := b.storage.ensureOpen()
+	if err != nil {
 		return nil, err
 	}
-	b.storage.mu.Lock()
-	defer b.storage.mu.Unlock()
-	var payload []byte
-	err := b.storage.db.QueryRow(
-		`SELECT payload FROM agg_window_partition WHERE execution_id = ? AND function_name = ? AND partition_id = ?`,
-		b.executionID, b.functionName, partitionID,
-	).Scan(&payload)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return payload, err
+	return back.AggregateWindowPartitionGet(b.executionID, partitionID)
 }
 
 func (b *stateBucket) deleteWindowPartition(partitionID int64) error {
-	if err := b.storage.ensureOpen(); err != nil {
+	back, err := b.storage.ensureOpen()
+	if err != nil {
 		return err
 	}
-	b.storage.mu.Lock()
-	defer b.storage.mu.Unlock()
-	_, err := b.storage.db.Exec(
-		`DELETE FROM agg_window_partition WHERE execution_id = ? AND function_name = ? AND partition_id = ?`,
-		b.executionID, b.functionName, partitionID,
-	)
-	return err
+	return back.AggregateWindowPartitionDelete(b.executionID, partitionID)
 }

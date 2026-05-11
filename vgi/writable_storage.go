@@ -39,8 +39,12 @@ func newWritableStore() *writableStore { return &writableStore{} }
 
 func (s *writableStore) ensureOpen() error {
 	s.once.Do(func() {
-		// Reuse aggregate DB path so a single file holds all worker state.
-		path := defaultAggregateDBPath()
+		// Use the shared FunctionStorage SQLite path so a single file holds
+		// all worker state (aggregate, execution, and writable-catalog
+		// tables). The writable store keeps its own *sql.DB handle since
+		// its schema doesn't go through the FunctionStorage interface,
+		// but SQLite's WAL handles the cross-connection coordination.
+		path := defaultSQLitePath()
 		dsn := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)"
 		db, err := sql.Open("sqlite", dsn)
 		if err != nil {
