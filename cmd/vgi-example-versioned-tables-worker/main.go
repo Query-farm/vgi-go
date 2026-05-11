@@ -30,12 +30,12 @@ import (
 )
 
 const (
-	catalogName                   = "versioned_tables"
-	dataVersionSpec               = ">=1.0.0,<4.0.0"
-	defaultDataVersion            = "3.0.0"
-	defaultImplementationVersion  = "11.0.0"
-	stickyCookieName              = "vgi_sticky"
-	attachIDSeparator             = 0x00
+	catalogName                  = "versioned_tables"
+	dataVersionSpec              = ">=1.0.0,<4.0.0"
+	defaultDataVersion           = "3.0.0"
+	defaultImplementationVersion = "11.0.0"
+	stickyCookieName             = "vgi_sticky"
+	attachIDSeparator            = 0x00
 )
 
 var (

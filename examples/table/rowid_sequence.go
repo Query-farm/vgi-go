@@ -79,9 +79,15 @@ func (f *RowIdSequenceFunction) OnBind(params *vgi.BindParams) (*vgi.BindRespons
 	if v, err := params.Args.GetScalarString("layout"); err == nil && v != "" {
 		layout = v
 	}
+	if layout != "first" && layout != "middle" && layout != "last" {
+		return nil, fmt.Errorf("layout must be one of the allowed choices: first, middle, last (got %q)", layout)
+	}
 	ridType := "int64"
 	if v, err := params.Args.GetScalarString("row_id_type"); err == nil && v != "" {
 		ridType = v
+	}
+	if ridType != "int64" && ridType != "string" && ridType != "struct" {
+		return nil, fmt.Errorf("row_id_type must be one of the allowed choices: int64, string, struct (got %q)", ridType)
 	}
 	schema := buildRowIDSchema(layout, ridType)
 	return &vgi.BindResponse{OutputSchema: schema}, nil

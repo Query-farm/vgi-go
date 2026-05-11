@@ -43,21 +43,21 @@ type BindResponseWire struct {
 
 // InitRequestWire is the wire format for init requests.
 type InitRequestWire struct {
-	BindCall              []byte   `vgirpc:"bind_call"`
-	OutputSchema          []byte   `vgirpc:"output_schema"`
-	BindOpaqueData        *[]byte  `vgirpc:"bind_opaque_data"`
-	ProjectionIDs         *[]int32 `vgirpc:"projection_ids"`
-	PushdownFilters       *[]byte  `vgirpc:"pushdown_filters"`
+	BindCall              []byte    `vgirpc:"bind_call"`
+	OutputSchema          []byte    `vgirpc:"output_schema"`
+	BindOpaqueData        *[]byte   `vgirpc:"bind_opaque_data"`
+	ProjectionIDs         *[]int32  `vgirpc:"projection_ids"`
+	PushdownFilters       *[]byte   `vgirpc:"pushdown_filters"`
 	JoinKeys              *[][]byte `vgirpc:"join_keys"`
-	Phase                 *string  `vgirpc:"phase,enum"`
-	ExecutionID           *[]byte  `vgirpc:"execution_id"`
-	InitOpaqueData        *[]byte  `vgirpc:"init_opaque_data"`
-	OrderByColumnName     *string  `vgirpc:"order_by_column_name"`
-	OrderByDirection      *string  `vgirpc:"order_by_direction,enum"`
-	OrderByNullOrder      *string  `vgirpc:"order_by_null_order,enum"`
-	OrderByLimit          *int64   `vgirpc:"order_by_limit"`
-	TablesamplePercentage *float64 `vgirpc:"tablesample_percentage"`
-	TablesampleSeed       *int64   `vgirpc:"tablesample_seed"`
+	Phase                 *string   `vgirpc:"phase,enum"`
+	ExecutionID           *[]byte   `vgirpc:"execution_id"`
+	InitOpaqueData        *[]byte   `vgirpc:"init_opaque_data"`
+	OrderByColumnName     *string   `vgirpc:"order_by_column_name"`
+	OrderByDirection      *string   `vgirpc:"order_by_direction,enum"`
+	OrderByNullOrder      *string   `vgirpc:"order_by_null_order,enum"`
+	OrderByLimit          *int64    `vgirpc:"order_by_limit"`
+	TablesamplePercentage *float64  `vgirpc:"tablesample_percentage"`
+	TablesampleSeed       *int64    `vgirpc:"tablesample_seed"`
 }
 
 // GlobalInitResponseWire is the wire format for global init responses.

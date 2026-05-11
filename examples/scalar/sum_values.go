@@ -5,6 +5,7 @@ package scalar
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -29,6 +30,11 @@ func (f *SumValuesFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (f *SumValuesFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+	// Zero-arg invocation has an empty input schema; bind without any input
+	// columns and surface a clear error before we read field(0) below.
+	if params.InputSchema == nil || params.InputSchema.NumFields() == 0 {
+		return nil, fmt.Errorf("sum_values requires at least 1 value")
+	}
 	return vgi.BindResultFromInput(params, 0, arrow.PrimitiveTypes.Int64, vgi.PromoteForAddition)
 }
 

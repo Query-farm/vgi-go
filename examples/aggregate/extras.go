@@ -213,6 +213,12 @@ func (PercentileFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (PercentileFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {
+	// NOTE: rejecting SQL NULL for the const `p` is intentionally not
+	// implemented here. DuckDB collapses a literal `NULL` const aggregate
+	// arg to a defaulted value with the null bit cleared on the wire (the
+	// arg arrives as decimal(2,1) value 0, isNull=false), so the worker
+	// has no signal to distinguish `NULL` from `0`. vgi-python rejects
+	// this at the C++/extension level before the bind RPC fires.
 	return vgi.BindSchema(arrow.NewSchema([]arrow.Field{
 		{Name: "result", Type: arrow.PrimitiveTypes.Float64},
 	}, nil))
@@ -319,6 +325,9 @@ func (SumAllFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (SumAllFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {
+	if p.InputSchema == nil || p.InputSchema.NumFields() == 0 {
+		return nil, fmt.Errorf("vgi_sum_all requires at least 1 value")
+	}
 	return vgi.BindSchema(arrow.NewSchema([]arrow.Field{
 		{Name: "result", Type: arrow.PrimitiveTypes.Float64},
 	}, nil))

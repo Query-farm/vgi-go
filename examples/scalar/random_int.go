@@ -44,6 +44,13 @@ func (f *RandomIntFunction) Process(ctx context.Context, params *vgi.ProcessPara
 			if maxVal <= minVal {
 				return minVal
 			}
-			return minVal + rand.Int63n(maxVal-minVal+1)
+			width := maxVal - minVal
+			// width+1 would overflow when maxVal-minVal == MaxInt64 (e.g.
+			// random_int(0, INT64_MAX)). Treat the full int64 range as
+			// inclusive-of-max via a direct Int63 draw.
+			if width == int64(^uint64(0)>>1) {
+				return rand.Int63()
+			}
+			return minVal + rand.Int63n(width+1)
 		})
 }

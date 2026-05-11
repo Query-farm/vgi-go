@@ -63,6 +63,13 @@ type CatalogTable struct {
 	StatisticsCacheMaxAgeSeconds *int64
 	// SupportsTimeTravel indicates this table supports AT (VERSION/TIMESTAMP) queries.
 	SupportsTimeTravel bool
+	// CardinalityEstimate, when non-nil, inlines the table's row-count estimate
+	// on TableInfo. The C++ extension uses it directly and skips the per-bind
+	// table_function_cardinality RPC. Use only for read-only / slow-changing
+	// tables where cardinality is statically known.
+	CardinalityEstimate *int64
+	// CardinalityMax mirrors CardinalityEstimate for the cardinality upper bound.
+	CardinalityMax *int64
 }
 
 // ForeignKeyConstraint describes a foreign key relationship.

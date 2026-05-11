@@ -29,7 +29,34 @@ type TableInfo struct {
 	SupportsInsert           bool
 	SupportsUpdate           bool
 	SupportsDelete           bool
+	SupportsReturning        bool
 	SupportsColumnStatistics bool
+
+	// Optional inlined function-discovery results. When populated (non-nil),
+	// the C++ extension uses the cached bytes and skips the corresponding
+	// catalog_table_{scan,insert,update,delete}_function_get RPC. Bytes are
+	// the IPC payload from SerializeScanFunctionResult.
+	ScanFunction   []byte
+	InsertFunction []byte
+	UpdateFunction []byte
+	DeleteFunction []byte
+
+	// Optional inlined cardinality. When set, the C++ extension uses these
+	// directly and skips the table_function_cardinality RPC. Use nil to leave
+	// the field unset (per-bind RPC continues to fire).
+	CardinalityEstimate *int64
+	CardinalityMax      *int64
+
+	// Optional inlined column statistics. Bytes are the IPC payload from
+	// SerializeColumnStatistics. When non-nil, the C++ extension skips the
+	// per-bind catalog_table_column_statistics_get and the per-scan
+	// table_function_statistics RPCs.
+	ColumnStatistics []byte
+
+	// Optional inlined bind result. Bytes are the IPC payload from a bind
+	// response. When non-nil, the C++ extension threads it straight into
+	// bind_data and skips the per-scan bind RPC.
+	BindResult []byte
 }
 
 var tableInfoSchema = generated.TableInfoSchema
@@ -158,9 +185,52 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 	defer sdBuilder.Release()
 	sdBuilder.Append(info.SupportsDelete)
 
+	srBuilder := array.NewBooleanBuilder(mem)
+	defer srBuilder.Release()
+	srBuilder.Append(info.SupportsReturning)
+
 	scsBuilder := array.NewBooleanBuilder(mem)
 	defer scsBuilder.Release()
 	scsBuilder.Append(info.SupportsColumnStatistics)
+
+	// Inlined function-discovery payloads. Schema declares these as
+	// non-nullable binary, but the C++ extension treats both null and empty
+	// bytes as "not present". Match vgi-python: write null when nil.
+	appendOptBinary := func(b []byte) *array.Binary {
+		bb := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+		defer bb.Release()
+		if b == nil {
+			bb.AppendNull()
+		} else {
+			bb.Append(b)
+		}
+		return bb.NewBinaryArray()
+	}
+	scanFunctionArr := appendOptBinary(info.ScanFunction)
+	insertFunctionArr := appendOptBinary(info.InsertFunction)
+	updateFunctionArr := appendOptBinary(info.UpdateFunction)
+	deleteFunctionArr := appendOptBinary(info.DeleteFunction)
+	columnStatsArr := appendOptBinary(info.ColumnStatistics)
+	bindResultArr := appendOptBinary(info.BindResult)
+
+	// cardinality_estimate / cardinality_max: schema is non-nullable int64,
+	// but the C++ extension reads via `row[...].as<int64_t>()` which yields
+	// std::nullopt for nulls. Match vgi-python: write null when unset.
+	cardEstBuilder := array.NewInt64Builder(mem)
+	defer cardEstBuilder.Release()
+	if info.CardinalityEstimate != nil {
+		cardEstBuilder.Append(*info.CardinalityEstimate)
+	} else {
+		cardEstBuilder.AppendNull()
+	}
+
+	cardMaxBuilder := array.NewInt64Builder(mem)
+	defer cardMaxBuilder.Release()
+	if info.CardinalityMax != nil {
+		cardMaxBuilder.Append(*info.CardinalityMax)
+	} else {
+		cardMaxBuilder.AppendNull()
+	}
 
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
@@ -176,7 +246,16 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		siBuilder.NewArray(),
 		suBuilder.NewArray(),
 		sdBuilder.NewArray(),
+		srBuilder.NewArray(),
 		scsBuilder.NewArray(),
+		scanFunctionArr,
+		insertFunctionArr,
+		updateFunctionArr,
+		deleteFunctionArr,
+		cardEstBuilder.NewArray(),
+		cardMaxBuilder.NewArray(),
+		columnStatsArr,
+		bindResultArr,
 	}
 	defer func() {
 		for _, c := range cols {

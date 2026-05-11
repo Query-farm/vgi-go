@@ -615,4 +615,3 @@ func arrowValueAt(col arrow.Array, i int) interface{} {
 	}
 	return nil
 }
-

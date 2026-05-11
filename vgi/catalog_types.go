@@ -23,30 +23,31 @@ type CatalogExample struct {
 
 // FunctionInfo describes a function in the catalog.
 type FunctionInfo struct {
-	Name                        string
-	SchemaName                  string
-	FunctionType                FunctionType
-	ArgSchema                   *arrow.Schema // argument schema
-	OutputSchema                *arrow.Schema // return schema
-	Stability                   FunctionStability
-	NullHandling                NullHandling
-	Description                 string
-	Comment                     string
-	Tags                        map[string]string
-	Examples                    []CatalogExample
-	Categories                  []string
-	ProjectionPushdown          *bool
-	FilterPushdown              *bool
-	SamplingPushdown            *bool
-	SupportedExpressionFilters  []string
-	OrderPreservation           string // "" = null
-	MaxWorkers                  int32
-	OrderDependent              string // dictionary, default "NOT_ORDER_DEPENDENT"
-	DistinctDependent           string // dictionary, default "NOT_DISTINCT_DEPENDENT"
-	SupportsWindow              bool
-	HasFinalize                 bool
-	RequiredSettings            []string
-	RequiredSecrets             []SecretRequirement
+	Name                       string
+	SchemaName                 string
+	FunctionType               FunctionType
+	ArgSchema                  *arrow.Schema // argument schema
+	OutputSchema               *arrow.Schema // return schema
+	Stability                  FunctionStability
+	NullHandling               NullHandling
+	Description                string
+	Comment                    string
+	Tags                       map[string]string
+	Examples                   []CatalogExample
+	Categories                 []string
+	ProjectionPushdown         *bool
+	FilterPushdown             *bool
+	SamplingPushdown           *bool
+	SupportedExpressionFilters []string
+	OrderPreservation          string // "" = null
+	MaxWorkers                 int32
+	OrderDependent             string // dictionary, default "NOT_ORDER_DEPENDENT"
+	DistinctDependent          string // dictionary, default "NOT_DISTINCT_DEPENDENT"
+	SupportsWindow             bool
+	StreamingPartitioned       bool
+	HasFinalize                bool
+	RequiredSettings           []string
+	RequiredSecrets            []SecretRequirement
 }
 
 var dictType = &arrow.DictionaryType{
@@ -264,6 +265,11 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	defer swBuilder.Release()
 	swBuilder.Append(info.SupportsWindow)
 
+	// streaming_partitioned
+	spartBuilder := array.NewBooleanBuilder(mem)
+	defer spartBuilder.Release()
+	spartBuilder.Append(info.StreamingPartitioned)
+
 	// has_finalize
 	hfBuilder := array.NewBooleanBuilder(mem)
 	defer hfBuilder.Release()
@@ -320,6 +326,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		odBuilder.NewArray(),
 		ddBuilder.NewArray(),
 		swBuilder.NewArray(),
+		spartBuilder.NewArray(),
 		hfBuilder.NewArray(),
 		reqSettingsBuilder.NewArray(),
 		rsListBuilder.NewArray(),
@@ -350,6 +357,11 @@ type SchemaInfo struct {
 	Comment  string
 	Tags     map[string]string
 	AttachID []byte
+	// EstimatedObjectCount, when non-nil, advertises the approximate per-kind
+	// population (e.g. {"table": 0, "view": 12}). A value of 0 is a hard
+	// guarantee — the C++ client skips the corresponding bulk RPC and any
+	// per-name lookup for that kind. Nil disables the optimisation entirely.
+	EstimatedObjectCount map[string]int64
 }
 
 var schemaInfoSchema = generated.SchemaInfoSchema
@@ -390,11 +402,27 @@ func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error) {
 	defer nameBuilder.Release()
 	nameBuilder.Append(info.Name)
 
+	// estimated_object_count: nullable map<string, int64>
+	eocBuilder := array.NewMapBuilder(mem, arrow.BinaryTypes.String, arrow.PrimitiveTypes.Int64, false)
+	defer eocBuilder.Release()
+	if info.EstimatedObjectCount == nil {
+		eocBuilder.AppendNull()
+	} else {
+		eocBuilder.Append(true)
+		kb := eocBuilder.KeyBuilder().(*array.StringBuilder)
+		vb := eocBuilder.ItemBuilder().(*array.Int64Builder)
+		for k, v := range info.EstimatedObjectCount {
+			kb.Append(k)
+			vb.Append(v)
+		}
+	}
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
 		attachIDBuilder.NewArray(),
 		nameBuilder.NewArray(),
+		eocBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

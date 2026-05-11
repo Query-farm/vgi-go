@@ -147,12 +147,10 @@ var AggregateBindResultSchema = arrow.NewSchema([]arrow.Field{
 }, nil)
 
 // Origin: method 'aggregate_combine' result
-var AggregateCombineResultSchema = arrow.NewSchema([]arrow.Field{
-}, nil)
+var AggregateCombineResultSchema = arrow.NewSchema([]arrow.Field{}, nil)
 
 // Origin: method 'aggregate_destructor' result
-var AggregateDestructorResultSchema = arrow.NewSchema([]arrow.Field{
-}, nil)
+var AggregateDestructorResultSchema = arrow.NewSchema([]arrow.Field{}, nil)
 
 // Origin: method 'aggregate_finalize' result
 var AggregateFinalizeResultSchema = arrow.NewSchema([]arrow.Field{
@@ -165,8 +163,7 @@ var AggregateStreamingChunkResultSchema = arrow.NewSchema([]arrow.Field{
 }, nil)
 
 // Origin: method 'aggregate_streaming_close' result
-var AggregateStreamingCloseResultSchema = arrow.NewSchema([]arrow.Field{
-}, nil)
+var AggregateStreamingCloseResultSchema = arrow.NewSchema([]arrow.Field{}, nil)
 
 // Origin: method 'aggregate_streaming_open' result
 var AggregateStreamingOpenResultSchema = arrow.NewSchema([]arrow.Field{
@@ -174,8 +171,7 @@ var AggregateStreamingOpenResultSchema = arrow.NewSchema([]arrow.Field{
 }, nil)
 
 // Origin: method 'aggregate_update' result
-var AggregateUpdateResultSchema = arrow.NewSchema([]arrow.Field{
-}, nil)
+var AggregateUpdateResultSchema = arrow.NewSchema([]arrow.Field{}, nil)
 
 // Origin: method 'aggregate_window' result
 var AggregateWindowResultSchema = arrow.NewSchema([]arrow.Field{
@@ -188,12 +184,10 @@ var AggregateWindowBatchResultSchema = arrow.NewSchema([]arrow.Field{
 }, nil)
 
 // Origin: method 'aggregate_window_destructor' result
-var AggregateWindowDestructorResultSchema = arrow.NewSchema([]arrow.Field{
-}, nil)
+var AggregateWindowDestructorResultSchema = arrow.NewSchema([]arrow.Field{}, nil)
 
 // Origin: method 'aggregate_window_init' result
-var AggregateWindowInitResultSchema = arrow.NewSchema([]arrow.Field{
-}, nil)
+var AggregateWindowInitResultSchema = arrow.NewSchema([]arrow.Field{}, nil)
 
 // Origin: method 'bind' result
 var BindResultSchema = arrow.NewSchema([]arrow.Field{
@@ -375,8 +369,7 @@ var CatalogAttachParamsSchema = arrow.NewSchema([]arrow.Field{
 }, nil)
 
 // Origin: method 'catalog_catalogs' params
-var CatalogCatalogsParamsSchema = arrow.NewSchema([]arrow.Field{
-}, nil)
+var CatalogCatalogsParamsSchema = arrow.NewSchema([]arrow.Field{}, nil)
 
 // Origin: method 'catalog_create' params
 var CatalogCreateParamsSchema = arrow.NewSchema([]arrow.Field{
@@ -781,4 +774,3 @@ var TableFunctionDynamicToStringParamsSchema = arrow.NewSchema([]arrow.Field{
 var TableFunctionStatisticsParamsSchema = arrow.NewSchema([]arrow.Field{
 	arrow.Field{Name: "request", Type: arrow.BinaryTypes.Binary},
 }, nil)
-

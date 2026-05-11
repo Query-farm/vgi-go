@@ -23,6 +23,8 @@ func init() {
 	gob.Register(&SumAllState{})
 	gob.Register(&GenericSumState{})
 	gob.Register(&NestTensorState{})
+	gob.Register(&StreamingSumState{})
+	gob.Register(&WindowSumBatchState{})
 }
 
 // RegisterAll registers every example aggregate on the worker.
@@ -37,10 +39,10 @@ func RegisterAll(w *vgi.Worker) {
 	w.RegisterAggregate(&GenericSumFunction{})
 	w.RegisterAggregate(&DynamicAggFunction{})
 	w.RegisterAggregate(&DynamicMLAggFunction{})
-	w.RegisterAggregate(&LLMDistillFunction{})
-	w.RegisterAggregate(&LLMSummarizeFunction{})
 	w.RegisterAggregate(&WindowSumFunction{})
 	w.RegisterAggregate(&WindowMedianFunction{})
 	w.RegisterAggregate(&WindowListAggFunction{})
 	w.RegisterAggregate(&NestTensorFunction{})
+	w.RegisterAggregate(&StreamingSumFunction{})
+	w.RegisterAggregate(&WindowSumBatchFunction{})
 }

@@ -4,7 +4,6 @@
 package vgi
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -311,28 +310,21 @@ func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.Call
 		return AggregateUpdateResponseWire{}, err
 	}
 
-	// Persist only states that either pre-existed in storage or whose
-	// serialized form differs from a newly-created group's initial
-	// serialization. Mirrors vgi-python's update handler: new groups whose
-	// state matches the initial-serialized bytes are skipped, so
-	// finalize() sees no state for them and returns NULL (SQL-standard
-	// empty-SUM/AVG/MIN/MAX semantics). Groups that received only NULL
-	// inputs with NullHandlingDefault never get added to `states` at all.
+	// Persist every state present in `states` after Update. The user's
+	// Update callback only inserts a gid via EnsureState when the row
+	// genuinely contributes (e.g. non-null with NullHandlingDefault), so
+	// all-NULL groups stay absent and finalize() returns NULL.
+	//
+	// We do NOT skip groups whose post-update state happens to byte-equal
+	// the initial state: vgi_sum(0) over a non-empty group must still
+	// persist a zero state so finalize emits 0, not NULL (SQL standard
+	// behavior; vgi-python tracks this via _UpdateTrackingDict.written).
+	_ = preUpdateBytes // retained for future diff-based persistence
 	toSave := make(map[int64][]byte, len(states))
 	for gid, st := range states {
 		b, err := gobEncodeState(st)
 		if err != nil {
 			return AggregateUpdateResponseWire{}, err
-		}
-		if _, existed := preUpdateBytes[gid]; !existed {
-			initial := fn.NewState(params)
-			initBytes, err := gobEncodeState(initial)
-			if err != nil {
-				return AggregateUpdateResponseWire{}, err
-			}
-			if bytes.Equal(b, initBytes) {
-				continue
-			}
 		}
 		toSave[gid] = b
 	}
@@ -712,4 +704,3 @@ func uniqueInt64(in []int64) []int64 {
 	}
 	return out
 }
-

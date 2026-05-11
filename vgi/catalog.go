@@ -376,7 +376,6 @@ type TableColumnStatisticsGetRequestWire struct {
 	TransactionID *[]byte `vgirpc:"transaction_id"`
 }
 
-
 // TableInsertFunctionGetRequestWire is for catalog_table_insert_function_get.
 type TableInsertFunctionGetRequestWire struct {
 	AttachID      []byte  `vgirpc:"attach_id"`
@@ -403,17 +402,17 @@ type TableDeleteFunctionGetRequestWire struct {
 
 // TableCreateRequestWire is for catalog_table_create.
 type TableCreateRequestWire struct {
-	AttachID               []byte    `vgirpc:"attach_id"`
-	SchemaName             string    `vgirpc:"schema_name"`
-	Name                   string    `vgirpc:"name"`
-	Columns                []byte    `vgirpc:"columns"`
-	OnConflict             string    `vgirpc:"on_conflict,enum"`
-	NotNullConstraints     []int32   `vgirpc:"not_null_constraints"`
-	UniqueConstraints      [][]int32 `vgirpc:"unique_constraints"`
-	CheckConstraints       []string  `vgirpc:"check_constraints"`
-	PrimaryKeyConstraints  [][]int32 `vgirpc:"primary_key_constraints"`
-	ForeignKeyConstraints  [][]byte  `vgirpc:"foreign_key_constraints"`
-	TransactionID          *[]byte   `vgirpc:"transaction_id"`
+	AttachID              []byte    `vgirpc:"attach_id"`
+	SchemaName            string    `vgirpc:"schema_name"`
+	Name                  string    `vgirpc:"name"`
+	Columns               []byte    `vgirpc:"columns"`
+	OnConflict            string    `vgirpc:"on_conflict,enum"`
+	NotNullConstraints    []int32   `vgirpc:"not_null_constraints"`
+	UniqueConstraints     [][]int32 `vgirpc:"unique_constraints"`
+	CheckConstraints      []string  `vgirpc:"check_constraints"`
+	PrimaryKeyConstraints [][]int32 `vgirpc:"primary_key_constraints"`
+	ForeignKeyConstraints [][]byte  `vgirpc:"foreign_key_constraints"`
+	TransactionID         *[]byte   `vgirpc:"transaction_id"`
 }
 
 // ---------------------------------------------------------------------------
@@ -485,6 +484,9 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		if len(meta.SupportedExpressionFilters) > 0 {
 			fi.SupportedExpressionFilters = meta.SupportedExpressionFilters
 		}
+		if meta.OrderPreservation != "" {
+			fi.OrderPreservation = meta.OrderPreservation
+		}
 		return fi
 	}
 
@@ -540,6 +542,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 				fi.OutputSchema = dynamicOutputSchema
 			}
 			fi.SupportsWindow = meta.SupportsWindow
+			fi.StreamingPartitioned = meta.StreamingPartitioned
 			fi.OrderDependent = meta.OrderDependent
 			fi.DistinctDependent = meta.DistinctDependent
 			mainSchema.functions = append(mainSchema.functions, fi)
@@ -614,6 +617,51 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		si.macros = append(si.macros, macros...)
 	}
 
+	// Populate estimated_object_count on every schema so the C++ extension can
+	// skip catalog_schema_contents_* / catalog_*_get RPCs for kinds it knows are
+	// empty. Counts are exact for this read-only catalog. Keys match the C++
+	// extension's set-kind names: table, view, scalar_function, aggregate_function,
+	// table_function, macro, index.
+	//
+	// Workers that supply tables dynamically (tableGetHandler /
+	// schemaContentsHandler / attachTableGetHandler / scanFunctionGetHandler)
+	// can extend the catalog beyond the statically-registered set. A zero
+	// `table` guarantee would make the C++ client skip the lookup RPC
+	// entirely, so we omit the `table` key for those workers and let the
+	// bulk RPC drive discovery. Other kinds (view, macro, scalar/aggregate/
+	// table_function, index) are still safe to count because the SDK has no
+	// dynamic-handler hook for them.
+	tablesAreDynamic := w.tableGetHandler != nil ||
+		w.schemaContentsHandler != nil ||
+		w.attachTableGetHandler != nil ||
+		w.scanFunctionGetHandler != nil ||
+		w.attachScanFunctionGetHandler != nil
+	for _, si := range cat.schemas {
+		var nScalar, nAggregate, nTable int64
+		for _, fi := range si.functions {
+			switch fi.FunctionType {
+			case FunctionTypeScalar:
+				nScalar++
+			case FunctionTypeAggregate:
+				nAggregate++
+			case FunctionTypeTable:
+				nTable++
+			}
+		}
+		counts := map[string]int64{
+			"view":               int64(len(si.views)),
+			"macro":              int64(len(si.macros)),
+			"scalar_function":    nScalar,
+			"aggregate_function": nAggregate,
+			"table_function":     nTable,
+			"index":              0,
+		}
+		if !tablesAreDynamic {
+			counts["table"] = int64(len(si.tables))
+		}
+		si.info.EstimatedObjectCount = counts
+	}
+
 	return cat
 }
 
@@ -626,7 +674,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	readOnlyErr := func(op string) error {
 		return &vgirpc.RpcError{
 			Type:    "NotImplementedError",
-			Message: fmt.Sprintf("Catalog is read-only: %s not supported", op),
+			Message: fmt.Sprintf("catalog is read-only: %s not supported", op),
 		}
 	}
 
@@ -1562,6 +1610,19 @@ func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]b
 		PrimaryKeyConstraints:    primaryKey,
 		ForeignKeyConstraints:    foreignKeys,
 		SupportsColumnStatistics: len(ct.Statistics) > 0,
+		CardinalityEstimate:      ct.CardinalityEstimate,
+		CardinalityMax:           ct.CardinalityMax,
+	}
+
+	// Inline the scan function for function-backed tables so the C++ extension
+	// skips catalog_table_scan_function_get. Explicit-columns tables (Function
+	// == nil) keep ScanFunction nil and continue to use the per-bind RPC path.
+	if ct.Function != nil {
+		sfBytes, err := SerializeScanFunctionResult(w.buildScanResultFromTable(ct))
+		if err != nil {
+			return nil, fmt.Errorf("inlining scan_function for table %s: %w", ct.Name, err)
+		}
+		info.ScanFunction = sfBytes
 	}
 
 	return SerializeTableInfo(info)

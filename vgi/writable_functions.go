@@ -197,9 +197,11 @@ func writableArgumentSpecs() []ArgSpec {
 
 type writableInsertFn struct{ w *Worker }
 
-func (f *writableInsertFn) Name() string                 { return writableInsertFunctionName }
-func (f *writableInsertFn) Metadata() FunctionMetadata   { return writableMetadata("Generic INSERT into writable VGI table") }
-func (f *writableInsertFn) ArgumentSpecs() []ArgSpec     { return writableArgumentSpecs() }
+func (f *writableInsertFn) Name() string { return writableInsertFunctionName }
+func (f *writableInsertFn) Metadata() FunctionMetadata {
+	return writableMetadata("Generic INSERT into writable VGI table")
+}
+func (f *writableInsertFn) ArgumentSpecs() []ArgSpec { return writableArgumentSpecs() }
 func (f *writableInsertFn) OnBind(p *BindParams) (*BindResponse, error) {
 	return BindSchema(writableCountSchema("rows_inserted"))
 }
@@ -238,9 +240,11 @@ func (f *writableInsertFn) Finalize(ctx context.Context, p *ProcessParams, state
 
 type writableUpdateFn struct{ w *Worker }
 
-func (f *writableUpdateFn) Name() string                 { return writableUpdateFunctionName }
-func (f *writableUpdateFn) Metadata() FunctionMetadata   { return writableMetadata("Generic UPDATE on writable VGI table") }
-func (f *writableUpdateFn) ArgumentSpecs() []ArgSpec     { return writableArgumentSpecs() }
+func (f *writableUpdateFn) Name() string { return writableUpdateFunctionName }
+func (f *writableUpdateFn) Metadata() FunctionMetadata {
+	return writableMetadata("Generic UPDATE on writable VGI table")
+}
+func (f *writableUpdateFn) ArgumentSpecs() []ArgSpec { return writableArgumentSpecs() }
 func (f *writableUpdateFn) OnBind(p *BindParams) (*BindResponse, error) {
 	return BindSchema(writableCountSchema("rows_updated"))
 }
@@ -280,9 +284,11 @@ func (f *writableUpdateFn) Finalize(ctx context.Context, p *ProcessParams, state
 
 type writableDeleteFn struct{ w *Worker }
 
-func (f *writableDeleteFn) Name() string                 { return writableDeleteFunctionName }
-func (f *writableDeleteFn) Metadata() FunctionMetadata   { return writableMetadata("Generic DELETE on writable VGI table") }
-func (f *writableDeleteFn) ArgumentSpecs() []ArgSpec     { return writableArgumentSpecs() }
+func (f *writableDeleteFn) Name() string { return writableDeleteFunctionName }
+func (f *writableDeleteFn) Metadata() FunctionMetadata {
+	return writableMetadata("Generic DELETE on writable VGI table")
+}
+func (f *writableDeleteFn) ArgumentSpecs() []ArgSpec { return writableArgumentSpecs() }
 func (f *writableDeleteFn) OnBind(p *BindParams) (*BindResponse, error) {
 	return BindSchema(writableCountSchema("rows_deleted"))
 }

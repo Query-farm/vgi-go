@@ -14,9 +14,10 @@ import (
 )
 
 // makeWKBPoint encodes a 2D point as little-endian WKB:
-//   byte 0:    byte order (1 = little-endian)
-//   bytes 1-4: geometry type (1 = Point)
-//   bytes 5-12, 13-20: x, y as float64 little-endian
+//
+//	byte 0:    byte order (1 = little-endian)
+//	bytes 1-4: geometry type (1 = Point)
+//	bytes 5-12, 13-20: x, y as float64 little-endian
 func makeWKBPoint(x, y float64) []byte {
 	buf := make([]byte, 21)
 	buf[0] = 1

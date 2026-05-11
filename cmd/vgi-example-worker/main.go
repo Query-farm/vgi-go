@@ -30,7 +30,7 @@ func main() {
 		vgi.WithCatalogName("example"),
 		vgi.WithCatalogComment("Example VGI catalog for testing"),
 		vgi.WithCatalogTags(map[string]string{
-			"source":  "vgi-example-worker",
+			"source":  "vgi-fixture-worker",
 			"version": "1",
 		}),
 		vgi.WithSchemaComments(map[string]string{
@@ -132,6 +132,7 @@ func main() {
 	// Table functions
 	w.RegisterTable(table.NewConstantColumnsFunction())
 	w.RegisterTable(table.NewFilterEchoFunction())
+	w.RegisterTable(table.NewFilterEchoPartitionedFunction())
 	w.RegisterTable(table.NewOrderEchoFunction())
 	w.RegisterTable(table.NewSampleEchoFunction())
 	w.RegisterTable(table.NewSpatialFilterExampleFunction())
@@ -166,6 +167,11 @@ func main() {
 	w.RegisterTable(table.NewNamedParamsEchoFunction())
 	w.RegisterTable(table.NewNestedSequenceFunction())
 	w.RegisterTable(table.NewPartitionedSequenceFunction())
+	w.RegisterTable(table.NewPartitionedFixedOrderFunction())
+	w.RegisterTable(table.NewPartitionedPreservesOrderFunction())
+	w.RegisterTable(table.NewPartitionedNoOrderGuaranteeFunction())
+	w.RegisterTable(table.NewProfilingDemoFunction())
+	w.RegisterTable(table.NewSlowCancellableFunction())
 	w.RegisterTable(table.NewProjectedDataFunction())
 	w.RegisterTable(table.NewRepeatValueIntFunction())
 	w.RegisterTable(table.NewRowIdSequenceFunction())
@@ -191,6 +197,7 @@ func main() {
 	w.RegisterTableInOut(table_in_out.NewExceptionProcessFunction())
 	w.RegisterTableInOut(table_in_out.NewFilterBySettingFunction())
 	w.RegisterTableInOut(table_in_out.NewRepeatInputsFunction())
+	w.RegisterTableInOut(table_in_out.NewSlowCancellableInOutFunction())
 	w.RegisterTableInOut(table_in_out.NewSumAllColumnsFunction())
 	w.RegisterTableInOut(table_in_out.NewUnnestTensorRowsFunction())
 
@@ -205,6 +212,28 @@ func main() {
 			{Position: 0, Value: int64(1_000_000), Type: arrow.PrimitiveTypes.Int64},
 		},
 	})
+
+	// Function-backed table over the no-arg ten_thousand function. Used by
+	// inlined_scan_function.test / inlined_cardinality.test / catalog/zero_count_bypass.test
+	// / catalog/eager_load_threshold.test to verify catalog inlining.
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:     "ten_thousand_table",
+		Comment:  "Function-backed table over the no-arg ten_thousand function",
+		Function: table.NewTenThousandFunction(),
+	})
+
+	// Same backing function, but with inlined cardinality on TableInfo so the
+	// per-bind table_function_cardinality RPC is skipped.
+	{
+		card := int64(10000)
+		w.RegisterCatalogTable("data", vgi.CatalogTable{
+			Name:                "cardinality_inlined_table",
+			Comment:             "Function-backed table with inlined cardinality (10000 rows)",
+			Function:            table.NewTenThousandFunction(),
+			CardinalityEstimate: &card,
+			CardinalityMax:      &card,
+		})
+	}
 
 	// Time-travel table: version-specific schema
 	w.RegisterCatalogTable("data", vgi.CatalogTable{

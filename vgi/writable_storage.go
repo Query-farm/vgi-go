@@ -20,9 +20,10 @@ import (
 // same SQLite file as the aggregate state store.
 //
 // Schema:
-//   wc_schema(catalog, name PK, comment, created_version)
-//   wc_table(catalog, schema_name, name PK, schema_ipc, meta_blob, comment)
-//   wc_row(catalog, schema_name, table_name, row_id INTEGER PK auto, data_blob)
+//
+//	wc_schema(catalog, name PK, comment, created_version)
+//	wc_table(catalog, schema_name, name PK, schema_ipc, meta_blob, comment)
+//	wc_row(catalog, schema_name, table_name, row_id INTEGER PK auto, data_blob)
 //
 // `meta_blob` is a gob-encoded writableTableMeta capturing not-null /
 // PK / unique / check / FK / defaults / column comments — keeps the

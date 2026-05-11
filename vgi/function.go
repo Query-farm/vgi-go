@@ -82,6 +82,12 @@ type FunctionMetadata struct {
 	// callbacks (window_init, window, window_destructor). Ignored for
 	// non-aggregate functions.
 	SupportsWindow bool
+	// StreamingPartitioned indicates an aggregate also implements the
+	// streaming-partitioned protocol (aggregate_streaming_open/_chunk/_close).
+	// DuckDB's optimizer can replace a LogicalWindow with the streaming
+	// operator when the frame is cumulative. The function MUST also keep its
+	// standard update/combine/finalize path for the fallback case.
+	StreamingPartitioned bool
 	// HasFinalize signals a TableInOut function whose Finalize method emits
 	// meaningful batches. Defaults to false; set to true only for functions
 	// that accumulate during Process and flush at end-of-stream. DuckDB
@@ -89,6 +95,11 @@ type FunctionMetadata struct {
 	// for LATERAL compatibility (avoids "FinalExecute not supported for
 	// project_input").
 	HasFinalize bool
+	// OrderPreservation declares how a table function's output rows relate
+	// to its inputs. Values: "PRESERVES_ORDER", "FIXED_ORDER",
+	// "NO_ORDER_GUARANTEE". Empty leaves the field null and uses the C++
+	// extension default. Maps to DuckDB's OrderPreservationType.
+	OrderPreservation string
 	// OrderDependent declares whether the aggregate result depends on the
 	// row order. Empty defaults to NOT_ORDER_DEPENDENT.
 	OrderDependent string

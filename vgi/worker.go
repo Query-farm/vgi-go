@@ -279,25 +279,25 @@ func buildDefaultValueBatch(mem memory.Allocator, schema *arrow.Schema, dt arrow
 
 // Worker is the main VGI worker that hosts functions and serves RPC.
 type Worker struct {
-	scalars                map[string][]ScalarFunction
-	tables                 map[string][]TableFunction
-	tableInOuts            map[string][]TableInOutFunction
-	aggregates             map[string][]AggregateFunction
-	aggStorage             *aggregateStorage
-	catalogName            string
-	catalogComment         string
-	catalogTags            map[string]string
-	schemaComments         map[string]string
-	catalog                *DefaultReadOnlyCatalog
+	scalars        map[string][]ScalarFunction
+	tables         map[string][]TableFunction
+	tableInOuts    map[string][]TableInOutFunction
+	aggregates     map[string][]AggregateFunction
+	aggStorage     *aggregateStorage
+	catalogName    string
+	catalogComment string
+	catalogTags    map[string]string
+	schemaComments map[string]string
+	catalog        *DefaultReadOnlyCatalog
 	// extraCatalogs are additional catalog names this worker accepts via
 	// catalog_attach. They share the worker's registered functions but
 	// have their own (writable) table/schema state. Indexed by name.
-	extraCatalogs map[string]*WritableCatalog
-	storages               sync.Map // map[hex execution ID string]*ExecutionStorage
-	settings               []SettingSpec
-	catalogTables          map[string][]CatalogTable // schema_name → tables
-	catalogViews           map[string][]CatalogView  // schema_name → views
-	catalogMacros          map[string][]CatalogMacro // schema_name → macros
+	extraCatalogs                map[string]*WritableCatalog
+	storages                     sync.Map // map[hex execution ID string]*ExecutionStorage
+	settings                     []SettingSpec
+	catalogTables                map[string][]CatalogTable // schema_name → tables
+	catalogViews                 map[string][]CatalogView  // schema_name → views
+	catalogMacros                map[string][]CatalogMacro // schema_name → macros
 	scanFunctionGetHandler       ScanFunctionGetHandler
 	tableGetHandler              TableGetHandler
 	catalogInfoOverride          *CatalogInfo
@@ -306,12 +306,12 @@ type Worker struct {
 	attachTableGetHandler        AttachTableGetHandler
 	attachScanFunctionGetHandler AttachScanFunctionGetHandler
 	catalogVersionHook           CatalogVersionHook
-	authenticateFunc       vgirpc.AuthenticateFunc
-	oauthMetadata          *vgirpc.OAuthResourceMetadata
-	secretTypes            []SecretTypeSpec
-	attachOptions          []AttachOptionSpec
-	logLevel               slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
-	logHandler             slog.Handler // nil means default TextHandler to stderr
+	authenticateFunc             vgirpc.AuthenticateFunc
+	oauthMetadata                *vgirpc.OAuthResourceMetadata
+	secretTypes                  []SecretTypeSpec
+	attachOptions                []AttachOptionSpec
+	logLevel                     slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
+	logHandler                   slog.Handler // nil means default TextHandler to stderr
 }
 
 // WorkerOption configures a Worker.
@@ -578,7 +578,6 @@ func (w *Worker) SetAuthenticate(fn vgirpc.AuthenticateFunc) {
 func (w *Worker) SetOAuthResourceMetadata(m *vgirpc.OAuthResourceMetadata) {
 	w.oauthMetadata = m
 }
-
 
 // buildServer creates and configures the vgirpc.Server with all handlers
 // registered. Shared between RunStdio and RunHttp.
