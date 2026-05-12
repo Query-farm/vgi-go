@@ -51,35 +51,73 @@ var ErrUnknownInvocation = vgi.ErrUnknownInvocation
 // When a new backend (Cloudflare DO, Azure SQL, ...) lands, plug it into
 // the same conformance suite to guarantee behavior parity.
 func RunConformance(t *testing.T, factory func(t *testing.T) FunctionStorage) {
+	RunConformanceFiltered(t, factory)
+}
+
+// SkipSet is the set of conformance subtests a backend opts out of.
+type SkipSet int
+
+const (
+	// SkipAggregate skips aggregate state, aggregate const args, and
+	// aggregate window partition subtests. Use for backends that don't
+	// support aggregate functions (e.g. the Cloudflare DO client, which
+	// matches vgi-python in returning NotImplemented for those methods).
+	SkipAggregate SkipSet = 1 << iota
+
+	// SkipCleanup skips the cleanup-purges subtest. Use for backends
+	// whose CleanupOldEntries is a no-op (e.g. cloud services that handle
+	// TTL on the server side).
+	SkipCleanup
+)
+
+// RunConformanceFiltered runs the conformance suite with optional skips.
+// Backends that don't implement a subset of FunctionStorage methods opt out
+// rather than failing the whole suite.
+func RunConformanceFiltered(t *testing.T, factory func(t *testing.T) FunctionStorage, skips ...SkipSet) {
 	t.Helper()
 
+	var skip SkipSet
+	for _, s := range skips {
+		skip |= s
+	}
+	skipAgg := skip&SkipAggregate != 0
+	skipCleanup := skip&SkipCleanup != 0
+
 	type subtest struct {
-		name string
-		run  func(t *testing.T, s FunctionStorage)
+		name      string
+		run       func(t *testing.T, s FunctionStorage)
+		aggregate bool
+		cleanup   bool
 	}
 
 	subtests := []subtest{
-		{"WorkerPut_then_WorkerScan", testWorkerPutThenScan},
-		{"WorkerPut_replaces_existing", testWorkerPutReplaces},
-		{"WorkerCollect_drains_and_returns_in_order", testWorkerCollectDrains},
-		{"WorkerScan_isolates_by_executionID", testWorkerScanIsolation},
-		{"ScanWorkerPut_then_ScanWorkerScan", testScanWorkerRoundtrip},
-		{"QueuePush_then_QueuePop_FIFO", testQueueFIFO},
-		{"QueuePop_unknown_invocation_errors", testQueuePopUnknown},
-		{"QueuePop_empty_registered_queue_returns_nil_nil", testQueuePopEmpty},
-		{"QueuePush_empty_items_registers", testQueuePushEmptyRegisters},
-		{"QueueClear_drops_and_unregisters", testQueueClearUnregisters},
-		{"AggregateState_put_get_clear", testAggregateStateLifecycle},
-		{"AggregateState_get_with_missing_groups", testAggregateStateMissing},
-		{"AggregateConstArgs_put_get", testAggregateConstArgs},
-		{"AggregateWindowPartition_put_get_delete_clear", testAggregateWindowPartition},
-		{"TransactionState_put_get_clear", testTransactionStateLifecycle},
-		{"CleanupOldEntries_zero_window_purges_everything", testCleanupPurges},
-		{"Close_idempotent", testCloseIdempotent},
+		{name: "WorkerPut_then_WorkerScan", run: testWorkerPutThenScan},
+		{name: "WorkerPut_replaces_existing", run: testWorkerPutReplaces},
+		{name: "WorkerCollect_drains_and_returns_in_order", run: testWorkerCollectDrains},
+		{name: "WorkerScan_isolates_by_executionID", run: testWorkerScanIsolation},
+		{name: "ScanWorkerPut_then_ScanWorkerScan", run: testScanWorkerRoundtrip},
+		{name: "QueuePush_then_QueuePop_FIFO", run: testQueueFIFO},
+		{name: "QueuePop_unknown_invocation_errors", run: testQueuePopUnknown},
+		{name: "QueuePop_empty_registered_queue_returns_nil_nil", run: testQueuePopEmpty},
+		{name: "QueuePush_empty_items_registers", run: testQueuePushEmptyRegisters},
+		{name: "QueueClear_drops_and_unregisters", run: testQueueClearUnregisters},
+		{name: "AggregateState_put_get_clear", run: testAggregateStateLifecycle, aggregate: true},
+		{name: "AggregateState_get_with_missing_groups", run: testAggregateStateMissing, aggregate: true},
+		{name: "AggregateConstArgs_put_get", run: testAggregateConstArgs, aggregate: true},
+		{name: "AggregateWindowPartition_put_get_delete_clear", run: testAggregateWindowPartition, aggregate: true},
+		{name: "TransactionState_put_get_clear", run: testTransactionStateLifecycle},
+		{name: "CleanupOldEntries_zero_window_purges_everything", run: testCleanupPurges, cleanup: true},
+		{name: "Close_idempotent", run: testCloseIdempotent},
 	}
 
 	for _, st := range subtests {
 		st := st
+		if skipAgg && st.aggregate {
+			continue
+		}
+		if skipCleanup && st.cleanup {
+			continue
+		}
 		t.Run(st.name, func(t *testing.T) {
 			s := factory(t)
 			t.Cleanup(func() { _ = s.Close() })
