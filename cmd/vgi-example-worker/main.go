@@ -18,6 +18,7 @@ import (
 	"github.com/Query-farm/vgi-go/examples/table"
 	table_in_out "github.com/Query-farm/vgi-go/examples/table_in_out"
 	"github.com/Query-farm/vgi-go/vgi"
+	"github.com/Query-farm/vgi-go/vgi/storage/resolve"
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/Query-farm/vgi-rpc/vgirpc/jwtauth"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -27,7 +28,16 @@ func main() {
 	httpMode := flag.Bool("http", false, "Run as HTTP server instead of stdio")
 	flag.Parse()
 
+	// Pick the FunctionStorage backend from VGI_WORKER_SHARED_STORAGE.
+	// Defaults to local SQLite when the env var is unset — preserves the
+	// behavior for tests and existing deployments.
+	storage, err := resolve.FromEnv()
+	if err != nil {
+		log.Fatalf("resolve storage backend: %v", err)
+	}
+
 	w := vgi.NewWorker(
+		vgi.WithFunctionStorage(storage),
 		vgi.WithCatalogName("example"),
 		vgi.WithCatalogComment("Example VGI catalog for testing"),
 		vgi.WithCatalogTags(map[string]string{

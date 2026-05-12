@@ -540,6 +540,21 @@ func WithLogHandler(h slog.Handler) WorkerOption {
 	}
 }
 
+// WithFunctionStorage injects an explicit FunctionStorage backend. When
+// unset, the worker defaults to a local SQLite backend at the per-user
+// state path. Use this to wire a Cloudflare Durable Object client or any
+// other backend implementing the FunctionStorage interface; combine with
+// vgi/storage/resolve.FromEnv to get vgi-python-style env-driven selection
+// (VGI_WORKER_SHARED_STORAGE=sqlite|cloudflare-do).
+func WithFunctionStorage(s FunctionStorage) WorkerOption {
+	return func(w *Worker) {
+		w.fs = s
+		// Mark fsOnce as done so functionStorage() returns the injected
+		// instance without trying to construct a default.
+		w.fsOnce.Do(func() {})
+	}
+}
+
 // NewWorker creates a new VGI worker.
 func NewWorker(opts ...WorkerOption) *Worker {
 	w := &Worker{
