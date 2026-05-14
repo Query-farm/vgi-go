@@ -38,6 +38,9 @@ type CatalogMacro struct {
 	Definition string
 	// Comment is a human-readable description.
 	Comment string
+	// Tags are arbitrary key/value annotations attached to this macro;
+	// surfaced through MacroInfo.tags.
+	Tags map[string]string
 }
 
 // MacroInfo describes a macro in the catalog for wire serialization.

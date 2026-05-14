@@ -70,6 +70,11 @@ type CatalogTable struct {
 	CardinalityEstimate *int64
 	// CardinalityMax mirrors CardinalityEstimate for the cardinality upper bound.
 	CardinalityMax *int64
+	// Tags are arbitrary key/value annotations attached to this table.
+	// They surface to DuckDB on TableInfo.tags and are visible through
+	// duckdb_tables().tags. Useful for category/coverage/example_queries
+	// metadata.
+	Tags map[string]string
 }
 
 // ForeignKeyConstraint describes a foreign key relationship.

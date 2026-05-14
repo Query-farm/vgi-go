@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -238,6 +239,84 @@ func (a *Arguments) GetScalarBool(key interface{}) (bool, error) {
 		return c.Value(0), nil
 	}
 	return false, fmt.Errorf("cannot convert %T to bool", col)
+}
+
+// GetScalarDuration returns a time.Duration scalar from a Duration-typed
+// argument (any unit). Auto-converts the underlying integer to Go's native
+// ns precision. Useful for DuckDB INTERVAL arguments declared as
+// `vgi:"type=duration_ms"` (etc.) in argument structs.
+func (a *Arguments) GetScalarDuration(key interface{}) (time.Duration, error) {
+	col, err := a.getColumn(key)
+	if err != nil {
+		return 0, err
+	}
+	if col.IsNull(0) {
+		return 0, fmt.Errorf("argument is null")
+	}
+	switch c := col.(type) {
+	case *array.Duration:
+		v := int64(c.Value(0))
+		switch c.DataType().(*arrow.DurationType).Unit {
+		case arrow.Second:
+			return time.Duration(v) * time.Second, nil
+		case arrow.Millisecond:
+			return time.Duration(v) * time.Millisecond, nil
+		case arrow.Microsecond:
+			return time.Duration(v) * time.Microsecond, nil
+		case arrow.Nanosecond:
+			return time.Duration(v), nil
+		}
+		return 0, fmt.Errorf("unsupported duration unit")
+	case *array.MonthDayNanoInterval:
+		// DuckDB's INTERVAL is encoded as MONTH_DAY_NANO. For the
+		// scalar-duration use case (e.g. `INTERVAL 5 SECOND`), months
+		// and days are typically zero; collapse anyway by treating
+		// months as 30 days and days as 24 hours.
+		v := c.Value(0)
+		d := time.Duration(v.Nanoseconds) +
+			time.Duration(v.Days)*24*time.Hour +
+			time.Duration(v.Months)*30*24*time.Hour
+		return d, nil
+	}
+	return 0, fmt.Errorf("cannot convert %T to time.Duration", col)
+}
+
+// GetScalarTime returns a time.Time scalar from a Timestamp-typed argument.
+// Honors the array's unit (s/ms/us/ns) and timezone. UTC is used when the
+// timestamp type is naive.
+func (a *Arguments) GetScalarTime(key interface{}) (time.Time, error) {
+	col, err := a.getColumn(key)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if col.IsNull(0) {
+		return time.Time{}, fmt.Errorf("argument is null")
+	}
+	tc, ok := col.(*array.Timestamp)
+	if !ok {
+		return time.Time{}, fmt.Errorf("cannot convert %T to time.Time", col)
+	}
+	v := int64(tc.Value(0))
+	tt := tc.DataType().(*arrow.TimestampType)
+	var t time.Time
+	switch tt.Unit {
+	case arrow.Second:
+		t = time.Unix(v, 0)
+	case arrow.Millisecond:
+		t = time.UnixMilli(v)
+	case arrow.Microsecond:
+		t = time.UnixMicro(v)
+	case arrow.Nanosecond:
+		t = time.Unix(0, v)
+	}
+	if tt.TimeZone == "" {
+		return t.UTC(), nil
+	}
+	loc, err := time.LoadLocation(tt.TimeZone)
+	if err != nil {
+		return t.UTC(), nil
+	}
+	return t.In(loc), nil
 }
 
 // GetScalarBytes returns a []byte scalar value.

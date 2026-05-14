@@ -505,6 +505,13 @@ func (w *Worker) initScalar(ctx context.Context, fn ScalarFunction, initParams *
 	}
 	processParams.ExecutionID = resp.ExecutionID
 	recipe.ExecutionID = resp.ExecutionID
+	// Propagate any bind-phase opaque data to Process. Scalar functions have no
+	// OnInit hook, so without this the OpaqueData set by OnBind would have no
+	// way to reach Process — mirroring what initTable does via OnInit.
+	if len(initParams.BindOpaqueData) > 0 {
+		processParams.InitOpaqueData = initParams.BindOpaqueData
+		recipe.InitOpaqueData = initParams.BindOpaqueData
+	}
 	storage, err := w.getOrCreateStorage(ctx, resp.ExecutionID)
 	if err != nil {
 		return nil, err
@@ -514,6 +521,10 @@ func (w *Worker) initScalar(ctx context.Context, fn ScalarFunction, initParams *
 	header := &GlobalInitResponseWire{
 		ExecutionID: resp.ExecutionID,
 		MaxWorkers:  resp.MaxWorkers,
+	}
+	if len(initParams.BindOpaqueData) > 0 {
+		op := initParams.BindOpaqueData
+		header.OpaqueData = &op
 	}
 
 	state := &ScalarExchangeState{

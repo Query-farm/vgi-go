@@ -315,6 +315,7 @@ type Worker struct {
 	catalogTables                 map[string][]CatalogTable // schema_name → tables
 	catalogViews                  map[string][]CatalogView  // schema_name → views
 	catalogMacros                 map[string][]CatalogMacro // schema_name → macros
+	dynamicSchemas                map[string]string         // schema_name → comment (for SchemaContentsHandler-only schemas)
 	scanFunctionGetHandler        ScanFunctionGetHandler
 	tableGetHandler               TableGetHandler
 	catalogInfoOverride           *CatalogInfo
@@ -330,6 +331,7 @@ type Worker struct {
 	attachOptions                 []AttachOptionSpec
 	logLevel                      slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
 	logHandler                    slog.Handler // nil means default TextHandler to stderr
+	httpSigningKey                []byte       // optional explicit HMAC key for HTTP state tokens
 }
 
 // WorkerOption configures a Worker.
@@ -532,6 +534,19 @@ func WithLogLevel(level slog.Level) WorkerOption {
 	}
 }
 
+// WithHttpSigningKey configures the HMAC key used by the HTTP transport
+// to sign opaque state tokens. When unset, the HTTP server generates a
+// random key at startup — fine for ephemeral workers, but in-flight
+// state tokens become invalid on restart. Pass a stable key (≥16 bytes,
+// typically from VGI_SIGNING_KEY) for production deployments.
+//
+// Has no effect when running in stdio mode.
+func WithHttpSigningKey(key []byte) WorkerOption {
+	return func(w *Worker) {
+		w.httpSigningKey = key
+	}
+}
+
 // WithLogHandler sets a custom slog.Handler for all logging.
 // When set, WithLogLevel is ignored (the handler controls its own level).
 func WithLogHandler(h slog.Handler) WorkerOption {
@@ -569,6 +584,7 @@ func NewWorker(opts ...WorkerOption) *Worker {
 		catalogTables:        make(map[string][]CatalogTable),
 		catalogViews:         make(map[string][]CatalogView),
 		catalogMacros:        make(map[string][]CatalogMacro),
+		dynamicSchemas:       make(map[string]string),
 		catalogName:          "example",
 	}
 	for _, opt := range opts {
@@ -645,6 +661,14 @@ func (w *Worker) RegisterCatalogView(schemaName string, view CatalogView) {
 }
 
 // RegisterCatalogMacro registers a macro in the given schema of the catalog.
+// RegisterCatalogSchema declares a schema that exists in the catalog but
+// whose tables are produced dynamically by a SchemaContentsHandler. Use
+// when there are no registered CatalogTable/View/Macro entries to "anchor"
+// the schema (otherwise it wouldn't appear in catalog_schemas).
+func (w *Worker) RegisterCatalogSchema(name, comment string) {
+	w.dynamicSchemas[name] = comment
+}
+
 func (w *Worker) RegisterCatalogMacro(schemaName string, macro CatalogMacro) {
 	w.catalogMacros[schemaName] = append(w.catalogMacros[schemaName], macro)
 }
@@ -735,7 +759,16 @@ func (w *Worker) RunStdio() {
 // stdout so callers can discover the assigned port.
 func (w *Worker) RunHttp(addr string) error {
 	s := w.buildServer(true)
-	hs := vgirpc.NewHttpServer(s)
+	var hs *vgirpc.HttpServer
+	if len(w.httpSigningKey) > 0 {
+		h, err := vgirpc.NewHttpServerWithKey(s, w.httpSigningKey)
+		if err != nil {
+			return fmt.Errorf("http signing key: %w", err)
+		}
+		hs = h
+	} else {
+		hs = vgirpc.NewHttpServer(s)
+	}
 	hs.SetRehydrateFunc(w.rehydrateState)
 	hs.SetProducerBatchLimit(100)
 	if w.authenticateFunc != nil {

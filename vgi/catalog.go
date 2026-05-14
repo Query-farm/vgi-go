@@ -572,6 +572,18 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		cat.schemas["data"] = dataSchema
 	}
 
+	// Populate dynamic-only schemas (those without any registered table/view/macro
+	// — they exist solely so the catalog enumeration sees them and lets the
+	// SchemaContentsHandler take over).
+	for name, comment := range w.dynamicSchemas {
+		if _, ok := cat.schemas[name]; ok {
+			continue
+		}
+		cat.schemas[name] = &catalogSchemaInfo{
+			info: &SchemaInfo{Name: name, Comment: comment},
+		}
+	}
+
 	// Populate catalog tables from worker registrations
 	for schemaName, tables := range w.catalogTables {
 		si, ok := cat.schemas[schemaName]
@@ -1013,6 +1025,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 					Name:       cv.Name,
 					SchemaName: req.Name,
 					Comment:    cv.Comment,
+					Tags:       cv.Tags,
 					Definition: cv.Definition,
 				}
 				data, err := SerializeViewInfo(info)
@@ -1293,6 +1306,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 						Name:       cv.Name,
 						SchemaName: req.SchemaName,
 						Comment:    cv.Comment,
+						Tags:       cv.Tags,
 						Definition: cv.Definition,
 					}
 					data, err := SerializeViewInfo(info)
@@ -1345,6 +1359,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 						Name:                   cm.Name,
 						SchemaName:             req.SchemaName,
 						Comment:                cm.Comment,
+						Tags:                   cm.Tags,
 						MacroType:              cm.MacroType,
 						Parameters:             cm.Parameters,
 						ParameterDefaultValues: cm.ParameterDefaultValues,
@@ -1388,6 +1403,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 					Name:                   cm.Name,
 					SchemaName:             req.Name,
 					Comment:                cm.Comment,
+					Tags:                   cm.Tags,
 					MacroType:              cm.MacroType,
 					Parameters:             cm.Parameters,
 					ParameterDefaultValues: cm.ParameterDefaultValues,
@@ -1640,6 +1656,7 @@ func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]b
 		Name:                     ct.Name,
 		SchemaName:               schemaName,
 		Comment:                  ct.Comment,
+		Tags:                     ct.Tags,
 		Columns:                  columns,
 		NotNullConstraints:       notNull,
 		UniqueConstraints:        unique,

@@ -22,6 +22,9 @@ type CatalogView struct {
 	Definition string
 	// Comment is a human-readable description.
 	Comment string
+	// Tags are arbitrary key/value annotations attached to this view;
+	// surfaced through ViewInfo.tags.
+	Tags map[string]string
 }
 
 // ViewInfo describes a view in the catalog for wire serialization.

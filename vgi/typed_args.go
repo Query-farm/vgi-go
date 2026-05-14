@@ -207,11 +207,16 @@ func parseArgTag(f reflect.StructField, tag string) (ArgSpec, error) {
 				return spec, fmt.Errorf("type= must not be empty")
 			}
 			spec.ArrowType = val
-			// Explicit override clears inferred ArrowDataType unless the user
-			// also kept the inferred Go type (caller can keep both by not
-			// setting type=). When overriding, we keep ArrowDataType as nil
-			// so the schema layer falls back to ArrowType name resolution.
-			spec.ArrowDataType = nil
+			// If the override is one of the canonical names we recognise
+			// (duration_ms, timestamp_ms_utc, ...) attach its concrete
+			// Arrow type so the spec serializer doesn't need string→type
+			// resolution. Otherwise leave ArrowDataType nil and let the
+			// schema layer fall back to ArrowType name resolution.
+			if dt, ok := typeOverrides[strings.ToLower(val)]; ok {
+				spec.ArrowDataType = dt
+			} else {
+				spec.ArrowDataType = nil
+			}
 		case "const":
 			if !hasVal || val == "" {
 				spec.IsConst = true
@@ -364,11 +369,52 @@ type arrowTypeInfo struct {
 
 var byteType = reflect.TypeOf(byte(0))
 var timeType = reflect.TypeOf(time.Time{})
+var durationType = reflect.TypeOf(time.Duration(0))
 var anyType = reflect.TypeOf((*any)(nil)).Elem()
+
+// typeOverrides maps the string accepted in a `vgi:"type=..."` tag to a
+// concrete Arrow type. Used when the Go field type would otherwise infer
+// to a different (or no) Arrow type — e.g. a Go int64 field that the
+// caller wants surfaced to DuckDB as INTERVAL ('duration_ms') or
+// TIMESTAMPTZ ('timestamp_ms_utc').
+//
+// Keys are case-insensitive at lookup time; entries here are the canonical
+// lowercase forms.
+var typeOverrides = map[string]arrow.DataType{
+	// Durations
+	"duration_s":  arrow.FixedWidthTypes.Duration_s,
+	"duration_ms": arrow.FixedWidthTypes.Duration_ms,
+	"duration_us": arrow.FixedWidthTypes.Duration_us,
+	"duration_ns": arrow.FixedWidthTypes.Duration_ns,
+	"duration":    arrow.FixedWidthTypes.Duration_ns, // shorthand, native Go precision
+
+	// Naive timestamps (no tz)
+	"timestamp_s":  arrow.FixedWidthTypes.Timestamp_s,
+	"timestamp_ms": arrow.FixedWidthTypes.Timestamp_ms,
+	"timestamp_us": arrow.FixedWidthTypes.Timestamp_us,
+	"timestamp_ns": arrow.FixedWidthTypes.Timestamp_ns,
+
+	// UTC-tagged timestamps
+	"timestamp_s_utc":  &arrow.TimestampType{Unit: arrow.Second, TimeZone: "UTC"},
+	"timestamp_ms_utc": &arrow.TimestampType{Unit: arrow.Millisecond, TimeZone: "UTC"},
+	"timestamp_us_utc": &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"},
+	"timestamp_ns_utc": &arrow.TimestampType{Unit: arrow.Nanosecond, TimeZone: "UTC"},
+
+	// Date / time-of-day
+	"date32":   arrow.FixedWidthTypes.Date32,
+	"date64":   arrow.FixedWidthTypes.Date64,
+	"time32_s":  arrow.FixedWidthTypes.Time32s,
+	"time32_ms": arrow.FixedWidthTypes.Time32ms,
+	"time64_us": arrow.FixedWidthTypes.Time64us,
+	"time64_ns": arrow.FixedWidthTypes.Time64ns,
+}
 
 func inferArrowType(t reflect.Type) arrowTypeInfo {
 	if t == timeType {
 		return arrowTypeInfo{ArrowTypeName: "timestamp", DataType: &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}}
+	}
+	if t == durationType {
+		return arrowTypeInfo{ArrowTypeName: "duration", DataType: arrow.FixedWidthTypes.Duration_ns}
 	}
 	if t == anyType {
 		return arrowTypeInfo{ArrowTypeName: "any"}
@@ -583,7 +629,19 @@ func assignScalar(field reflect.Value, args *Arguments, key any) error {
 	ft := field.Type()
 	switch {
 	case ft == timeType:
-		return fmt.Errorf("time.Time scalar extraction not yet supported in BindArgs; call args.GetColumn(key) and parse manually")
+		t, err := args.GetScalarTime(key)
+		if err != nil {
+			return err
+		}
+		field.Set(reflect.ValueOf(t))
+		return nil
+	case ft == durationType:
+		d, err := args.GetScalarDuration(key)
+		if err != nil {
+			return err
+		}
+		field.Set(reflect.ValueOf(d))
+		return nil
 	case ft.Kind() == reflect.Slice && ft.Elem() == byteType:
 		v, err := args.GetScalarBytes(key)
 		if err != nil {
@@ -649,6 +707,21 @@ func assignDefault(field reflect.Value, def string) error {
 			return fmt.Errorf("invalid time.Time default %q: %w", def, err)
 		}
 		field.Set(reflect.ValueOf(t.UTC()))
+		return nil
+	}
+	if field.Type() == durationType {
+		// Empty default = zero (no duration). Otherwise parse via
+		// time.ParseDuration so users can write `default=5s` /
+		// `default=200ms` etc.
+		var d time.Duration
+		if def != "" {
+			parsed, err := time.ParseDuration(def)
+			if err != nil {
+				return fmt.Errorf("invalid time.Duration default %q: %w", def, err)
+			}
+			d = parsed
+		}
+		field.Set(reflect.ValueOf(d))
 		return nil
 	}
 	switch field.Kind() {
