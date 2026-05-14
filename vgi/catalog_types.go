@@ -356,7 +356,7 @@ type SchemaInfo struct {
 	Name     string
 	Comment  string
 	Tags     map[string]string
-	AttachID []byte
+	AttachOpaqueData []byte
 	// EstimatedObjectCount, when non-nil, advertises the approximate per-kind
 	// population (e.g. {"table": 0, "view": 12}). A value of 0 is a hard
 	// guarantee — the C++ client skips the corresponding bulk RPC and any
@@ -390,12 +390,12 @@ func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error) {
 		}
 	}
 
-	attachIDBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
-	defer attachIDBuilder.Release()
-	if info.AttachID != nil {
-		attachIDBuilder.Append(info.AttachID)
+	attachOpaqueDataBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	defer attachOpaqueDataBuilder.Release()
+	if info.AttachOpaqueData != nil {
+		attachOpaqueDataBuilder.Append(info.AttachOpaqueData)
 	} else {
-		attachIDBuilder.Append([]byte{})
+		attachOpaqueDataBuilder.Append([]byte{})
 	}
 
 	nameBuilder := array.NewStringBuilder(mem)
@@ -420,7 +420,7 @@ func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error) {
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
-		attachIDBuilder.NewArray(),
+		attachOpaqueDataBuilder.NewArray(),
 		nameBuilder.NewArray(),
 		eocBuilder.NewArray(),
 	}

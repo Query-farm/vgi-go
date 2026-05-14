@@ -35,7 +35,7 @@ const (
 	defaultDataVersion           = "3.0.0"
 	defaultImplementationVersion = "11.0.0"
 	stickyCookieName             = "vgi_sticky"
-	attachIDSeparator            = 0x00
+	attachOpaqueDataSeparator            = 0x00
 )
 
 var (
@@ -114,26 +114,26 @@ func main() {
 			if err != nil {
 				return nil, err
 			}
-			// Encode attach_id as <resolved_data_version>\x00<uuid16> so every
+			// Encode attach_opaque_data as <resolved_data_version>\x00<uuid16> so every
 			// follow-up RPC can decode the version without per-worker state.
-			attachID := make([]byte, 0, len(resolvedData)+1+16)
-			attachID = append(attachID, []byte(resolvedData)...)
-			attachID = append(attachID, attachIDSeparator)
-			attachID = append(attachID, randomBytes(16)...)
+			attachOpaqueData := make([]byte, 0, len(resolvedData)+1+16)
+			attachOpaqueData = append(attachOpaqueData, []byte(resolvedData)...)
+			attachOpaqueData = append(attachOpaqueData, attachOpaqueDataSeparator)
+			attachOpaqueData = append(attachOpaqueData, randomBytes(16)...)
 			if ctx != nil {
 				_ = ctx.SetCookie(stickyCookieName, randomHex(16), vgirpc.CookieAttrs{Path: "/"})
 			}
 			return &vgi.AttachDecision{
 				ResolvedDataVersion:           resolvedData,
 				ResolvedImplementationVersion: resolvedImpl,
-				AttachID:                      attachID,
+				AttachOpaqueData:                      attachOpaqueData,
 			}, nil
 		}),
-		vgi.WithSchemaContentsHandler(func(attachID []byte, schemaName string) ([]vgi.SerializedSchemaItem, bool) {
+		vgi.WithSchemaContentsHandler(func(attachOpaqueData []byte, schemaName string) ([]vgi.SerializedSchemaItem, bool) {
 			if schemaName != "main" {
 				return []vgi.SerializedSchemaItem{}, true
 			}
-			tables := tablesForAttachID(attachID)
+			tables := tablesForAttachOpaqueData(attachOpaqueData)
 			out := make([]vgi.SerializedSchemaItem, 0, len(tables))
 			// Emit in alphabetical order for stable test output.
 			for _, name := range sortedKeys(tables) {
@@ -150,11 +150,11 @@ func main() {
 			}
 			return out, true
 		}),
-		vgi.WithAttachTableGetHandler(func(attachID []byte, schemaName, name string, _ *string, _ *string) ([]byte, bool, error) {
+		vgi.WithAttachTableGetHandler(func(attachOpaqueData []byte, schemaName, name string, _ *string, _ *string) ([]byte, bool, error) {
 			if schemaName != "main" {
 				return nil, true, nil
 			}
-			table, ok := tablesForAttachID(attachID)[name]
+			table, ok := tablesForAttachOpaqueData(attachOpaqueData)[name]
 			if !ok {
 				return nil, true, nil
 			}
@@ -168,11 +168,11 @@ func main() {
 			}
 			return data, true, nil
 		}),
-		vgi.WithAttachScanFunctionGetHandler(func(attachID []byte, schemaName, name string, _ *string, _ *string) (*vgi.ScanFunctionResult, bool, error) {
+		vgi.WithAttachScanFunctionGetHandler(func(attachOpaqueData []byte, schemaName, name string, _ *string, _ *string) (*vgi.ScanFunctionResult, bool, error) {
 			if schemaName != "main" {
 				return nil, true, fmt.Errorf("Unknown schema: %s", schemaName)
 			}
-			table, ok := tablesForAttachID(attachID)[name]
+			table, ok := tablesForAttachOpaqueData(attachOpaqueData)[name]
 			if !ok {
 				return nil, true, fmt.Errorf("Table main.%s not visible at this data version", name)
 			}
@@ -194,12 +194,12 @@ func main() {
 	}
 }
 
-func tablesForAttachID(attachID []byte) map[string]versionedTable {
-	sep := bytes.IndexByte(attachID, attachIDSeparator)
+func tablesForAttachOpaqueData(attachOpaqueData []byte) map[string]versionedTable {
+	sep := bytes.IndexByte(attachOpaqueData, attachOpaqueDataSeparator)
 	if sep <= 0 {
 		return nil
 	}
-	version := string(attachID[:sep])
+	version := string(attachOpaqueData[:sep])
 	return versionTables[version]
 }
 

@@ -21,7 +21,7 @@ import (
 // later if there's a user. The interface shape is the same.)
 //
 // The interface is "unbound": every method takes execution_id or
-// transaction_id explicitly. For in-function ergonomics, BoundStorage
+// transaction_opaque_data explicitly. For in-function ergonomics, BoundStorage
 // pre-binds an execution_id and provides the slimmer per-function method
 // set that table-function code typically uses through params.Storage.
 //
@@ -176,26 +176,26 @@ type FunctionStorage interface {
 	// execution_id (safety sweep for dropped destructor RPCs).
 	AggregateWindowPartitionClear(executionID []byte) error
 
-	// --- Transaction state (per transaction_id K/V store) ---
+	// --- Transaction state (per transaction_opaque_data K/V store) ---
 	//
 	// Distinct from worker / aggregate state because the key is a
-	// transaction_id, not an execution_id. The intended use is "snapshot
+	// transaction_opaque_data, not an execution_id. The intended use is "snapshot
 	// data the user expects to stay stable for the lifetime of a
 	// transaction" (e.g. Kafka topic watermarks).
 
 	// TransactionStateGet loads values for the given keys under one
-	// transaction_id. Returns a list parallel to keys: nil entries for
+	// transaction_opaque_data. Returns a list parallel to keys: nil entries for
 	// keys with no stored value.
-	TransactionStateGet(transactionID []byte, keys [][]byte) ([][]byte, error)
+	TransactionStateGet(transactionOpaqueData []byte, keys [][]byte) ([][]byte, error)
 
-	// TransactionStatePut writes (key, value) pairs for a transaction_id
+	// TransactionStatePut writes (key, value) pairs for a transaction_opaque_data
 	// using INSERT OR REPLACE semantics.
-	TransactionStatePut(transactionID []byte, items []TransactionStateItem) error
+	TransactionStatePut(transactionOpaqueData []byte, items []TransactionStateItem) error
 
-	// TransactionStateClear removes all keys for a transaction_id. Called
+	// TransactionStateClear removes all keys for a transaction_opaque_data. Called
 	// when the catalog observes commit/rollback; implementations should
-	// also TTL-sweep to handle leaked transaction_ids.
-	TransactionStateClear(transactionID []byte) error
+	// also TTL-sweep to handle leaked transaction_opaque_data values.
+	TransactionStateClear(transactionOpaqueData []byte) error
 
 	// --- Maintenance ---
 

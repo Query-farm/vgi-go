@@ -222,18 +222,18 @@ func defaultsFromSchemaMetadata(schema *arrow.Schema) map[string]any {
 	return out
 }
 
-// writableByAttachID returns the writable catalog whose attach_id matches.
+// writableByAttachOpaqueData returns the writable catalog whose attach_opaque_data matches.
 // Attach IDs are deterministic ("writable:<name>") so DuckDB-spawned worker
 // processes resolve to the same catalog without sharing in-memory state.
-func (w *Worker) writableByAttachID(attachID []byte) *WritableCatalog {
-	if len(attachID) == 0 {
+func (w *Worker) writableByAttachOpaqueData(attachOpaqueData []byte) *WritableCatalog {
+	if len(attachOpaqueData) == 0 {
 		return nil
 	}
 	const prefix = "writable:"
-	if !bytes.HasPrefix(attachID, []byte(prefix)) {
+	if !bytes.HasPrefix(attachOpaqueData, []byte(prefix)) {
 		return nil
 	}
-	name := string(attachID[len(prefix):])
+	name := string(attachOpaqueData[len(prefix):])
 	if c, ok := w.extraCatalogs[name]; ok {
 		return c
 	}
@@ -243,10 +243,10 @@ func (w *Worker) writableByAttachID(attachID []byte) *WritableCatalog {
 // handleWritableAttach serves catalog_attach for a writable catalog.
 func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableCatalog) (CatalogAttachResultWire, error) {
 	c.mu.Lock()
-	if len(c.attachID) == 0 {
-		c.attachID = []byte("writable:" + c.Name)
+	if len(c.attachOpaqueData) == 0 {
+		c.attachOpaqueData = []byte("writable:" + c.Name)
 	}
-	attachID := append([]byte{}, c.attachID...)
+	attachOpaqueData := append([]byte{}, c.attachOpaqueData...)
 	version := c.version
 	c.mu.Unlock()
 
@@ -272,12 +272,12 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 	}
 
 	return CatalogAttachResultWire{
-		AttachID:                 attachID,
+		AttachOpaqueData:                 attachOpaqueData,
 		SupportsTransactions:     true,
 		SupportsTimeTravel:       false,
 		CatalogVersionFrozen:     false,
 		CatalogVersion:           version,
-		AttachIDRequired:         true,
+		AttachOpaqueDataRequired:         true,
 		DefaultSchema:            "main",
 		Settings:                 serializedSettings,
 		SecretTypes:              serializedSecretTypes,
@@ -287,7 +287,7 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 }
 
 // ============================================================================
-// Schema-listing handlers reroute to writable catalog when attach_id matches.
+// Schema-listing handlers reroute to writable catalog when attach_opaque_data matches.
 // ============================================================================
 
 func (w *Worker) writableSchemas(c *WritableCatalog) ([][]byte, error) {
@@ -297,7 +297,7 @@ func (w *Worker) writableSchemas(c *WritableCatalog) ([][]byte, error) {
 	}
 	out := make([][]byte, 0, len(list))
 	for _, s := range list {
-		info := &SchemaInfo{Name: s.Name, Comment: s.Comment, AttachID: c.attachID}
+		info := &SchemaInfo{Name: s.Name, Comment: s.Comment, AttachOpaqueData: c.attachOpaqueData}
 		data, err := SerializeSchemaInfo(info)
 		if err != nil {
 			return nil, err
@@ -315,7 +315,7 @@ func (w *Worker) writableSchemaGet(c *WritableCatalog, name string) ([][]byte, e
 	if !exists {
 		return nil, nil
 	}
-	info := &SchemaInfo{Name: name, AttachID: c.attachID}
+	info := &SchemaInfo{Name: name, AttachOpaqueData: c.attachOpaqueData}
 	data, err := SerializeSchemaInfo(info)
 	if err != nil {
 		return nil, err

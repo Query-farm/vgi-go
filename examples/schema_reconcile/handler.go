@@ -884,8 +884,8 @@ func serializeTableInfo(spec tableSpec) ([]byte, error) {
 
 // SchemaContentsHandler returns the per-(attach, schema) table list. Wired
 // via vgi.WithSchemaContentsHandler.
-func SchemaContentsHandler(attachID []byte, schemaName string) ([]vgi.SerializedSchemaItem, bool) {
-	if string(attachID) != CatalogName {
+func SchemaContentsHandler(attachOpaqueData []byte, schemaName string) ([]vgi.SerializedSchemaItem, bool) {
+	if string(attachOpaqueData) != CatalogName {
 		return nil, false
 	}
 	if schemaName != SchemaName {
@@ -906,8 +906,8 @@ func SchemaContentsHandler(attachID []byte, schemaName string) ([]vgi.Serialized
 
 // AttachTableGetHandler answers single-table catalog_table_get RPCs for the
 // schema_reconcile catalog. Wired via vgi.WithAttachTableGetHandler.
-func AttachTableGetHandler(attachID []byte, schemaName, name string, atUnit, atValue *string) ([]byte, bool, error) {
-	if string(attachID) != CatalogName {
+func AttachTableGetHandler(attachOpaqueData []byte, schemaName, name string, atUnit, atValue *string) ([]byte, bool, error) {
+	if string(attachOpaqueData) != CatalogName {
 		return nil, false, nil
 	}
 	if schemaName != SchemaName {
@@ -927,8 +927,8 @@ func AttachTableGetHandler(attachID []byte, schemaName, name string, atUnit, atV
 // AttachScanFunctionGetHandler routes SELECT-time scan-function lookups to
 // schema_reconcile_scan(<table_name>). Wired via
 // vgi.WithAttachScanFunctionGetHandler.
-func AttachScanFunctionGetHandler(attachID []byte, schemaName, name string, atUnit, atValue *string) (*vgi.ScanFunctionResult, bool, error) {
-	if string(attachID) != CatalogName {
+func AttachScanFunctionGetHandler(attachOpaqueData []byte, schemaName, name string, atUnit, atValue *string) (*vgi.ScanFunctionResult, bool, error) {
+	if string(attachOpaqueData) != CatalogName {
 		return nil, false, nil
 	}
 	if schemaName != SchemaName {
@@ -948,8 +948,8 @@ func AttachScanFunctionGetHandler(attachID []byte, schemaName, name string, atUn
 // AttachWriteFunctionGetHandler routes INSERT/UPDATE/DELETE-time function
 // lookups to schema_reconcile_{insert,update,delete}(<table_name>). Wired
 // via vgi.WithAttachWriteFunctionGetHandler.
-func AttachWriteFunctionGetHandler(op string, attachID []byte, schemaName, name string) (*vgi.ScanFunctionResult, bool, error) {
-	if string(attachID) != CatalogName {
+func AttachWriteFunctionGetHandler(op string, attachOpaqueData []byte, schemaName, name string) (*vgi.ScanFunctionResult, bool, error) {
+	if string(attachOpaqueData) != CatalogName {
 		return nil, false, nil
 	}
 	if schemaName != SchemaName {

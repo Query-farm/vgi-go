@@ -22,10 +22,10 @@ type BindParams struct {
 	Settings map[string]interface{}
 	// Secrets is a map of secret names to their value maps.
 	Secrets map[string]map[string]interface{}
-	// AttachID is the catalog attachment identifier.
-	AttachID []byte
-	// TransactionID is the transaction identifier.
-	TransactionID []byte
+	// AttachOpaqueData is the catalog attachment identifier.
+	AttachOpaqueData []byte
+	// TransactionOpaqueData is the transaction identifier.
+	TransactionOpaqueData []byte
 	// ResolvedSecretsProvided is true on the second phase of a two-phase bind,
 	// indicating that scoped secrets have been resolved and are in Secrets.
 	ResolvedSecretsProvided bool

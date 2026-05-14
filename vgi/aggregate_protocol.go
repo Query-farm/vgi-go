@@ -29,7 +29,7 @@ type AggregateBindRequestWire struct {
 	InputSchema  *[]byte `vgirpc:"input_schema"`
 	Settings     *[]byte `vgirpc:"settings"`
 	Secrets      *[]byte `vgirpc:"secrets"`
-	AttachID     *[]byte `vgirpc:"attach_id"`
+	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateBindResponseWire is the wire format for aggregate_bind responses.
@@ -43,7 +43,7 @@ type AggregateUpdateRequestWire struct {
 	FunctionName string  `vgirpc:"function_name"`
 	ExecutionID  []byte  `vgirpc:"execution_id"`
 	InputBatch   []byte  `vgirpc:"input_batch"`
-	AttachID     *[]byte `vgirpc:"attach_id"`
+	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateUpdateResponseWire is the empty ack for aggregate_update.
@@ -54,7 +54,7 @@ type AggregateCombineRequestWire struct {
 	FunctionName string  `vgirpc:"function_name"`
 	ExecutionID  []byte  `vgirpc:"execution_id"`
 	MergeBatch   []byte  `vgirpc:"merge_batch"`
-	AttachID     *[]byte `vgirpc:"attach_id"`
+	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateCombineResponseWire is the empty ack for aggregate_combine.
@@ -66,7 +66,7 @@ type AggregateFinalizeRequestWire struct {
 	ExecutionID   []byte  `vgirpc:"execution_id"`
 	GroupIDsBatch []byte  `vgirpc:"group_ids_batch"`
 	OutputSchema  []byte  `vgirpc:"output_schema"`
-	AttachID      *[]byte `vgirpc:"attach_id"`
+	AttachOpaqueData      *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateFinalizeResponseWire is the wire format for aggregate_finalize responses.
@@ -79,7 +79,7 @@ type AggregateDestructorRequestWire struct {
 	FunctionName  string  `vgirpc:"function_name"`
 	ExecutionID   []byte  `vgirpc:"execution_id"`
 	GroupIDsBatch []byte  `vgirpc:"group_ids_batch"`
-	AttachID      *[]byte `vgirpc:"attach_id"`
+	AttachOpaqueData      *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateDestructorResponseWire is the empty ack for aggregate_destructor.
@@ -96,7 +96,7 @@ type AggregateWindowInitRequestWire struct {
 	FilterMask     []byte  `vgirpc:"filter_mask"`
 	FrameStats     []byte  `vgirpc:"frame_stats"`
 	AllValid       []byte  `vgirpc:"all_valid"`
-	AttachID       *[]byte `vgirpc:"attach_id"`
+	AttachOpaqueData       *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateWindowInitResponseWire is the empty ack.
@@ -110,7 +110,7 @@ type AggregateWindowRequestWire struct {
 	RID          int64   `vgirpc:"rid"`
 	FrameStarts  []int64 `vgirpc:"frame_starts"`
 	FrameEnds    []int64 `vgirpc:"frame_ends"`
-	AttachID     *[]byte `vgirpc:"attach_id"`
+	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateWindowResponseWire is the wire format for aggregate_window.
@@ -128,7 +128,7 @@ type AggregateWindowBatchRequestWire struct {
 	FramesPerRow []int64 `vgirpc:"frames_per_row"`
 	FrameStarts  []int64 `vgirpc:"frame_starts"`
 	FrameEnds    []int64 `vgirpc:"frame_ends"`
-	AttachID     *[]byte `vgirpc:"attach_id"`
+	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateWindowBatchResponseWire is the wire format for aggregate_window_batch.
@@ -141,7 +141,7 @@ type AggregateWindowDestructorRequestWire struct {
 	FunctionName string  `vgirpc:"function_name"`
 	ExecutionID  []byte  `vgirpc:"execution_id"`
 	PartitionID  int64   `vgirpc:"partition_id"`
-	AttachID     *[]byte `vgirpc:"attach_id"`
+	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateWindowDestructorResponseWire is the empty ack.
@@ -281,8 +281,8 @@ func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.Call
 		Args: w.loadAggArgs(req.FunctionName, req.ExecutionID),
 		Auth: callCtx.Auth,
 	}
-	if req.AttachID != nil {
-		params.AttachID = *req.AttachID
+	if req.AttachOpaqueData != nil {
+		params.AttachOpaqueData = *req.AttachOpaqueData
 	}
 
 	uniqueGIDs := uniqueInt64(gids)
@@ -369,8 +369,8 @@ func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.Cal
 		Args: w.loadAggArgs(req.FunctionName, req.ExecutionID),
 		Auth: callCtx.Auth,
 	}
-	if req.AttachID != nil {
-		params.AttachID = *req.AttachID
+	if req.AttachOpaqueData != nil {
+		params.AttachOpaqueData = *req.AttachOpaqueData
 	}
 
 	allGIDs := uniqueInt64(append(append([]int64{}, srcIDs...), tgtIDs...))
@@ -457,8 +457,8 @@ func (w *Worker) handleAggregateFinalize(ctx context.Context, callCtx *vgirpc.Ca
 		OutputSchema: outSchema,
 		Auth:         callCtx.Auth,
 	}
-	if req.AttachID != nil {
-		params.AttachID = *req.AttachID
+	if req.AttachOpaqueData != nil {
+		params.AttachOpaqueData = *req.AttachOpaqueData
 	}
 
 	stored, err := bucket.loadStates(gids)
@@ -522,8 +522,8 @@ func (w *Worker) handleAggregateWindowInit(ctx context.Context, callCtx *vgirpc.
 			OutputSchema: partition.OutputSchema,
 			Auth:         callCtx.Auth,
 		}
-		if req.AttachID != nil {
-			params.AttachID = *req.AttachID
+		if req.AttachOpaqueData != nil {
+			params.AttachOpaqueData = *req.AttachOpaqueData
 		}
 		ws, err := wfn.WindowInit(partition, params)
 		if err != nil {
@@ -568,8 +568,8 @@ func (w *Worker) handleAggregateWindow(ctx context.Context, callCtx *vgirpc.Call
 		OutputSchema: partition.OutputSchema,
 		Auth:         callCtx.Auth,
 	}
-	if req.AttachID != nil {
-		params.AttachID = *req.AttachID
+	if req.AttachOpaqueData != nil {
+		params.AttachOpaqueData = *req.AttachOpaqueData
 	}
 	if len(req.FrameStarts) != len(req.FrameEnds) {
 		return AggregateWindowResponseWire{}, fmt.Errorf("aggregate_window: frame_starts/frame_ends length mismatch")
@@ -612,8 +612,8 @@ func (w *Worker) handleAggregateWindowBatch(ctx context.Context, callCtx *vgirpc
 		OutputSchema: partition.OutputSchema,
 		Auth:         callCtx.Auth,
 	}
-	if req.AttachID != nil {
-		params.AttachID = *req.AttachID
+	if req.AttachOpaqueData != nil {
+		params.AttachOpaqueData = *req.AttachOpaqueData
 	}
 
 	if int(req.Count) != len(req.FramesPerRow) {

@@ -448,7 +448,7 @@ func (s *Storage) AggregateWindowPartitionClear(executionID []byte) error {
 // Transaction state
 // ---------------------------------------------------------------------------
 
-func (s *Storage) TransactionStateGet(transactionID []byte, keys [][]byte) ([][]byte, error) {
+func (s *Storage) TransactionStateGet(transactionOpaqueData []byte, keys [][]byte) ([][]byte, error) {
 	if len(keys) == 0 {
 		return [][]byte{}, nil
 	}
@@ -460,7 +460,7 @@ func (s *Storage) TransactionStateGet(transactionID []byte, keys [][]byte) ([][]
 		Values []*string `json:"values"` // parallel to keys, null on miss
 	}
 	if err := s.post("transaction_state_get", map[string]any{
-		"transaction_id": b64(transactionID),
+		"transaction_opaque_data": b64(transactionOpaqueData),
 		"keys":           enc,
 	}, &resp); err != nil {
 		return nil, err
@@ -485,7 +485,7 @@ func (s *Storage) TransactionStateGet(transactionID []byte, keys [][]byte) ([][]
 	return out, nil
 }
 
-func (s *Storage) TransactionStatePut(transactionID []byte, items []vgi.TransactionStateItem) error {
+func (s *Storage) TransactionStatePut(transactionOpaqueData []byte, items []vgi.TransactionStateItem) error {
 	if len(items) == 0 {
 		return nil
 	}
@@ -497,14 +497,14 @@ func (s *Storage) TransactionStatePut(transactionID []byte, items []vgi.Transact
 		}
 	}
 	return s.post("transaction_state_put", map[string]any{
-		"transaction_id": b64(transactionID),
+		"transaction_opaque_data": b64(transactionOpaqueData),
 		"items":          enc,
 	}, nil)
 }
 
-func (s *Storage) TransactionStateClear(transactionID []byte) error {
+func (s *Storage) TransactionStateClear(transactionOpaqueData []byte) error {
 	return s.post("transaction_state_clear", map[string]any{
-		"transaction_id": b64(transactionID),
+		"transaction_opaque_data": b64(transactionOpaqueData),
 	}, nil)
 }
 

@@ -28,9 +28,9 @@ type DynamicToStringHook interface {
 type DynamicToStringParams struct {
 	// FunctionName is the table function being profiled.
 	FunctionName string
-	// AttachID identifies the catalog the function was invoked under (nil
+	// AttachOpaqueData identifies the catalog the function was invoked under (nil
 	// for direct vgi_table_function() calls).
-	AttachID []byte
+	AttachOpaqueData []byte
 	// GlobalExecutionID matches the execution_id returned from init_global
 	// for this scan; the function uses it to look up storage written during
 	// process().
@@ -86,8 +86,8 @@ func (w *Worker) handleTableFunctionDynamicToString(ctx context.Context, callCtx
 		GlobalExecutionID: req.GlobalExecutionID,
 		Auth:              callCtx.Auth,
 	}
-	if bindReq.AttachID != nil {
-		params.AttachID = *bindReq.AttachID
+	if bindReq.AttachOpaqueData != nil {
+		params.AttachOpaqueData = *bindReq.AttachOpaqueData
 	}
 	if storage, err := w.getOrCreateStorage(ctx, req.GlobalExecutionID); err == nil {
 		params.Storage = storage
@@ -140,18 +140,18 @@ func DeserializeBindRequest(data []byte) (*BindRequestWire, error) {
 			if s, ok := scalarStringHelper(col); ok {
 				out.FunctionType = s
 			}
-		case "attach_id":
+		case "attach_opaque_data":
 			if !col.IsNull(0) {
 				if b, ok := scalarBytesHelper(col); ok {
 					v := b
-					out.AttachID = &v
+					out.AttachOpaqueData = &v
 				}
 			}
-		case "transaction_id":
+		case "transaction_opaque_data":
 			if !col.IsNull(0) {
 				if b, ok := scalarBytesHelper(col); ok {
 					v := b
-					out.TransactionID = &v
+					out.TransactionOpaqueData = &v
 				}
 			}
 		}

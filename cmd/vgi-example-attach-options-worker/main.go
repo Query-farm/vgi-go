@@ -29,11 +29,11 @@ func main() {
 			if req.Options != nil {
 				optBytes = *req.Options
 			}
-			attachID, err := attach_options.EncodeAttachID(optBytes)
+			attachOpaqueData, err := attach_options.EncodeAttachOpaqueData(optBytes)
 			if err != nil {
-				return nil, fmt.Errorf("encoding attach_id: %w", err)
+				return nil, fmt.Errorf("encoding attach_opaque_data: %w", err)
 			}
-			return &vgi.AttachDecision{AttachID: attachID}, nil
+			return &vgi.AttachDecision{AttachOpaqueData: attachOpaqueData}, nil
 		}),
 	)
 

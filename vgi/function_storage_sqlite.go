@@ -19,7 +19,7 @@ import (
 // SQLite-backed FunctionStorage
 //
 // One shared SQLite database covers every method group on FunctionStorage.
-// Tables key by execution_id (or transaction_id) so a single DB is safe for
+// Tables key by execution_id (or transaction_opaque_data) so a single DB is safe for
 // many concurrent invocations — matching the vgi-python SQLite backend and
 // making cloud backends (Cloudflare DO etc.) straightforward to add against
 // the same interface.
@@ -198,11 +198,11 @@ func initSQLiteSchema(db *sql.DB) error {
 			PRIMARY KEY (execution_id, partition_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS transaction_state (
-			transaction_id BLOB NOT NULL,
+			transaction_opaque_data BLOB NOT NULL,
 			key BLOB NOT NULL,
 			value BLOB NOT NULL,
 			created_at REAL DEFAULT (julianday('now')),
-			PRIMARY KEY (transaction_id, key)
+			PRIMARY KEY (transaction_opaque_data, key)
 		)`,
 	}
 	for _, s := range stmts {
@@ -553,13 +553,13 @@ func (s *sqliteStorage) AggregateWindowPartitionClear(executionID []byte) error 
 // Transaction state
 // ---------------------------------------------------------------------------
 
-func (s *sqliteStorage) TransactionStateGet(transactionID []byte, keys [][]byte) ([][]byte, error) {
+func (s *sqliteStorage) TransactionStateGet(transactionOpaqueData []byte, keys [][]byte) ([][]byte, error) {
 	out := make([][]byte, len(keys))
 	if len(keys) == 0 {
 		return out, nil
 	}
 	stmt, err := s.db.Prepare(
-		`SELECT value FROM transaction_state WHERE transaction_id = ? AND key = ?`,
+		`SELECT value FROM transaction_state WHERE transaction_opaque_data = ? AND key = ?`,
 	)
 	if err != nil {
 		return nil, err
@@ -567,7 +567,7 @@ func (s *sqliteStorage) TransactionStateGet(transactionID []byte, keys [][]byte)
 	defer stmt.Close()
 	for i, k := range keys {
 		var v []byte
-		err := stmt.QueryRow(transactionID, k).Scan(&v)
+		err := stmt.QueryRow(transactionOpaqueData, k).Scan(&v)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -579,7 +579,7 @@ func (s *sqliteStorage) TransactionStateGet(transactionID []byte, keys [][]byte)
 	return out, nil
 }
 
-func (s *sqliteStorage) TransactionStatePut(transactionID []byte, items []TransactionStateItem) error {
+func (s *sqliteStorage) TransactionStatePut(transactionOpaqueData []byte, items []TransactionStateItem) error {
 	if len(items) == 0 {
 		return nil
 	}
@@ -589,7 +589,7 @@ func (s *sqliteStorage) TransactionStatePut(transactionID []byte, items []Transa
 		return err
 	}
 	stmt, err := tx.Prepare(
-		`INSERT OR REPLACE INTO transaction_state (transaction_id, key, value, created_at)
+		`INSERT OR REPLACE INTO transaction_state (transaction_opaque_data, key, value, created_at)
 		 VALUES (?, ?, ?, julianday('now'))`,
 	)
 	if err != nil {
@@ -598,7 +598,7 @@ func (s *sqliteStorage) TransactionStatePut(transactionID []byte, items []Transa
 	}
 	defer stmt.Close()
 	for _, it := range items {
-		if _, err := stmt.Exec(transactionID, it.Key, it.Value); err != nil {
+		if _, err := stmt.Exec(transactionOpaqueData, it.Key, it.Value); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -606,8 +606,8 @@ func (s *sqliteStorage) TransactionStatePut(transactionID []byte, items []Transa
 	return tx.Commit()
 }
 
-func (s *sqliteStorage) TransactionStateClear(transactionID []byte) error {
-	_, err := s.db.Exec(`DELETE FROM transaction_state WHERE transaction_id = ?`, transactionID)
+func (s *sqliteStorage) TransactionStateClear(transactionOpaqueData []byte) error {
+	_, err := s.db.Exec(`DELETE FROM transaction_state WHERE transaction_opaque_data = ?`, transactionOpaqueData)
 	return err
 }
 

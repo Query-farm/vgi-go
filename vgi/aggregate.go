@@ -32,8 +32,8 @@ type AggregateProcessParams struct {
 	Settings     map[string]interface{}
 	Secrets      map[string]map[string]interface{}
 	Auth         *vgirpc.AuthContext
-	// AttachID is the catalog the function was invoked under (nil for ad-hoc calls).
-	AttachID []byte
+	// AttachOpaqueData is the catalog the function was invoked under (nil for ad-hoc calls).
+	AttachOpaqueData []byte
 }
 
 // AggregateFunction is the interface every aggregate implements.

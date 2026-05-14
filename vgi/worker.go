@@ -388,11 +388,11 @@ func WithCatalogInfo(info CatalogInfo) WorkerOption {
 // AttachDecision is the custom response returned by an AttachValidator.
 // Any non-empty ResolvedDataVersion / ResolvedImplementationVersion value
 // is forwarded to the client so it appears as a duckdb_databases().tag.
-// If AttachID is nil, the worker falls back to the catalog name.
+// If AttachOpaqueData is nil, the worker falls back to the catalog name.
 type AttachDecision struct {
 	ResolvedDataVersion           string
 	ResolvedImplementationVersion string
-	AttachID                      []byte
+	AttachOpaqueData                      []byte
 }
 
 // AttachValidator is invoked by the default catalog_attach handler. It may
@@ -411,42 +411,42 @@ func WithAttachValidator(v AttachValidator) WorkerOption {
 }
 
 // SchemaContentsHandler lets callers override catalog_schema_contents_tables
-// on a per-attach-id basis (e.g. return different tables per resolved data
+// on a per-attach-opaque-data basis (e.g. return different tables per resolved data
 // version). Return nil to fall through to the default registered-tables
 // behaviour.
-type SchemaContentsHandler func(attachID []byte, schemaName string) ([]SerializedSchemaItem, bool)
+type SchemaContentsHandler func(attachOpaqueData []byte, schemaName string) ([]SerializedSchemaItem, bool)
 
 // SerializedSchemaItem is a single pre-serialized schema item (TableInfo or
 // ViewInfo IPC bytes).
 type SerializedSchemaItem []byte
 
 // WithSchemaContentsHandler installs a handler that can replace the tables
-// returned for a given (attach_id, schema) pair.
+// returned for a given (attach_opaque_data, schema) pair.
 func WithSchemaContentsHandler(h SchemaContentsHandler) WorkerOption {
 	return func(w *Worker) {
 		w.schemaContentsHandler = h
 	}
 }
 
-// AttachTableGetHandler is the attach-id-aware version of TableGetHandler.
+// AttachTableGetHandler is the attach-opaque-data-aware version of TableGetHandler.
 // Return (data, true) to override the default; return (nil, false) to fall
-// through. Used by version-aware workers where the attach_id encodes the
+// through. Used by version-aware workers where the attach_opaque_data encodes the
 // resolved version.
-type AttachTableGetHandler func(attachID []byte, schemaName, name string, atUnit, atValue *string) (data []byte, handled bool, err error)
+type AttachTableGetHandler func(attachOpaqueData []byte, schemaName, name string, atUnit, atValue *string) (data []byte, handled bool, err error)
 
-// WithAttachTableGetHandler installs an attach-id-aware table_get handler.
+// WithAttachTableGetHandler installs an attach-opaque-data-aware table_get handler.
 func WithAttachTableGetHandler(h AttachTableGetHandler) WorkerOption {
 	return func(w *Worker) {
 		w.attachTableGetHandler = h
 	}
 }
 
-// AttachScanFunctionGetHandler is the attach-id-aware version of
+// AttachScanFunctionGetHandler is the attach-opaque-data-aware version of
 // ScanFunctionGetHandler. Return (result, true) to override; (nil, false) to
 // fall through.
-type AttachScanFunctionGetHandler func(attachID []byte, schemaName, name string, atUnit, atValue *string) (result *ScanFunctionResult, handled bool, err error)
+type AttachScanFunctionGetHandler func(attachOpaqueData []byte, schemaName, name string, atUnit, atValue *string) (result *ScanFunctionResult, handled bool, err error)
 
-// WithAttachScanFunctionGetHandler installs an attach-id-aware
+// WithAttachScanFunctionGetHandler installs an attach-opaque-data-aware
 // scan_function_get handler.
 func WithAttachScanFunctionGetHandler(h AttachScanFunctionGetHandler) WorkerOption {
 	return func(w *Worker) {
@@ -454,16 +454,16 @@ func WithAttachScanFunctionGetHandler(h AttachScanFunctionGetHandler) WorkerOpti
 	}
 }
 
-// AttachWriteFunctionGetHandler is the attach-id-aware version of
+// AttachWriteFunctionGetHandler is the attach-opaque-data-aware version of
 // catalog_table_{insert,update,delete}_function_get. Op is "insert",
 // "update", or "delete". Return (result, true) to route; (nil, false) to
 // fall through to the built-in writable-catalog path or the read-only
 // rejection.
-type AttachWriteFunctionGetHandler func(op string, attachID []byte, schemaName, name string) (result *ScanFunctionResult, handled bool, err error)
+type AttachWriteFunctionGetHandler func(op string, attachOpaqueData []byte, schemaName, name string) (result *ScanFunctionResult, handled bool, err error)
 
-// WithAttachWriteFunctionGetHandler installs an attach-id-aware handler
+// WithAttachWriteFunctionGetHandler installs an attach-opaque-data-aware handler
 // that resolves the worker function backing INSERT/UPDATE/DELETE on a
-// given (attach_id, schema, table). Use this for fixture catalogs that
+// given (attach_opaque_data, schema, table). Use this for fixture catalogs that
 // publish writable tables outside of the built-in WritableCatalog path
 // (e.g. schema_reconcile, which has its own per-table SQLite store and
 // strict-schema validators).
@@ -479,7 +479,7 @@ func WithAttachWriteFunctionGetHandler(h AttachWriteFunctionGetHandler) WorkerOp
 // cookies to assert the HTTP cookie jar is round-tripping correctly — a
 // useful regression check for versioned workers that set a sticky cookie at
 // ATTACH time.
-type CatalogVersionHook func(attachID []byte, callCtx *vgirpc.CallContext) error
+type CatalogVersionHook func(attachOpaqueData []byte, callCtx *vgirpc.CallContext) error
 
 // WithCatalogVersionHook installs a hook that runs on every catalog_version
 // RPC. Use it to assert invariants like cookie presence on HTTP transport.

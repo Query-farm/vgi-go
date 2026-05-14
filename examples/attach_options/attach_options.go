@@ -4,7 +4,7 @@
 // Package attach_options implements the reference attach-options example
 // worker: it declares one ATTACH option of every supported Arrow/DuckDB
 // type and exposes an echo_attach_options() function that round-trips the
-// attached values via attach_id.
+// attached values via attach_opaque_data.
 //
 // Mirrors vgi-python's vgi/examples/attach_options.py so the shared
 // integration test (test/sql/integration/attach/attach_options_echo.test)
@@ -28,7 +28,7 @@ import (
 
 const (
 	CatalogName     = "attach_options"
-	attachIDSepByte = 0x00
+	attachOpaqueDataSepByte = 0x00
 	uuidBytes       = 16
 )
 
@@ -285,8 +285,8 @@ func mergeOptionsToEchoBatch(userBatch arrow.RecordBatch) (arrow.RecordBatch, er
 	return batch, nil
 }
 
-// EncodeAttachID: uuid (16 bytes) || 0x00 || ipc(batch).
-func EncodeAttachID(optionsBytes []byte) ([]byte, error) {
+// EncodeAttachOpaqueData: uuid (16 bytes) || 0x00 || ipc(batch).
+func EncodeAttachOpaqueData(optionsBytes []byte) ([]byte, error) {
 	var userBatch arrow.RecordBatch
 	if len(optionsBytes) > 0 {
 		b, err := vgi.DeserializeRecordBatch(optionsBytes)
@@ -311,17 +311,17 @@ func EncodeAttachID(optionsBytes []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	id := uuid.New()
 	buf.Write(id[:])
-	buf.WriteByte(attachIDSepByte)
+	buf.WriteByte(attachOpaqueDataSepByte)
 	buf.Write(ipcBytes)
 	return buf.Bytes(), nil
 }
 
-// DecodeAttachID recovers the single-row echo batch stashed in attach_id.
-func DecodeAttachID(attachID []byte) (arrow.RecordBatch, error) {
-	if len(attachID) <= uuidBytes+1 || attachID[uuidBytes] != attachIDSepByte {
-		return nil, fmt.Errorf("attach_id does not carry options payload")
+// DecodeAttachOpaqueData recovers the single-row echo batch stashed in attach_opaque_data.
+func DecodeAttachOpaqueData(attachOpaqueData []byte) (arrow.RecordBatch, error) {
+	if len(attachOpaqueData) <= uuidBytes+1 || attachOpaqueData[uuidBytes] != attachOpaqueDataSepByte {
+		return nil, fmt.Errorf("attach_opaque_data does not carry options payload")
 	}
-	ipcBytes := attachID[uuidBytes+1:]
+	ipcBytes := attachOpaqueData[uuidBytes+1:]
 	return vgi.DeserializeRecordBatch(ipcBytes)
 }
 
@@ -330,7 +330,7 @@ func DecodeAttachID(attachID []byte) (arrow.RecordBatch, error) {
 // ---------------------------------------------------------------------------
 
 // EchoAttachOptionsFunction emits the single-row record batch carried in
-// attach_id.
+// attach_opaque_data.
 type EchoAttachOptionsFunction struct{}
 
 var _ vgi.TypedTableFunc[echoState] = (*EchoAttachOptionsFunction)(nil)
@@ -339,7 +339,7 @@ func (f *EchoAttachOptionsFunction) Name() string { return "echo_attach_options"
 
 func (f *EchoAttachOptionsFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description: "Echo the attach-time option values carried in attach_id",
+		Description: "Echo the attach-time option values carried in attach_opaque_data",
 		Stability:   vgi.StabilityConsistent,
 		Categories:  []string{"generator", "testing"},
 	}
@@ -348,10 +348,10 @@ func (f *EchoAttachOptionsFunction) Metadata() vgi.FunctionMetadata {
 func (f *EchoAttachOptionsFunction) ArgumentSpecs() []vgi.ArgSpec { return nil }
 
 func (f *EchoAttachOptionsFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	if params.AttachID == nil {
-		return nil, fmt.Errorf("echo_attach_options requires an attach_id")
+	if params.AttachOpaqueData == nil {
+		return nil, fmt.Errorf("echo_attach_options requires an attach_opaque_data")
 	}
-	batch, err := DecodeAttachID(params.AttachID)
+	batch, err := DecodeAttachOpaqueData(params.AttachOpaqueData)
 	if err != nil {
 		return nil, err
 	}

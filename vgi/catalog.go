@@ -36,12 +36,12 @@ type CatalogAttachRequestWire struct {
 
 // CatalogAttachResultWire is the wire type for catalog_attach result.
 type CatalogAttachResultWire struct {
-	AttachID                      []byte            `vgirpc:"attach_id"`
+	AttachOpaqueData                      []byte            `vgirpc:"attach_opaque_data"`
 	SupportsTransactions          bool              `vgirpc:"supports_transactions"`
 	SupportsTimeTravel            bool              `vgirpc:"supports_time_travel"`
 	CatalogVersionFrozen          bool              `vgirpc:"catalog_version_frozen"`
 	CatalogVersion                int64             `vgirpc:"catalog_version"`
-	AttachIDRequired              bool              `vgirpc:"attach_id_required"`
+	AttachOpaqueDataRequired              bool              `vgirpc:"attach_opaque_data_required"`
 	DefaultSchema                 string            `vgirpc:"default_schema"`
 	Settings                      SerializedItems   `vgirpc:"settings"`
 	SecretTypes                   SerializedItems   `vgirpc:"secret_types"`
@@ -54,8 +54,8 @@ type CatalogAttachResultWire struct {
 
 // CatalogVersionRequestWire is the wire type for catalog_version.
 type CatalogVersionRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // CatalogVersionResponseWire wraps the version number.
@@ -65,30 +65,30 @@ type CatalogVersionResponseWire struct {
 
 // SchemasRequestWire is the wire type for catalog_schemas and related.
 type SchemasRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // SchemaGetRequestWire is the wire type for catalog_schema_get.
 type SchemaGetRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	Name          string  `vgirpc:"name"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // SchemaContentsRequestWire is for schema_contents_tables/views.
 type SchemaContentsRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	Name          string  `vgirpc:"name"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // SchemaContentsFunctionsRequestWire is for schema_contents_functions.
 type SchemaContentsFunctionsRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	Name          string  `vgirpc:"name"`
 	Type          string  `vgirpc:"type,enum"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // ItemsResponseWire wraps a list of serialized items (schemas/tables/views/functions).
@@ -98,23 +98,23 @@ type ItemsResponseWire struct {
 
 // DetachRequestWire is the wire type for catalog_detach.
 type DetachRequestWire struct {
-	AttachID []byte `vgirpc:"attach_id"`
+	AttachOpaqueData []byte `vgirpc:"attach_opaque_data"`
 }
 
 // TransactionBeginRequestWire is the wire type for catalog_transaction_begin.
 type TransactionBeginRequestWire struct {
-	AttachID []byte `vgirpc:"attach_id"`
+	AttachOpaqueData []byte `vgirpc:"attach_opaque_data"`
 }
 
 // TransactionBeginResponseWire wraps optional transaction ID.
 type TransactionBeginResponseWire struct {
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TransactionRequestWire is the wire type for commit/rollback.
 type TransactionRequestWire struct {
-	AttachID      []byte `vgirpc:"attach_id"`
-	TransactionID []byte `vgirpc:"transaction_id"`
+	AttachOpaqueData      []byte `vgirpc:"attach_opaque_data"`
+	TransactionOpaqueData []byte `vgirpc:"transaction_opaque_data"`
 }
 
 // CatalogDropRequestWire is for catalog_drop.
@@ -131,51 +131,51 @@ type CatalogCreateRequestWire struct {
 
 // SchemaCreateRequestWire is for catalog_schema_create.
 type SchemaCreateRequestWire struct {
-	AttachID      []byte             `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte             `vgirpc:"attach_opaque_data"`
 	Name          string             `vgirpc:"name"`
 	OnConflict    string             `vgirpc:"on_conflict,enum"`
 	Comment       *string            `vgirpc:"comment"`
 	Tags          *map[string]string `vgirpc:"tags"`
-	TransactionID *[]byte            `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte            `vgirpc:"transaction_opaque_data"`
 }
 
 // SchemaDropRequestWire is for catalog_schema_drop.
 type SchemaDropRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	Name           string  `vgirpc:"name"`
 	IgnoreNotFound bool    `vgirpc:"ignore_not_found"`
 	Cascade        bool    `vgirpc:"cascade"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableGetRequestWire is for catalog_table_get.
 type TableGetRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName    string  `vgirpc:"schema_name"`
 	Name          string  `vgirpc:"name"`
 	AtUnit        *string `vgirpc:"at_unit"`
 	AtValue       *string `vgirpc:"at_value"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableDropRequestWire is for catalog_table_drop.
 type TableDropRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
 	IgnoreNotFound bool    `vgirpc:"ignore_not_found"`
 	Cascade        bool    `vgirpc:"cascade"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableScanFunctionGetRequestWire is for catalog_table_scan_function_get.
 type TableScanFunctionGetRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName    string  `vgirpc:"schema_name"`
 	Name          string  `vgirpc:"name"`
 	AtUnit        *string `vgirpc:"at_unit"`
 	AtValue       *string `vgirpc:"at_value"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableScanFunctionGetResponseWire wraps the scan function result.
@@ -189,158 +189,158 @@ type TableScanFunctionGetResponseWire struct {
 
 // TableCommentSetRequestWire is for catalog_table_comment_set.
 type TableCommentSetRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
 	Comment        *string `vgirpc:"comment"`
 	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableRenameRequestWire is for catalog_table_rename.
 type TableRenameRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
 	NewName        string  `vgirpc:"new_name"`
 	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableColumnAddRequestWire is for catalog_table_column_add.
 type TableColumnAddRequestWire struct {
-	AttachID          []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData          []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName        string  `vgirpc:"schema_name"`
 	Name              string  `vgirpc:"name"`
 	ColumnDefinition  []byte  `vgirpc:"column_definition"`
 	IgnoreNotFound    *bool   `vgirpc:"ignore_not_found"`
 	IfColumnNotExists *bool   `vgirpc:"if_column_not_exists"`
-	TransactionID     *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData     *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableColumnDropRequestWire is for catalog_table_column_drop.
 type TableColumnDropRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
 	ColumnName     string  `vgirpc:"column_name"`
 	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
 	IfColumnExists *bool   `vgirpc:"if_column_exists"`
 	Cascade        *bool   `vgirpc:"cascade"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableColumnRenameRequestWire is for catalog_table_column_rename.
 type TableColumnRenameRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
 	ColumnName     string  `vgirpc:"column_name"`
 	NewColumnName  string  `vgirpc:"new_column_name"`
 	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableColumnDefaultSetRequestWire is for catalog_table_column_default_set.
 type TableColumnDefaultSetRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
 	ColumnName     string  `vgirpc:"column_name"`
 	Expression     string  `vgirpc:"expression"`
 	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableColumnDefaultDropRequestWire is for catalog_table_column_default_drop.
 type TableColumnDefaultDropRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
 	ColumnName     string  `vgirpc:"column_name"`
 	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableColumnTypeChangeRequestWire is for catalog_table_column_type_change.
 type TableColumnTypeChangeRequestWire struct {
-	AttachID         []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData         []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName       string  `vgirpc:"schema_name"`
 	Name             string  `vgirpc:"name"`
 	ColumnDefinition []byte  `vgirpc:"column_definition"`
 	Expression       *string `vgirpc:"expression"`
 	IgnoreNotFound   *bool   `vgirpc:"ignore_not_found"`
-	TransactionID    *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData    *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableNotNullRequestWire is for catalog_table_not_null_set/drop.
 type TableNotNullRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
 	ColumnName     string  `vgirpc:"column_name"`
 	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // ViewGetRequestWire is for catalog_view_get.
 type ViewGetRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName    string  `vgirpc:"schema_name"`
 	Name          string  `vgirpc:"name"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // ViewCreateRequestWire is for catalog_view_create.
 type ViewCreateRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName    string  `vgirpc:"schema_name"`
 	Name          string  `vgirpc:"name"`
 	Definition    string  `vgirpc:"definition"`
 	OnConflict    string  `vgirpc:"on_conflict,enum"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // ViewDropRequestWire is for catalog_view_drop.
 type ViewDropRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
 	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // ViewRenameRequestWire is for catalog_view_rename.
 type ViewRenameRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
 	NewName        string  `vgirpc:"new_name"`
 	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // ViewCommentSetRequestWire is for catalog_view_comment_set.
 type ViewCommentSetRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
 	Comment        *string `vgirpc:"comment"`
 	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // MacroGetRequestWire is for catalog_macro_get.
 type MacroGetRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName    string  `vgirpc:"schema_name"`
 	Name          string  `vgirpc:"name"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // MacroCreateRequestWire is for catalog_macro_create.
 type MacroCreateRequestWire struct {
-	AttachID               []byte   `vgirpc:"attach_id"`
+	AttachOpaqueData               []byte   `vgirpc:"attach_opaque_data"`
 	SchemaName             string   `vgirpc:"schema_name"`
 	Name                   string   `vgirpc:"name"`
 	MacroType              string   `vgirpc:"macro_type,enum"`
@@ -348,61 +348,61 @@ type MacroCreateRequestWire struct {
 	Definition             string   `vgirpc:"definition"`
 	OnConflict             string   `vgirpc:"on_conflict,enum"`
 	ParameterDefaultValues *[]byte  `vgirpc:"parameter_default_values"`
-	TransactionID          *[]byte  `vgirpc:"transaction_id"`
+	TransactionOpaqueData          *[]byte  `vgirpc:"transaction_opaque_data"`
 }
 
 // MacroDropRequestWire is for catalog_macro_drop.
 type MacroDropRequestWire struct {
-	AttachID       []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData       []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName     string  `vgirpc:"schema_name"`
 	Name           string  `vgirpc:"name"`
 	IgnoreNotFound *bool   `vgirpc:"ignore_not_found"`
-	TransactionID  *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData  *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // SchemaContentsMacrosRequestWire is for schema_contents_macros.
 type SchemaContentsMacrosRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	Name          string  `vgirpc:"name"`
 	Type          string  `vgirpc:"type,enum"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableColumnStatisticsGetRequestWire is for catalog_table_column_statistics_get.
 type TableColumnStatisticsGetRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName    string  `vgirpc:"schema_name"`
 	Name          string  `vgirpc:"name"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableInsertFunctionGetRequestWire is for catalog_table_insert_function_get.
 type TableInsertFunctionGetRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName    string  `vgirpc:"schema_name"`
 	Name          string  `vgirpc:"name"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableUpdateFunctionGetRequestWire is for catalog_table_update_function_get.
 type TableUpdateFunctionGetRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName    string  `vgirpc:"schema_name"`
 	Name          string  `vgirpc:"name"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableDeleteFunctionGetRequestWire is for catalog_table_delete_function_get.
 type TableDeleteFunctionGetRequestWire struct {
-	AttachID      []byte  `vgirpc:"attach_id"`
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName    string  `vgirpc:"schema_name"`
 	Name          string  `vgirpc:"name"`
-	TransactionID *[]byte `vgirpc:"transaction_id"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableCreateRequestWire is for catalog_table_create.
 type TableCreateRequestWire struct {
-	AttachID              []byte    `vgirpc:"attach_id"`
+	AttachOpaqueData              []byte    `vgirpc:"attach_opaque_data"`
 	SchemaName            string    `vgirpc:"schema_name"`
 	Name                  string    `vgirpc:"name"`
 	Columns               []byte    `vgirpc:"columns"`
@@ -412,7 +412,7 @@ type TableCreateRequestWire struct {
 	CheckConstraints      []string  `vgirpc:"check_constraints"`
 	PrimaryKeyConstraints [][]int32 `vgirpc:"primary_key_constraints"`
 	ForeignKeyConstraints [][]byte  `vgirpc:"foreign_key_constraints"`
-	TransactionID         *[]byte   `vgirpc:"transaction_id"`
+	TransactionOpaqueData         *[]byte   `vgirpc:"transaction_opaque_data"`
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +424,7 @@ type DefaultReadOnlyCatalog struct {
 	catalogName string
 	schemas     map[string]*catalogSchemaInfo
 	version     int64
-	attachID    []byte
+	attachOpaqueData    []byte
 }
 
 type catalogSchemaInfo struct {
@@ -724,7 +724,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	vgirpc.Unary[CatalogAttachRequestWire, CatalogAttachResultWire](s, "catalog_attach",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogAttachRequestWire) (CatalogAttachResultWire, error) {
 			// Writable catalogs are handled separately so they have their
-			// own attach_id and per-catalog table state.
+			// own attach_opaque_data and per-catalog table state.
 			if wc, ok := w.extraCatalogs[req.Name]; ok {
 				return w.handleWritableAttach(req, wc)
 			}
@@ -739,9 +739,9 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				}
 			}
 			// Generate a simple attach ID
-			attachID := []byte(req.Name)
+			attachOpaqueData := []byte(req.Name)
 			if w.catalog != nil {
-				w.catalog.attachID = attachID
+				w.catalog.attachOpaqueData = attachOpaqueData
 			}
 			version := int64(1)
 			if w.catalog != nil {
@@ -810,8 +810,8 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			}
 			// Invoke the attach validator if installed — the versioned
 			// workers use this to resolve data/implementation versions and
-			// to embed the chosen version into attach_id.
-			attachIDRequired := false
+			// to embed the chosen version into attach_opaque_data.
+			attachOpaqueDataRequired := false
 			var resolvedData, resolvedImpl *string
 			if w.attachValidator != nil {
 				decision, vErr := w.attachValidator(&req, callCtx)
@@ -822,11 +822,11 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 					}
 				}
 				if decision != nil {
-					if decision.AttachID != nil {
-						attachID = decision.AttachID
-						attachIDRequired = true
+					if decision.AttachOpaqueData != nil {
+						attachOpaqueData = decision.AttachOpaqueData
+						attachOpaqueDataRequired = true
 						if w.catalog != nil {
-							w.catalog.attachID = attachID
+							w.catalog.attachOpaqueData = attachOpaqueData
 						}
 					}
 					if decision.ResolvedDataVersion != "" {
@@ -840,12 +840,12 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				}
 			}
 			result := CatalogAttachResultWire{
-				AttachID:                      attachID,
+				AttachOpaqueData:                      attachOpaqueData,
 				SupportsTransactions:          false,
 				SupportsTimeTravel:            supportsTimeTravel,
 				CatalogVersionFrozen:          true,
 				CatalogVersion:                version,
-				AttachIDRequired:              attachIDRequired,
+				AttachOpaqueDataRequired:              attachOpaqueDataRequired,
 				DefaultSchema:                 "main",
 				Settings:                      serializedSettings,
 				SecretTypes:                   serializedSecretTypes,
@@ -871,7 +871,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	vgirpc.Unary[CatalogVersionRequestWire, CatalogVersionResponseWire](s, "catalog_version",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogVersionRequestWire) (CatalogVersionResponseWire, error) {
 			if w.catalogVersionHook != nil {
-				if err := w.catalogVersionHook(req.AttachID, callCtx); err != nil {
+				if err := w.catalogVersionHook(req.AttachOpaqueData, callCtx); err != nil {
 					return CatalogVersionResponseWire{}, &vgirpc.RpcError{
 						Type:    "ValueError",
 						Message: err.Error(),
@@ -906,7 +906,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schemas
 	vgirpc.Unary[SchemasRequestWire, ItemsResponseWire](s, "catalog_schemas",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemasRequestWire) (ItemsResponseWire, error) {
-			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+			if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 				items, err := w.writableSchemas(wc)
 				if err != nil {
 					return ItemsResponseWire{}, err
@@ -930,7 +930,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_get
 	vgirpc.Unary[SchemaGetRequestWire, ItemsResponseWire](s, "catalog_schema_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaGetRequestWire) (ItemsResponseWire, error) {
-			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+			if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 				items, err := w.writableSchemaGet(wc, req.Name)
 				if err != nil {
 					return ItemsResponseWire{}, err
@@ -954,7 +954,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_create
 	vgirpc.UnaryVoid[SchemaCreateRequestWire](s, "catalog_schema_create",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaCreateRequestWire) error {
-			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+			if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 				return w.writableSchemaCreate(wc, req.Name, parseOnConflict(req.OnConflict), req.Comment)
 			}
 			return readOnlyErr("catalog_schema_create")
@@ -963,7 +963,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_drop
 	vgirpc.UnaryVoid[SchemaDropRequestWire](s, "catalog_schema_drop",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaDropRequestWire) error {
-			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+			if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 				return w.writableSchemaDrop(wc, req.Name, req.IgnoreNotFound, req.Cascade)
 			}
 			return readOnlyErr("catalog_schema_drop")
@@ -972,7 +972,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_contents_tables
 	vgirpc.Unary[SchemaContentsRequestWire, ItemsResponseWire](s, "catalog_schema_contents_tables",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsRequestWire) (ItemsResponseWire, error) {
-			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+			if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 				items, err := w.writableSchemaContentsTables(wc, req.Name)
 				if err != nil {
 					return ItemsResponseWire{}, err
@@ -980,10 +980,10 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				return ItemsResponseWire{Items: items}, nil
 			}
 			// Per-attach override (versioned-tables worker etc.): the handler
-			// inspects the attach_id (which can encode the resolved version)
+			// inspects the attach_opaque_data (which can encode the resolved version)
 			// and returns the right set of tables.
 			if w.schemaContentsHandler != nil {
-				if items, ok := w.schemaContentsHandler(req.AttachID, req.Name); ok {
+				if items, ok := w.schemaContentsHandler(req.AttachOpaqueData, req.Name); ok {
 					out := make([][]byte, len(items))
 					for i, it := range items {
 						out[i] = []byte(it)
@@ -1049,10 +1049,10 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
 
-			// attach_id is set to []byte(catalog_name) in catalog_attach, so
+			// attach_opaque_data is set to []byte(catalog_name) in catalog_attach, so
 			// we can use it to enforce per-catalog function visibility (e.g.
 			// proj_repro_* only surfaces under the projection_repro attach).
-			catalogName := string(req.AttachID)
+			catalogName := string(req.AttachOpaqueData)
 
 			var items [][]byte
 			for i := range si.functions {
@@ -1094,7 +1094,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_get
 	vgirpc.Unary[TableGetRequestWire, ItemsResponseWire](s, "catalog_table_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableGetRequestWire) (ItemsResponseWire, error) {
-			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+			if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 				items, err := w.writableTableGet(wc, req.SchemaName, req.Name)
 				if err != nil {
 					return ItemsResponseWire{}, err
@@ -1106,7 +1106,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			}
 			// Attach-id-aware handler (e.g. versioned-tables worker).
 			if w.attachTableGetHandler != nil {
-				data, handled, err := w.attachTableGetHandler(req.AttachID, req.SchemaName, req.Name, req.AtUnit, req.AtValue)
+				data, handled, err := w.attachTableGetHandler(req.AttachOpaqueData, req.SchemaName, req.Name, req.AtUnit, req.AtValue)
 				if err != nil {
 					return ItemsResponseWire{}, &vgirpc.RpcError{
 						Type:    "ValueError",
@@ -1156,7 +1156,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_create
 	vgirpc.UnaryVoid[TableCreateRequestWire](s, "catalog_table_create",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableCreateRequestWire) error {
-			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+			if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 				return w.writableTableCreate(wc, req)
 			}
 			return readOnlyErr("catalog_table_create")
@@ -1165,7 +1165,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_drop
 	vgirpc.UnaryVoid[TableDropRequestWire](s, "catalog_table_drop",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableDropRequestWire) error {
-			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+			if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 				return w.writableTableDrop(wc, req.SchemaName, req.Name, req.IgnoreNotFound, req.Cascade)
 			}
 			return readOnlyErr("catalog_table_drop")
@@ -1174,7 +1174,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_scan_function_get
 	vgirpc.Unary[TableScanFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_scan_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableScanFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
-			if wc := w.writableByAttachID(req.AttachID); wc != nil {
+			if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 				return buildScanFunctionGetResponse(&ScanFunctionResult{
 					FunctionName: writableScanFunctionName,
 					PositionalArguments: []ScanArg{
@@ -1201,7 +1201,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 
 			// Attach-id-aware handler takes precedence over the plain one.
 			if w.attachScanFunctionGetHandler != nil {
-				result, handled, err := w.attachScanFunctionGetHandler(req.AttachID, req.SchemaName, req.Name, req.AtUnit, req.AtValue)
+				result, handled, err := w.attachScanFunctionGetHandler(req.AttachOpaqueData, req.SchemaName, req.Name, req.AtUnit, req.AtValue)
 				if err != nil {
 					return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{
 						Type:    "ValueError",
@@ -1446,14 +1446,14 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	vgirpc.Unary[TableInsertFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_insert_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableInsertFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
 			if w.attachWriteFunctionGetHandler != nil {
-				if result, handled, err := w.attachWriteFunctionGetHandler("insert", req.AttachID, req.SchemaName, req.Name); err != nil {
+				if result, handled, err := w.attachWriteFunctionGetHandler("insert", req.AttachOpaqueData, req.SchemaName, req.Name); err != nil {
 					return TableScanFunctionGetResponseWire{}, err
 				} else if handled {
 					return buildScanFunctionGetResponse(result)
 				}
 			}
-			if w.writableByAttachID(req.AttachID) == nil {
-				return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_id=%x len=%d, extra_catalogs=%d)", req.SchemaName, req.Name, req.AttachID, len(req.AttachID), len(w.extraCatalogs))}
+			if w.writableByAttachOpaqueData(req.AttachOpaqueData) == nil {
+				return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_opaque_data=%x len=%d, extra_catalogs=%d)", req.SchemaName, req.Name, req.AttachOpaqueData, len(req.AttachOpaqueData), len(w.extraCatalogs))}
 			}
 			return buildScanFunctionGetResponse(&ScanFunctionResult{
 				FunctionName: writableInsertFunctionName,
@@ -1468,14 +1468,14 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	vgirpc.Unary[TableUpdateFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_update_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableUpdateFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
 			if w.attachWriteFunctionGetHandler != nil {
-				if result, handled, err := w.attachWriteFunctionGetHandler("update", req.AttachID, req.SchemaName, req.Name); err != nil {
+				if result, handled, err := w.attachWriteFunctionGetHandler("update", req.AttachOpaqueData, req.SchemaName, req.Name); err != nil {
 					return TableScanFunctionGetResponseWire{}, err
 				} else if handled {
 					return buildScanFunctionGetResponse(result)
 				}
 			}
-			if w.writableByAttachID(req.AttachID) == nil {
-				return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_id=%x len=%d, extra_catalogs=%d)", req.SchemaName, req.Name, req.AttachID, len(req.AttachID), len(w.extraCatalogs))}
+			if w.writableByAttachOpaqueData(req.AttachOpaqueData) == nil {
+				return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_opaque_data=%x len=%d, extra_catalogs=%d)", req.SchemaName, req.Name, req.AttachOpaqueData, len(req.AttachOpaqueData), len(w.extraCatalogs))}
 			}
 			return buildScanFunctionGetResponse(&ScanFunctionResult{
 				FunctionName: writableUpdateFunctionName,
@@ -1490,14 +1490,14 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	vgirpc.Unary[TableDeleteFunctionGetRequestWire, TableScanFunctionGetResponseWire](s, "catalog_table_delete_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableDeleteFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
 			if w.attachWriteFunctionGetHandler != nil {
-				if result, handled, err := w.attachWriteFunctionGetHandler("delete", req.AttachID, req.SchemaName, req.Name); err != nil {
+				if result, handled, err := w.attachWriteFunctionGetHandler("delete", req.AttachOpaqueData, req.SchemaName, req.Name); err != nil {
 					return TableScanFunctionGetResponseWire{}, err
 				} else if handled {
 					return buildScanFunctionGetResponse(result)
 				}
 			}
-			if w.writableByAttachID(req.AttachID) == nil {
-				return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_id=%x len=%d, extra_catalogs=%d)", req.SchemaName, req.Name, req.AttachID, len(req.AttachID), len(w.extraCatalogs))}
+			if w.writableByAttachOpaqueData(req.AttachOpaqueData) == nil {
+				return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_opaque_data=%x len=%d, extra_catalogs=%d)", req.SchemaName, req.Name, req.AttachOpaqueData, len(req.AttachOpaqueData), len(w.extraCatalogs))}
 			}
 			return buildScanFunctionGetResponse(&ScanFunctionResult{
 				FunctionName: writableDeleteFunctionName,

@@ -262,12 +262,12 @@ func (m *mockServer) queueClear(w http.ResponseWriter, r *http.Request) {
 
 func (m *mockServer) txnGet(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		TransactionID string   `json:"transaction_id"`
+		TransactionOpaqueData string   `json:"transaction_opaque_data"`
 		Keys          []string `json:"keys"`
 	}
 	_ = m.decode(r, &req)
 	m.mu.Lock()
-	bucket := m.txnState[req.TransactionID]
+	bucket := m.txnState[req.TransactionOpaqueData]
 	m.mu.Unlock()
 	values := make([]*string, len(req.Keys))
 	for i, k := range req.Keys {
@@ -281,7 +281,7 @@ func (m *mockServer) txnGet(w http.ResponseWriter, r *http.Request) {
 
 func (m *mockServer) txnPut(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		TransactionID string `json:"transaction_id"`
+		TransactionOpaqueData string `json:"transaction_opaque_data"`
 		Items         []struct {
 			Key   string `json:"key"`
 			Value string `json:"value"`
@@ -290,10 +290,10 @@ func (m *mockServer) txnPut(w http.ResponseWriter, r *http.Request) {
 	_ = m.decode(r, &req)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	bucket := m.txnState[req.TransactionID]
+	bucket := m.txnState[req.TransactionOpaqueData]
 	if bucket == nil {
 		bucket = map[string][]byte{}
-		m.txnState[req.TransactionID] = bucket
+		m.txnState[req.TransactionOpaqueData] = bucket
 	}
 	for _, it := range req.Items {
 		bucket[it.Key] = b64dec(it.Value)
@@ -303,11 +303,11 @@ func (m *mockServer) txnPut(w http.ResponseWriter, r *http.Request) {
 
 func (m *mockServer) txnClear(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		TransactionID string `json:"transaction_id"`
+		TransactionOpaqueData string `json:"transaction_opaque_data"`
 	}
 	_ = m.decode(r, &req)
 	m.mu.Lock()
-	delete(m.txnState, req.TransactionID)
+	delete(m.txnState, req.TransactionOpaqueData)
 	m.mu.Unlock()
 	m.writeJSON(w, 200, map[string]any{})
 }

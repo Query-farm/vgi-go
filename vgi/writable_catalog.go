@@ -23,7 +23,7 @@ type WritableCatalog struct {
 	Comment string
 
 	mu       sync.Mutex
-	attachID []byte
+	attachOpaqueData []byte
 	version  int64
 	// schemas keyed by schema name (lower-case canonical form).
 	schemas map[string]*writableSchema
@@ -70,11 +70,11 @@ func NewWritableCatalog(name string) *WritableCatalog {
 	return c
 }
 
-// AttachID returns the attach_id assigned to this catalog after first attach.
-func (c *WritableCatalog) AttachID() []byte {
+// AttachOpaqueData returns the attach_opaque_data assigned to this catalog after first attach.
+func (c *WritableCatalog) AttachOpaqueData() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]byte, len(c.attachID))
-	copy(out, c.attachID)
+	out := make([]byte, len(c.attachOpaqueData))
+	copy(out, c.attachOpaqueData)
 	return out
 }

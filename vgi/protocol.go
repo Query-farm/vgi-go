@@ -27,8 +27,8 @@ type BindRequestWire struct {
 	InputSchema             *[]byte `vgirpc:"input_schema"`
 	Settings                *[]byte `vgirpc:"settings"`
 	Secrets                 *[]byte `vgirpc:"secrets"`
-	AttachID                *[]byte `vgirpc:"attach_id"`
-	TransactionID           *[]byte `vgirpc:"transaction_id"`
+	AttachOpaqueData                *[]byte `vgirpc:"attach_opaque_data"`
+	TransactionOpaqueData           *[]byte `vgirpc:"transaction_opaque_data"`
 	ResolvedSecretsProvided bool    `vgirpc:"resolved_secrets_provided"`
 }
 
@@ -853,11 +853,11 @@ func (w *Worker) parseBindRequest(req BindRequestWire) (*BindParams, error) {
 		}
 	}
 
-	if req.AttachID != nil {
-		params.AttachID = *req.AttachID
+	if req.AttachOpaqueData != nil {
+		params.AttachOpaqueData = *req.AttachOpaqueData
 	}
-	if req.TransactionID != nil {
-		params.TransactionID = *req.TransactionID
+	if req.TransactionOpaqueData != nil {
+		params.TransactionOpaqueData = *req.TransactionOpaqueData
 	}
 
 	params.ResolvedSecretsProvided = req.ResolvedSecretsProvided
@@ -914,15 +914,15 @@ func (w *Worker) deserializeBindRequest(data []byte) (*BindRequestWire, error) {
 				v := c.Value(0)
 				req.Secrets = &v
 			}
-		case "attach_id":
+		case "attach_opaque_data":
 			if c, ok := col.(*array.Binary); ok {
 				v := c.Value(0)
-				req.AttachID = &v
+				req.AttachOpaqueData = &v
 			}
-		case "transaction_id":
+		case "transaction_opaque_data":
 			if c, ok := col.(*array.Binary); ok {
 				v := c.Value(0)
-				req.TransactionID = &v
+				req.TransactionOpaqueData = &v
 			}
 		case "resolved_secrets_provided":
 			if c, ok := col.(*array.Boolean); ok {
