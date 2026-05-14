@@ -39,10 +39,12 @@ type FunctionInfo struct {
 	FilterPushdown             *bool
 	SamplingPushdown           *bool
 	SupportedExpressionFilters []string
-	OrderPreservation          string // "" = null
+	OrderPreservation          OrderPreservation // "" = null
 	MaxWorkers                 int32
-	OrderDependent             string // dictionary, default "NOT_ORDER_DEPENDENT"
-	DistinctDependent          string // dictionary, default "NOT_DISTINCT_DEPENDENT"
+	SupportsBatchIndex         bool               // opt-in per-batch batch_index tagging
+	PartitionKind              PartitionKind      // default PartitionKindNotPartitioned
+	OrderDependent             OrderDependence    // default NOT_ORDER_DEPENDENT
+	DistinctDependent          DistinctDependence // default NOT_DISTINCT_DEPENDENT
 	SupportsWindow             bool
 	StreamingPartitioned       bool
 	HasFinalize                bool
@@ -232,7 +234,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	opBuilder := array.NewDictionaryBuilder(mem, dictType)
 	defer opBuilder.Release()
 	if info.OrderPreservation != "" {
-		opBuilder.(*array.BinaryDictionaryBuilder).AppendString(info.OrderPreservation)
+		opBuilder.(*array.BinaryDictionaryBuilder).AppendString(string(info.OrderPreservation))
 	} else {
 		opBuilder.AppendNull()
 	}
@@ -242,23 +244,37 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	defer mwBuilder.Release()
 	mwBuilder.Append(info.MaxWorkers)
 
+	// supports_batch_index (non-null)
+	sbiBuilder := array.NewBooleanBuilder(mem)
+	defer sbiBuilder.Release()
+	sbiBuilder.Append(info.SupportsBatchIndex)
+
+	// partition_kind (non-null dict)
+	pkBuilder := array.NewDictionaryBuilder(mem, dictType)
+	defer pkBuilder.Release()
+	pk := info.PartitionKind
+	if pk == "" {
+		pk = PartitionKindNotPartitioned
+	}
+	pkBuilder.(*array.BinaryDictionaryBuilder).AppendString(string(pk))
+
 	// order_dependent (non-null dict)
 	odBuilder := array.NewDictionaryBuilder(mem, dictType)
 	defer odBuilder.Release()
 	od := info.OrderDependent
 	if od == "" {
-		od = "NOT_ORDER_DEPENDENT"
+		od = OrderDependenceNotDependent
 	}
-	odBuilder.(*array.BinaryDictionaryBuilder).AppendString(od)
+	odBuilder.(*array.BinaryDictionaryBuilder).AppendString(string(od))
 
 	// distinct_dependent (non-null dict)
 	ddBuilder := array.NewDictionaryBuilder(mem, dictType)
 	defer ddBuilder.Release()
 	dd := info.DistinctDependent
 	if dd == "" {
-		dd = "NOT_DISTINCT_DEPENDENT"
+		dd = DistinctDependenceNotDependent
 	}
-	ddBuilder.(*array.BinaryDictionaryBuilder).AppendString(dd)
+	ddBuilder.(*array.BinaryDictionaryBuilder).AppendString(string(dd))
 
 	// supports_window
 	swBuilder := array.NewBooleanBuilder(mem)
@@ -323,6 +339,8 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		sefBuilder.NewArray(),
 		opBuilder.NewArray(),
 		mwBuilder.NewArray(),
+		sbiBuilder.NewArray(),
+		pkBuilder.NewArray(),
 		odBuilder.NewArray(),
 		ddBuilder.NewArray(),
 		swBuilder.NewArray(),
@@ -353,9 +371,9 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 
 // SchemaInfo describes a schema in the catalog.
 type SchemaInfo struct {
-	Name     string
-	Comment  string
-	Tags     map[string]string
+	Name             string
+	Comment          string
+	Tags             map[string]string
 	AttachOpaqueData []byte
 	// EstimatedObjectCount, when non-nil, advertises the approximate per-kind
 	// population (e.g. {"table": 0, "view": 12}). A value of 0 is a hard

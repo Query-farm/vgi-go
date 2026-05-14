@@ -46,6 +46,77 @@ const (
 	NullHandlingReceiveNulls = NullHandlingSpecial
 )
 
+// PartitionKind describes the partition shape a table function declares over
+// its vgi.partition_column-annotated bind-schema fields. These values are
+// DuckDB wire-protocol dictionary constants and must not be changed.
+type PartitionKind string
+
+const (
+	// PartitionKindNotPartitioned is the default — the function declares no
+	// partitioning over the annotated columns.
+	PartitionKindNotPartitioned PartitionKind = "NOT_PARTITIONED"
+
+	// PartitionKindSingleValuePartitions means each emitted chunk has exactly
+	// one distinct value per partition column. Unlocks DuckDB's
+	// PhysicalPartitionedAggregate for GROUP BY over those columns.
+	PartitionKindSingleValuePartitions PartitionKind = "SINGLE_VALUE_PARTITIONS"
+
+	// PartitionKindOverlappingPartitions means partitions overlap only at
+	// boundaries. Wire-level declarable; DuckDB has no consumer today.
+	PartitionKindOverlappingPartitions PartitionKind = "OVERLAPPING_PARTITIONS"
+
+	// PartitionKindDisjointPartitions means partitions are pairwise disjoint.
+	// Wire-level declarable; DuckDB has no consumer today.
+	PartitionKindDisjointPartitions PartitionKind = "DISJOINT_PARTITIONS"
+)
+
+// OrderPreservation declares how a table function's output rows relate to its
+// inputs. These values are DuckDB wire-protocol dictionary constants and must
+// not be changed. The empty value leaves the field null (C++ extension default).
+type OrderPreservation string
+
+const (
+	// OrderPreservationUnspecified leaves the field null — the C++ extension
+	// picks its default.
+	OrderPreservationUnspecified OrderPreservation = ""
+
+	// OrderPreservationPreservesOrder: output rows are in the same order as
+	// input rows (DuckDB INSERTION_ORDER).
+	OrderPreservationPreservesOrder OrderPreservation = "PRESERVES_ORDER"
+
+	// OrderPreservationNoOrderGuarantee: output order is undefined; DuckDB may
+	// freely reorder (DuckDB NO_ORDER).
+	OrderPreservationNoOrderGuarantee OrderPreservation = "NO_ORDER_GUARANTEE"
+
+	// OrderPreservationFixedOrder: output is in a fixed mandatory order; DuckDB
+	// serializes the pipeline to a single worker to preserve it (FIXED_ORDER).
+	OrderPreservationFixedOrder OrderPreservation = "FIXED_ORDER"
+)
+
+// OrderDependence declares whether an aggregate's result depends on row order.
+// Wire-protocol dictionary constants — must not be changed.
+type OrderDependence string
+
+const (
+	// OrderDependenceDependent: result changes with row order (FIRST, LAST, LISTAGG).
+	OrderDependenceDependent OrderDependence = "ORDER_DEPENDENT"
+
+	// OrderDependenceNotDependent: result is order-independent (SUM, COUNT).
+	OrderDependenceNotDependent OrderDependence = "NOT_ORDER_DEPENDENT"
+)
+
+// DistinctDependence declares whether a DISTINCT modifier changes an
+// aggregate's result. Wire-protocol dictionary constants — must not be changed.
+type DistinctDependence string
+
+const (
+	// DistinctDependenceDependent: DISTINCT changes the result (COUNT DISTINCT).
+	DistinctDependenceDependent DistinctDependence = "DISTINCT_DEPENDENT"
+
+	// DistinctDependenceNotDependent: DISTINCT has no effect (MAX, MIN).
+	DistinctDependenceNotDependent DistinctDependence = "NOT_DISTINCT_DEPENDENT"
+)
+
 // SecretRequirement describes a secret type that a function needs.
 type SecretRequirement struct {
 	SecretType string
@@ -96,16 +167,15 @@ type FunctionMetadata struct {
 	// project_input").
 	HasFinalize bool
 	// OrderPreservation declares how a table function's output rows relate
-	// to its inputs. Values: "PRESERVES_ORDER", "FIXED_ORDER",
-	// "NO_ORDER_GUARANTEE". Empty leaves the field null and uses the C++
-	// extension default. Maps to DuckDB's OrderPreservationType.
-	OrderPreservation string
+	// to its inputs. Empty leaves the field null and uses the C++ extension
+	// default. Maps to DuckDB's OrderPreservationType.
+	OrderPreservation OrderPreservation
 	// OrderDependent declares whether the aggregate result depends on the
 	// row order. Empty defaults to NOT_ORDER_DEPENDENT.
-	OrderDependent string
+	OrderDependent OrderDependence
 	// DistinctDependent declares whether DISTINCT changes the result.
 	// Empty defaults to NOT_DISTINCT_DEPENDENT.
-	DistinctDependent string
+	DistinctDependent DistinctDependence
 	// AutoApplyFilters indicates the framework should auto-apply pushdown filters.
 	AutoApplyFilters bool
 	// Categories is a list of classification tags for the function.

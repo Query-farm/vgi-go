@@ -6,6 +6,7 @@ package vgi
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -392,7 +393,7 @@ func WithCatalogInfo(info CatalogInfo) WorkerOption {
 type AttachDecision struct {
 	ResolvedDataVersion           string
 	ResolvedImplementationVersion string
-	AttachOpaqueData                      []byte
+	AttachOpaqueData              []byte
 }
 
 // AttachValidator is invoked by the default catalog_attach handler. It may
@@ -759,15 +760,20 @@ func (w *Worker) RunStdio() {
 // stdout so callers can discover the assigned port.
 func (w *Worker) RunHttp(addr string) error {
 	s := w.buildServer(true)
-	var hs *vgirpc.HttpServer
-	if len(w.httpSigningKey) > 0 {
-		h, err := vgirpc.NewHttpServerWithKey(s, w.httpSigningKey)
-		if err != nil {
+	// Resolve the signing key once so the worker (catalog opaque-data
+	// sealing — see crypto.go) and the HTTP state-token machinery share the
+	// same key. Generate an ephemeral per-process key when the operator did
+	// not configure one via WithHttpSigningKey: sealed values are then valid
+	// for the life of this process, and clients re-ATTACH after a restart.
+	if len(w.httpSigningKey) == 0 {
+		w.httpSigningKey = make([]byte, 32)
+		if _, err := rand.Read(w.httpSigningKey); err != nil {
 			return fmt.Errorf("http signing key: %w", err)
 		}
-		hs = h
-	} else {
-		hs = vgirpc.NewHttpServer(s)
+	}
+	hs, err := vgirpc.NewHttpServerWithKey(s, w.httpSigningKey)
+	if err != nil {
+		return fmt.Errorf("http signing key: %w", err)
 	}
 	hs.SetRehydrateFunc(w.rehydrateState)
 	hs.SetProducerBatchLimit(100)

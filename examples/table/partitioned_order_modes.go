@@ -27,7 +27,7 @@ type orderModeState struct {
 type partitionedOrderModeFunc struct {
 	name              string
 	description       string
-	orderPreservation string
+	orderPreservation vgi.OrderPreservation
 }
 
 var _ vgi.TypedTableFunc[orderModeState] = (*partitionedOrderModeFunc)(nil)
