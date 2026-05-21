@@ -225,12 +225,43 @@ type TableInOutExchangeState struct {
 
 func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
 	s.params.Auth = callCtx.Auth
-	if s.autoApply != nil {
+	// Projection pushdown: a function declaring projection_pushdown emits a
+	// full-width batch but its output schema is narrowed to the projected
+	// columns. Select those columns by name before the (filter) auto-apply and
+	// the wire write. Mirrors vgi-python's batch.select(target_names) in emit.
+	needsProject := s.params.ProjectionIDs != nil
+	if needsProject || s.autoApply != nil {
 		out.EmitInterceptor = func(batch arrow.RecordBatch) (arrow.RecordBatch, error) {
-			return s.autoApply.Apply(ctx, batch)
+			b := batch
+			if needsProject && int(b.NumCols()) > s.params.OutputSchema.NumFields() {
+				nb, err := selectColumnsByName(b, s.params.OutputSchema)
+				if err != nil {
+					return nil, err
+				}
+				b = nb
+			}
+			if s.autoApply != nil {
+				return s.autoApply.Apply(ctx, b)
+			}
+			return b, nil
 		}
 	}
 	return s.fn.Process(ctx, s.params, s.state, input, out)
+}
+
+// selectColumnsByName builds a batch containing only the columns named in
+// schema, in schema order, taken from src by field name.
+func selectColumnsByName(src arrow.RecordBatch, schema *arrow.Schema) (arrow.RecordBatch, error) {
+	srcSchema := src.Schema()
+	cols := make([]arrow.Array, schema.NumFields())
+	for i, field := range schema.Fields() {
+		idx := srcSchema.FieldIndices(field.Name)
+		if len(idx) == 0 {
+			return nil, fmt.Errorf("projection: column %q absent from emitted batch", field.Name)
+		}
+		cols[i] = src.Column(idx[0])
+	}
+	return array.NewRecordBatch(schema, cols, src.NumRows()), nil
 }
 
 // FinalizeProducerState implements ProducerState for table-in-out FINALIZE phase.

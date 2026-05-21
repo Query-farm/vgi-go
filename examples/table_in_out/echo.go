@@ -23,6 +23,8 @@ func (f *EchoFunction) Metadata() vgi.FunctionMetadata {
 		Description:        "Passthrough function that emits each input batch unchanged",
 		Stability:          vgi.StabilityConsistent,
 		ProjectionPushdown: true,
+		FilterPushdown:     true,
+		AutoApplyFilters:   true,
 		Categories:         []string{"utility", "debug"},
 	}
 }

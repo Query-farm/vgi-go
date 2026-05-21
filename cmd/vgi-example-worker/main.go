@@ -232,6 +232,8 @@ func main() {
 	w.RegisterTableBuffering(&table_in_out.CrashOnFinalizeFunction{})
 	w.RegisterTableBuffering(&table_in_out.HangOnProcessFunction{})
 	w.RegisterTableBuffering(&table_in_out.SlowCancellableBufferingFunction{})
+	w.RegisterTableBuffering(&table_in_out.EchoBufferingFunction{})
+	w.RegisterTableInOut(table_in_out.NewEchoWitnessFunction())
 	w.RegisterTableInOut(table_in_out.NewDistributedSumFunction())
 	w.RegisterTableInOut(table_in_out.NewEchoFunction())
 	w.RegisterTableInOut(table_in_out.NewExceptionFinalizeFunction())
