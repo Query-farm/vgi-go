@@ -508,6 +508,13 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		if meta.OrderPreservation != "" {
 			fi.OrderPreservation = meta.OrderPreservation
 		}
+		fi.SupportsBatchIndex = meta.SupportsBatchIndex
+		if meta.PartitionKind != "" {
+			fi.PartitionKind = meta.PartitionKind
+		}
+		fi.SourceOrderDependent = meta.SourceOrderDependent
+		fi.SinkOrderDependent = meta.SinkOrderDependent
+		fi.RequiresInputBatchIndex = meta.RequiresInputBatchIndex
 		return fi
 	}
 
@@ -547,6 +554,14 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs()) // table-in-out registers as "table"
 			fi.HasFinalize = meta.HasFinalize
+			mainSchema.functions = append(mainSchema.functions, fi)
+		}
+	}
+
+	for name, fns := range w.tableBufferings {
+		for _, fn := range fns {
+			meta := fn.Metadata()
+			fi := buildFunctionInfo(name, FunctionTypeTableBuffering, meta, fn.ArgumentSpecs())
 			mainSchema.functions = append(mainSchema.functions, fi)
 		}
 	}
@@ -677,7 +692,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 				nScalar++
 			case FunctionTypeAggregate:
 				nAggregate++
-			case FunctionTypeTable:
+			case FunctionTypeTable, FunctionTypeTableBuffering:
 				nTable++
 			}
 		}
@@ -1098,7 +1113,13 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				// short forms. An unrecognized type filters nothing.
 				if req.Type != "" {
 					switch want := normalizeFunctionType(FunctionType(req.Type)); want {
-					case FunctionTypeScalar, FunctionTypeTable, FunctionTypeAggregate:
+					case FunctionTypeTable:
+						// Table-buffering functions register as DuckDB table
+						// functions, so they match a TABLE_FUNCTION request.
+						if fi.FunctionType != FunctionTypeTable && fi.FunctionType != FunctionTypeTableBuffering {
+							continue
+						}
+					case FunctionTypeScalar, FunctionTypeAggregate:
 						if fi.FunctionType != want {
 							continue
 						}

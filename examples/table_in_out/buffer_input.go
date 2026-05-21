@@ -7,14 +7,21 @@ import (
 	"context"
 
 	"github.com/Query-farm/vgi-go/vgi"
-	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
-// BufferInputFunction collects all input batches and emits during finalization.
+// bufKey is the state-log key BufferInputFunction stores buffered batches under.
+var bufKey = []byte("buf")
+
+// BufferInputFunction is a table-buffering function that collects every input
+// batch during the sink phase and re-emits them during finalize. One bucket
+// per execution: Process appends to a single shared log and returns the
+// execution_id; Combine collapses all (identical) state_ids to one
+// finalize_state_id; Finalize drains the buffered batches. Mirrors
+// vgi-python's BufferInputFunction.
 type BufferInputFunction struct{}
 
-var _ vgi.TypedTableInOutFunc[struct{}] = (*BufferInputFunction)(nil)
+var _ vgi.TableBufferingFunction = (*BufferInputFunction)(nil)
 
 func (f *BufferInputFunction) Name() string { return "buffer_input" }
 
@@ -22,7 +29,7 @@ func (f *BufferInputFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Collects all input batches and emits during finalization",
 		Stability:   vgi.StabilityConsistent,
-		HasFinalize: true,
+		Categories:  []string{"utility", "buffer"},
 	}
 }
 
@@ -36,40 +43,33 @@ func (f *BufferInputFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse,
 	return vgi.BindInputSchema(params)
 }
 
-func (f *BufferInputFunction) NewState(params *vgi.ProcessParams) (*struct{}, error) {
-	return &struct{}{}, nil
+func (f *BufferInputFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) ([]byte, error) {
+	data, err := vgi.SerializeRecordBatch(batch)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := params.Storage.StateAppend(bufKey, data); err != nil {
+		return nil, err
+	}
+	return params.ExecutionID, nil
 }
 
-func (f *BufferInputFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *struct{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
-	// Buffer the batch in storage
-	if params.Storage != nil {
-		if err := params.Storage.QueuePushBatches([]arrow.RecordBatch{batch}); err != nil {
-			return err
-		}
-	}
-	// Emit empty batch
-	return out.Emit(vgi.EmptyBatch(params.OutputSchema))
+func (f *BufferInputFunction) Combine(ctx context.Context, params *vgi.ProcessParams, stateIDs [][]byte) ([][]byte, error) {
+	return [][]byte{params.ExecutionID}, nil
 }
 
-func (f *BufferInputFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *struct{}) ([]arrow.RecordBatch, error) {
-	if params.Storage == nil {
-		return nil, nil
+func (f *BufferInputFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, finalizeStateID []byte) ([]arrow.RecordBatch, error) {
+	entries, err := params.Storage.StateLogScan(bufKey, -1, 0)
+	if err != nil {
+		return nil, err
 	}
-	var batches []arrow.RecordBatch
-	for {
-		batch, err := params.Storage.QueuePopBatch()
+	batches := make([]arrow.RecordBatch, 0, len(entries))
+	for _, e := range entries {
+		b, err := vgi.DeserializeRecordBatch(e.Value)
 		if err != nil {
 			return nil, err
 		}
-		if batch == nil {
-			break
-		}
-		batches = append(batches, batch)
+		batches = append(batches, b)
 	}
 	return batches, nil
-}
-
-// NewBufferInputFunction creates a BufferInputFunction wrapped for registration.
-func NewBufferInputFunction() vgi.TableInOutFunction {
-	return vgi.AsTableInOutFunction[struct{}](&BufferInputFunction{})
 }

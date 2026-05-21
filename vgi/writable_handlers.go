@@ -272,12 +272,12 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 	}
 
 	return CatalogAttachResultWire{
-		AttachOpaqueData:                 attachOpaqueData,
+		AttachOpaqueData:         attachOpaqueData,
 		SupportsTransactions:     true,
 		SupportsTimeTravel:       false,
 		CatalogVersionFrozen:     false,
 		CatalogVersion:           version,
-		AttachOpaqueDataRequired:         true,
+		AttachOpaqueDataRequired: true,
 		DefaultSchema:            "main",
 		Settings:                 serializedSettings,
 		SecretTypes:              serializedSecretTypes,

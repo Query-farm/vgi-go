@@ -24,12 +24,12 @@ var _ = os.Stderr // keep import used
 
 // AggregateBindRequestWire is the wire format for aggregate_bind requests.
 type AggregateBindRequestWire struct {
-	FunctionName string  `vgirpc:"function_name"`
-	Arguments    []byte  `vgirpc:"arguments"`
-	InputSchema  *[]byte `vgirpc:"input_schema"`
-	Settings     *[]byte `vgirpc:"settings"`
-	Secrets      *[]byte `vgirpc:"secrets"`
-	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
+	FunctionName     string  `vgirpc:"function_name"`
+	Arguments        []byte  `vgirpc:"arguments"`
+	InputSchema      *[]byte `vgirpc:"input_schema"`
+	Settings         *[]byte `vgirpc:"settings"`
+	Secrets          *[]byte `vgirpc:"secrets"`
+	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateBindResponseWire is the wire format for aggregate_bind responses.
@@ -40,10 +40,10 @@ type AggregateBindResponseWire struct {
 
 // AggregateUpdateRequestWire is the wire format for aggregate_update requests.
 type AggregateUpdateRequestWire struct {
-	FunctionName string  `vgirpc:"function_name"`
-	ExecutionID  []byte  `vgirpc:"execution_id"`
-	InputBatch   []byte  `vgirpc:"input_batch"`
-	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
+	FunctionName     string  `vgirpc:"function_name"`
+	ExecutionID      []byte  `vgirpc:"execution_id"`
+	InputBatch       []byte  `vgirpc:"input_batch"`
+	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateUpdateResponseWire is the empty ack for aggregate_update.
@@ -51,10 +51,10 @@ type AggregateUpdateResponseWire struct{}
 
 // AggregateCombineRequestWire is the wire format for aggregate_combine requests.
 type AggregateCombineRequestWire struct {
-	FunctionName string  `vgirpc:"function_name"`
-	ExecutionID  []byte  `vgirpc:"execution_id"`
-	MergeBatch   []byte  `vgirpc:"merge_batch"`
-	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
+	FunctionName     string  `vgirpc:"function_name"`
+	ExecutionID      []byte  `vgirpc:"execution_id"`
+	MergeBatch       []byte  `vgirpc:"merge_batch"`
+	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateCombineResponseWire is the empty ack for aggregate_combine.
@@ -62,11 +62,11 @@ type AggregateCombineResponseWire struct{}
 
 // AggregateFinalizeRequestWire is the wire format for aggregate_finalize requests.
 type AggregateFinalizeRequestWire struct {
-	FunctionName  string  `vgirpc:"function_name"`
-	ExecutionID   []byte  `vgirpc:"execution_id"`
-	GroupIDsBatch []byte  `vgirpc:"group_ids_batch"`
-	OutputSchema  []byte  `vgirpc:"output_schema"`
-	AttachOpaqueData      *[]byte `vgirpc:"attach_opaque_data"`
+	FunctionName     string  `vgirpc:"function_name"`
+	ExecutionID      []byte  `vgirpc:"execution_id"`
+	GroupIDsBatch    []byte  `vgirpc:"group_ids_batch"`
+	OutputSchema     []byte  `vgirpc:"output_schema"`
+	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateFinalizeResponseWire is the wire format for aggregate_finalize responses.
@@ -76,10 +76,10 @@ type AggregateFinalizeResponseWire struct {
 
 // AggregateDestructorRequestWire is the wire format for aggregate_destructor requests.
 type AggregateDestructorRequestWire struct {
-	FunctionName  string  `vgirpc:"function_name"`
-	ExecutionID   []byte  `vgirpc:"execution_id"`
-	GroupIDsBatch []byte  `vgirpc:"group_ids_batch"`
-	AttachOpaqueData      *[]byte `vgirpc:"attach_opaque_data"`
+	FunctionName     string  `vgirpc:"function_name"`
+	ExecutionID      []byte  `vgirpc:"execution_id"`
+	GroupIDsBatch    []byte  `vgirpc:"group_ids_batch"`
+	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateDestructorResponseWire is the empty ack for aggregate_destructor.
@@ -87,16 +87,16 @@ type AggregateDestructorResponseWire struct{}
 
 // AggregateWindowInitRequestWire is the wire format for aggregate_window_init.
 type AggregateWindowInitRequestWire struct {
-	FunctionName   string  `vgirpc:"function_name"`
-	ExecutionID    []byte  `vgirpc:"execution_id"`
-	PartitionID    int64   `vgirpc:"partition_id"`
-	RowCount       int64   `vgirpc:"row_count"`
-	PartitionBatch []byte  `vgirpc:"partition_batch"`
-	OutputSchema   []byte  `vgirpc:"output_schema"`
-	FilterMask     []byte  `vgirpc:"filter_mask"`
-	FrameStats     []byte  `vgirpc:"frame_stats"`
-	AllValid       []byte  `vgirpc:"all_valid"`
-	AttachOpaqueData       *[]byte `vgirpc:"attach_opaque_data"`
+	FunctionName     string  `vgirpc:"function_name"`
+	ExecutionID      []byte  `vgirpc:"execution_id"`
+	PartitionID      int64   `vgirpc:"partition_id"`
+	RowCount         int64   `vgirpc:"row_count"`
+	PartitionBatch   []byte  `vgirpc:"partition_batch"`
+	OutputSchema     []byte  `vgirpc:"output_schema"`
+	FilterMask       []byte  `vgirpc:"filter_mask"`
+	FrameStats       []byte  `vgirpc:"frame_stats"`
+	AllValid         []byte  `vgirpc:"all_valid"`
+	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateWindowInitResponseWire is the empty ack.
@@ -104,13 +104,13 @@ type AggregateWindowInitResponseWire struct{}
 
 // AggregateWindowRequestWire is the wire format for aggregate_window.
 type AggregateWindowRequestWire struct {
-	FunctionName string  `vgirpc:"function_name"`
-	ExecutionID  []byte  `vgirpc:"execution_id"`
-	PartitionID  int64   `vgirpc:"partition_id"`
-	RID          int64   `vgirpc:"rid"`
-	FrameStarts  []int64 `vgirpc:"frame_starts"`
-	FrameEnds    []int64 `vgirpc:"frame_ends"`
-	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
+	FunctionName     string  `vgirpc:"function_name"`
+	ExecutionID      []byte  `vgirpc:"execution_id"`
+	PartitionID      int64   `vgirpc:"partition_id"`
+	RID              int64   `vgirpc:"rid"`
+	FrameStarts      []int64 `vgirpc:"frame_starts"`
+	FrameEnds        []int64 `vgirpc:"frame_ends"`
+	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateWindowResponseWire is the wire format for aggregate_window.
@@ -120,15 +120,15 @@ type AggregateWindowResponseWire struct {
 
 // AggregateWindowBatchRequestWire batches multiple aggregate_window calls.
 type AggregateWindowBatchRequestWire struct {
-	FunctionName string  `vgirpc:"function_name"`
-	ExecutionID  []byte  `vgirpc:"execution_id"`
-	PartitionID  int64   `vgirpc:"partition_id"`
-	RowIdx       int64   `vgirpc:"row_idx"`
-	Count        int64   `vgirpc:"count"`
-	FramesPerRow []int64 `vgirpc:"frames_per_row"`
-	FrameStarts  []int64 `vgirpc:"frame_starts"`
-	FrameEnds    []int64 `vgirpc:"frame_ends"`
-	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
+	FunctionName     string  `vgirpc:"function_name"`
+	ExecutionID      []byte  `vgirpc:"execution_id"`
+	PartitionID      int64   `vgirpc:"partition_id"`
+	RowIdx           int64   `vgirpc:"row_idx"`
+	Count            int64   `vgirpc:"count"`
+	FramesPerRow     []int64 `vgirpc:"frames_per_row"`
+	FrameStarts      []int64 `vgirpc:"frame_starts"`
+	FrameEnds        []int64 `vgirpc:"frame_ends"`
+	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateWindowBatchResponseWire is the wire format for aggregate_window_batch.
@@ -138,10 +138,10 @@ type AggregateWindowBatchResponseWire struct {
 
 // AggregateWindowDestructorRequestWire is the wire format for aggregate_window_destructor.
 type AggregateWindowDestructorRequestWire struct {
-	FunctionName string  `vgirpc:"function_name"`
-	ExecutionID  []byte  `vgirpc:"execution_id"`
-	PartitionID  int64   `vgirpc:"partition_id"`
-	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
+	FunctionName     string  `vgirpc:"function_name"`
+	ExecutionID      []byte  `vgirpc:"execution_id"`
+	PartitionID      int64   `vgirpc:"partition_id"`
+	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateWindowDestructorResponseWire is the empty ack.

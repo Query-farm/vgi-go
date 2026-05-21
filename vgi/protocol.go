@@ -84,6 +84,7 @@ type InitRequestWire struct {
 	OrderByLimit          *int64          `vgirpc:"order_by_limit"`
 	TablesamplePercentage *float64        `vgirpc:"tablesample_percentage"`
 	TablesampleSeed       *int64          `vgirpc:"tablesample_seed"`
+	FinalizeStateID       *[]byte         `vgirpc:"finalize_state_id"`
 }
 
 // GlobalInitResponseWire is the wire format for global init responses.
@@ -300,6 +301,8 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		bindResp, err = f.OnBind(bindParams)
 	case TableInOutFunction:
 		bindResp, err = f.OnBind(bindParams)
+	case TableBufferingFunction:
+		bindResp, err = f.OnBind(bindParams)
 	default:
 		return BindResponseWire{}, fmt.Errorf("unknown function type: %T", fn)
 	}
@@ -508,6 +511,14 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 			slog.Debug("init: table-in-out init failed", "err", err)
 		} else {
 			slog.Debug("init: table-in-out init success", "state", fmt.Sprintf("%T", result.State))
+		}
+		return result, err
+	case TableBufferingFunction:
+		result, err := w.initTableBuffering(ctx, f, initParams, processParams, projectedSchema, phase, &recipe, req.FinalizeStateID)
+		if err != nil {
+			slog.Debug("init: table-buffering init failed", "err", err)
+		} else {
+			slog.Debug("init: table-buffering init success", "state", fmt.Sprintf("%T", result.State))
 		}
 		return result, err
 	default:
@@ -959,6 +970,8 @@ func normalizeFunctionType(ft FunctionType) FunctionType {
 		return FunctionTypeTable
 	case "AGGREGATE", "AGGREGATE_FUNCTION", "aggregate":
 		return FunctionTypeAggregate
+	case "TABLE_BUFFERING", "table_buffering":
+		return FunctionTypeTableBuffering
 	default:
 		return ft
 	}
@@ -1016,6 +1029,8 @@ func (w *Worker) getFunctionMetadata(fn interface{}) FunctionMetadata {
 		return f.Metadata()
 	case TableInOutFunction:
 		return f.Metadata()
+	case TableBufferingFunction:
+		return f.Metadata()
 	}
 	return DefaultMetadata()
 }
@@ -1028,6 +1043,8 @@ func (w *Worker) getArgSpecs(fn interface{}) []ArgSpec {
 	case TableFunction:
 		return f.ArgumentSpecs()
 	case TableInOutFunction:
+		return f.ArgumentSpecs()
+	case TableBufferingFunction:
 		return f.ArgumentSpecs()
 	}
 	return nil

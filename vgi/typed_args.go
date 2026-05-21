@@ -401,8 +401,8 @@ var typeOverrides = map[string]arrow.DataType{
 	"timestamp_ns_utc": &arrow.TimestampType{Unit: arrow.Nanosecond, TimeZone: "UTC"},
 
 	// Date / time-of-day
-	"date32":   arrow.FixedWidthTypes.Date32,
-	"date64":   arrow.FixedWidthTypes.Date64,
+	"date32":    arrow.FixedWidthTypes.Date32,
+	"date64":    arrow.FixedWidthTypes.Date64,
 	"time32_s":  arrow.FixedWidthTypes.Time32s,
 	"time32_ms": arrow.FixedWidthTypes.Time32ms,
 	"time64_us": arrow.FixedWidthTypes.Time64us,

@@ -280,11 +280,12 @@ func buildDefaultValueBatch(mem memory.Allocator, schema *arrow.Schema, dt arrow
 
 // Worker is the main VGI worker that hosts functions and serves RPC.
 type Worker struct {
-	scalars     map[string][]ScalarFunction
-	tables      map[string][]TableFunction
-	tableInOuts map[string][]TableInOutFunction
-	aggregates  map[string][]AggregateFunction
-	aggStorage  *aggregateStorage
+	scalars         map[string][]ScalarFunction
+	tables          map[string][]TableFunction
+	tableInOuts     map[string][]TableInOutFunction
+	tableBufferings map[string][]TableBufferingFunction
+	aggregates      map[string][]AggregateFunction
+	aggStorage      *aggregateStorage
 	// streamingSessions tracks per-execution_id state for streaming-partitioned
 	// aggregates (aggregate_streaming_open/_chunk/_close).
 	streamingSessions streamingSessionStore
@@ -592,6 +593,7 @@ func NewWorker(opts ...WorkerOption) *Worker {
 		scalars:              make(map[string][]ScalarFunction),
 		tables:               make(map[string][]TableFunction),
 		tableInOuts:          make(map[string][]TableInOutFunction),
+		tableBufferings:      make(map[string][]TableBufferingFunction),
 		aggregates:           make(map[string][]AggregateFunction),
 		aggStorage:           newAggregateStorage(),
 		extraCatalogs:        make(map[string]*WritableCatalog),
@@ -760,6 +762,9 @@ func (w *Worker) buildServer(isHTTP bool) *vgirpc.Server {
 
 	// Optional table-function profiling hook (EXPLAIN ANALYZE Extra Info).
 	w.registerDynamicToStringRPCs(s)
+
+	// Table-buffering sink RPCs (process/combine/destructor).
+	w.registerTableBufferingRPCs(s)
 
 	return s
 }

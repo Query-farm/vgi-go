@@ -53,7 +53,7 @@ type AggregateStreamingOpenRequestWire struct {
 	OutputSchema      []byte  `vgirpc:"output_schema"`
 	Settings          *[]byte `vgirpc:"settings"`
 	Secrets           *[]byte `vgirpc:"secrets"`
-	AttachOpaqueData          *[]byte `vgirpc:"attach_opaque_data"`
+	AttachOpaqueData  *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateStreamingOpenResponseWire returns the execution_id keying the session.
@@ -63,10 +63,10 @@ type AggregateStreamingOpenResponseWire struct {
 
 // AggregateStreamingChunkRequestWire mirrors AggregateStreamingChunkRequest.
 type AggregateStreamingChunkRequestWire struct {
-	FunctionName string  `vgirpc:"function_name"`
-	ExecutionID  []byte  `vgirpc:"execution_id"`
-	InputBatch   []byte  `vgirpc:"input_batch"`
-	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
+	FunctionName     string  `vgirpc:"function_name"`
+	ExecutionID      []byte  `vgirpc:"execution_id"`
+	InputBatch       []byte  `vgirpc:"input_batch"`
+	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateStreamingChunkResponseWire returns the per-row output batch.
@@ -76,9 +76,9 @@ type AggregateStreamingChunkResponseWire struct {
 
 // AggregateStreamingCloseRequestWire mirrors AggregateStreamingCloseRequest.
 type AggregateStreamingCloseRequestWire struct {
-	FunctionName string  `vgirpc:"function_name"`
-	ExecutionID  []byte  `vgirpc:"execution_id"`
-	AttachOpaqueData     *[]byte `vgirpc:"attach_opaque_data"`
+	FunctionName     string  `vgirpc:"function_name"`
+	ExecutionID      []byte  `vgirpc:"execution_id"`
+	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 }
 
 // AggregateStreamingCloseResponseWire is the empty ack.
@@ -95,7 +95,7 @@ type streamingSession struct {
 	args              *Arguments
 	settings          map[string]interface{}
 	secrets           map[string]map[string]interface{}
-	attachOpaqueData          []byte
+	attachOpaqueData  []byte
 }
 
 type streamingSessionStore struct {
@@ -198,7 +198,7 @@ func (w *Worker) handleAggregateStreamingOpen(ctx context.Context, callCtx *vgir
 		args:              args,
 		settings:          settings,
 		secrets:           secrets,
-		attachOpaqueData:          params.AttachOpaqueData,
+		attachOpaqueData:  params.AttachOpaqueData,
 	})
 	return AggregateStreamingOpenResponseWire{ExecutionID: executionID}, nil
 }
@@ -219,12 +219,12 @@ func (w *Worker) handleAggregateStreamingChunk(ctx context.Context, callCtx *vgi
 	defer chunk.Release()
 
 	params := &AggregateProcessParams{
-		Args:         sess.args,
-		OutputSchema: sess.outputSchema,
-		Settings:     sess.settings,
-		Secrets:      sess.secrets,
-		Auth:         callCtx.Auth,
-		AttachOpaqueData:     sess.attachOpaqueData,
+		Args:             sess.args,
+		OutputSchema:     sess.outputSchema,
+		Settings:         sess.settings,
+		Secrets:          sess.secrets,
+		Auth:             callCtx.Auth,
+		AttachOpaqueData: sess.attachOpaqueData,
 	}
 
 	resultArr, err := sess.fn.StreamingChunk(sess.state, chunk, sess.partitionKeyCount, sess.orderKeyCount, params)
@@ -252,12 +252,12 @@ func (w *Worker) handleAggregateStreamingClose(ctx context.Context, callCtx *vgi
 		return AggregateStreamingCloseResponseWire{}, nil
 	}
 	params := &AggregateProcessParams{
-		Args:         sess.args,
-		OutputSchema: sess.outputSchema,
-		Settings:     sess.settings,
-		Secrets:      sess.secrets,
-		Auth:         callCtx.Auth,
-		AttachOpaqueData:     sess.attachOpaqueData,
+		Args:             sess.args,
+		OutputSchema:     sess.outputSchema,
+		Settings:         sess.settings,
+		Secrets:          sess.secrets,
+		Auth:             callCtx.Auth,
+		AttachOpaqueData: sess.attachOpaqueData,
 	}
 	_ = sess.fn.StreamingClose(sess.state, params)
 	return AggregateStreamingCloseResponseWire{}, nil

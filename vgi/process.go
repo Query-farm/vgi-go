@@ -49,4 +49,8 @@ type ProcessParams struct {
 	// Auth is the authentication context for the current request.
 	// Always non-nil; unauthenticated requests receive vgirpc.Anonymous().
 	Auth *vgirpc.AuthContext
+	// BatchIndex is the DuckDB per-chunk batch index threaded into a
+	// table_buffering_process call when the function declares
+	// RequiresInputBatchIndex. Nil otherwise.
+	BatchIndex *int64
 }

@@ -268,6 +268,8 @@ func getArgSpecsFromFn(fn interface{}) []ArgSpec {
 		return f.ArgumentSpecs()
 	case TableInOutFunction:
 		return f.ArgumentSpecs()
+	case TableBufferingFunction:
+		return f.ArgumentSpecs()
 	}
 	return nil
 }
@@ -299,8 +301,21 @@ func (w *Worker) resolveFunctionWithOverload(name string, ft FunctionType, args 
 				}
 			}
 		}
+		if len(candidates) == 0 {
+			if fns, ok := w.tableBufferings[name]; ok {
+				for _, fn := range fns {
+					candidates = append(candidates, fn)
+				}
+			}
+		}
 	case FunctionTypeAggregate:
 		if fns, ok := w.tableInOuts[name]; ok {
+			for _, fn := range fns {
+				candidates = append(candidates, fn)
+			}
+		}
+	case FunctionTypeTableBuffering:
+		if fns, ok := w.tableBufferings[name]; ok {
 			for _, fn := range fns {
 				candidates = append(candidates, fn)
 			}
@@ -324,6 +339,13 @@ func (w *Worker) resolveFunctionWithOverload(name string, ft FunctionType, args 
 	}
 	if len(candidates) == 0 {
 		if fns, ok := w.tableInOuts[name]; ok {
+			for _, fn := range fns {
+				candidates = append(candidates, fn)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		if fns, ok := w.tableBufferings[name]; ok {
 			for _, fn := range fns {
 				candidates = append(candidates, fn)
 			}

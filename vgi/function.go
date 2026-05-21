@@ -14,9 +14,10 @@ type TypeBoundPredicate func(arrow.DataType) bool
 type FunctionType string
 
 const (
-	FunctionTypeScalar    FunctionType = "scalar"
-	FunctionTypeTable     FunctionType = "table"
-	FunctionTypeAggregate FunctionType = "aggregate"
+	FunctionTypeScalar         FunctionType = "scalar"
+	FunctionTypeTable          FunctionType = "table"
+	FunctionTypeAggregate      FunctionType = "aggregate"
+	FunctionTypeTableBuffering FunctionType = "table_buffering"
 )
 
 // FunctionStability describes when function results may change.
@@ -129,6 +130,14 @@ const (
 	// PhaseFinalize is the end-of-stream phase: the function flushes any
 	// accumulated state. Only reached for functions with HasFinalize set.
 	PhaseFinalize Phase = "FINALIZE"
+
+	// PhaseTableBuffering is the sink init phase for a TableBufferingFunction.
+	// After it, traffic moves to the table_buffering_process / _combine RPCs.
+	PhaseTableBuffering Phase = "TABLE_BUFFERING"
+
+	// PhaseTableBufferingFinalize opens a producer-mode finalize stream for one
+	// finalize_state_id of a TableBufferingFunction.
+	PhaseTableBufferingFinalize Phase = "TABLE_BUFFERING_FINALIZE"
 )
 
 // OrderByDirection is the sort direction carried by an ORDER BY pushdown hint.
@@ -239,6 +248,17 @@ type FunctionMetadata struct {
 	ReturnType arrow.DataType
 	// RequiredSecrets lists secret types the function needs at bind time.
 	RequiredSecrets []SecretRequirement
+	// SupportsBatchIndex opts a table function into per-batch vgi_batch_index
+	// tagging (see EmitBatchIndex). The C++ extension enforces monotonicity.
+	SupportsBatchIndex bool
+	// PartitionKind declares the partition shape of a table function's output
+	// (see PartitionField / EmitPartitioned). Empty = NOT_PARTITIONED.
+	PartitionKind PartitionKind
+	// SourceOrderDependent / SinkOrderDependent / RequiresInputBatchIndex are
+	// table-buffering ordering hints (mirror the FunctionInfo fields).
+	SourceOrderDependent    bool
+	SinkOrderDependent      bool
+	RequiresInputBatchIndex bool
 }
 
 // DefaultMetadata returns metadata with default values.

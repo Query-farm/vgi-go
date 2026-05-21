@@ -204,6 +204,14 @@ func initSQLiteSchema(db *sql.DB) error {
 			created_at REAL DEFAULT (julianday('now')),
 			PRIMARY KEY (transaction_opaque_data, key)
 		)`,
+		`CREATE TABLE IF NOT EXISTS state_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			execution_id BLOB NOT NULL,
+			log_key BLOB NOT NULL,
+			value BLOB NOT NULL,
+			created_at REAL DEFAULT (julianday('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_state_log ON state_log(execution_id, log_key, id)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
@@ -604,6 +612,53 @@ func (s *sqliteStorage) TransactionStatePut(transactionOpaqueData []byte, items 
 		}
 	}
 	return tx.Commit()
+}
+
+// --- State log (execution-scoped, keyed append-only log) ---
+
+// StateAppend appends a value to the (executionID, key) log and returns the new
+// monotonic log id.
+func (s *sqliteStorage) StateAppend(executionID, key, value []byte) (int64, error) {
+	s.maybeCleanup()
+	res, err := s.db.Exec(
+		`INSERT INTO state_log (execution_id, log_key, value) VALUES (?, ?, ?)`,
+		executionID, key, value,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// StateLogScan returns log entries for (executionID, key) with id > afterID,
+// ordered by id. afterID = -1 reads from the start. limit <= 0 means no limit.
+func (s *sqliteStorage) StateLogScan(executionID, key []byte, afterID int64, limit int) ([]StateLogEntry, error) {
+	q := `SELECT id, value FROM state_log WHERE execution_id = ? AND log_key = ? AND id > ? ORDER BY id`
+	args := []any{executionID, key, afterID}
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []StateLogEntry
+	for rows.Next() {
+		var e StateLogEntry
+		if err := rows.Scan(&e.ID, &e.Value); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// StateLogClear removes all state-log rows for an execution_id.
+func (s *sqliteStorage) StateLogClear(executionID []byte) error {
+	_, err := s.db.Exec(`DELETE FROM state_log WHERE execution_id = ?`, executionID)
+	return err
 }
 
 func (s *sqliteStorage) TransactionStateClear(transactionOpaqueData []byte) error {

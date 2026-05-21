@@ -134,6 +134,55 @@ func (s *ExecutionStorage) QueuePopBatch() (arrow.RecordBatch, error) {
 }
 
 // ---------------------------------------------------------------------------
+// State log (bound to execution_id, keyed append-only log with a cursor)
+// ---------------------------------------------------------------------------
+
+// errStateLogUnsupported is returned when the configured backend doesn't
+// implement StateLogStorage.
+var errStateLogUnsupported = errors.New("storage: backend does not support the state log (required by table-buffering functions)")
+
+func (s *ExecutionStorage) stateLog() (StateLogStorage, []byte, error) {
+	back, exec, err := s.resolve()
+	if err != nil {
+		return nil, nil, err
+	}
+	sl, ok := back.(StateLogStorage)
+	if !ok {
+		return nil, nil, errStateLogUnsupported
+	}
+	return sl, exec, nil
+}
+
+// StateAppend appends value under key in the execution-scoped log, returning
+// the new monotonic log id.
+func (s *ExecutionStorage) StateAppend(key, value []byte) (int64, error) {
+	sl, exec, err := s.stateLog()
+	if err != nil {
+		return 0, err
+	}
+	return sl.StateAppend(exec, key, value)
+}
+
+// StateLogScan returns entries under key with id > afterID (use -1 from the
+// start), ordered by id. limit <= 0 means no limit.
+func (s *ExecutionStorage) StateLogScan(key []byte, afterID int64, limit int) ([]StateLogEntry, error) {
+	sl, exec, err := s.stateLog()
+	if err != nil {
+		return nil, err
+	}
+	return sl.StateLogScan(exec, key, afterID, limit)
+}
+
+// StateLogClear removes all state-log rows for this execution.
+func (s *ExecutionStorage) StateLogClear() error {
+	sl, exec, err := s.stateLog()
+	if err != nil {
+		return err
+	}
+	return sl.StateLogClear(exec)
+}
+
+// ---------------------------------------------------------------------------
 // Worker state (bound to execution_id, keyed by os.Getpid())
 // ---------------------------------------------------------------------------
 

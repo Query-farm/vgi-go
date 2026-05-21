@@ -222,7 +222,7 @@ func main() {
 	w.RegisterTable(table.NewVersionedConstraintsScanFunction())
 
 	// Table-in-out functions
-	w.RegisterTableInOut(table_in_out.NewBufferInputFunction())
+	w.RegisterTableBuffering(&table_in_out.BufferInputFunction{})
 	w.RegisterTableInOut(table_in_out.NewDistributedSumFunction())
 	w.RegisterTableInOut(table_in_out.NewEchoFunction())
 	w.RegisterTableInOut(table_in_out.NewExceptionFinalizeFunction())

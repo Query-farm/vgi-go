@@ -289,9 +289,9 @@ func TestBindArgs_PositionalAndNamed(t *testing.T) {
 		Scale     float64 `vgi:"default=1.0"`
 	}
 	args := makeArgs(t, map[string]arrow.Array{
-		"positional_0":    int64Arr(t, 100),
+		"positional_0":     int64Arr(t, 100),
 		"named_batch_size": int64Arr(t, 512),
-		"named_scale":     nullArr(t, arrow.PrimitiveTypes.Float64), // null → default
+		"named_scale":      nullArr(t, arrow.PrimitiveTypes.Float64), // null → default
 	})
 	defer args.Release()
 
@@ -412,7 +412,7 @@ func TestBindArgs_SkipsNonConstFields(t *testing.T) {
 		SleepMs int64  `vgi:"name=sleep_ms,default=50"`
 	}
 	args := makeArgs(t, map[string]arrow.Array{
-		"positional_0":  nullArr(t, arrow.BinaryTypes.String),
+		"positional_0":   nullArr(t, arrow.BinaryTypes.String),
 		"named_sleep_ms": int64Arr(t, 100),
 	})
 	defer args.Release()

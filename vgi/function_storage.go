@@ -79,6 +79,29 @@ type AggregateConstArgs struct {
 	Args         []byte
 }
 
+// StateLogEntry is one (id, value) row from an execution-scoped state log.
+type StateLogEntry struct {
+	ID    int64
+	Value []byte
+}
+
+// StateLogStorage is an optional capability for an execution-scoped, keyed,
+// append-only log with a monotonic cursor. Table-buffering functions use it to
+// stash batches between the sink (process) and source (finalize) phases across
+// worker processes. Implemented by the SQLite backend; backends that don't
+// implement it cause buffering functions to error at runtime. Mirrors
+// vgi-python's BoundStorage.state_append / state_log_scan.
+type StateLogStorage interface {
+	// StateAppend appends value to the (executionID, key) log; returns the new
+	// monotonic log id.
+	StateAppend(executionID, key, value []byte) (int64, error)
+	// StateLogScan returns entries with id > afterID (use -1 from the start),
+	// ordered by id. limit <= 0 means no limit.
+	StateLogScan(executionID, key []byte, afterID int64, limit int) ([]StateLogEntry, error)
+	// StateLogClear removes all log rows for an execution_id.
+	StateLogClear(executionID []byte) error
+}
+
 // FunctionStorage is the cross-process shared-state interface backing
 // distributed VGI execution. One implementation per backend (SQLite,
 // Cloudflare Durable Object, ...); selected at worker startup.

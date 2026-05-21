@@ -22,9 +22,9 @@ type WritableCatalog struct {
 	// Comment is an optional human-readable description.
 	Comment string
 
-	mu       sync.Mutex
+	mu               sync.Mutex
 	attachOpaqueData []byte
-	version  int64
+	version          int64
 	// schemas keyed by schema name (lower-case canonical form).
 	schemas map[string]*writableSchema
 	// store persists schemas/tables/rows across worker processes.
