@@ -1072,20 +1072,15 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			var items [][]byte
 			for i := range si.functions {
 				fi := &si.functions[i]
-				// Filter by type if requested
-				// DuckDB sends "SCALAR_FUNCTION", "TABLE_FUNCTION", etc.
+				// Filter by type if requested. DuckDB sends "SCALAR_FUNCTION",
+				// "TABLE_FUNCTION", etc.; normalizeFunctionType also accepts the
+				// short forms. An unrecognized type filters nothing.
 				if req.Type != "" {
-					wantScalar := req.Type == "scalar" || req.Type == "SCALAR_FUNCTION"
-					wantTable := req.Type == "table" || req.Type == "TABLE_FUNCTION"
-					wantAggregate := req.Type == "aggregate" || req.Type == "AGGREGATE_FUNCTION"
-					if wantScalar && fi.FunctionType != FunctionTypeScalar {
-						continue
-					}
-					if wantTable && fi.FunctionType != FunctionTypeTable {
-						continue
-					}
-					if wantAggregate && fi.FunctionType != FunctionTypeAggregate {
-						continue
+					switch want := normalizeFunctionType(FunctionType(req.Type)); want {
+					case FunctionTypeScalar, FunctionTypeTable, FunctionTypeAggregate:
+						if fi.FunctionType != want {
+							continue
+						}
 					}
 				}
 				// Catalog-scoped function visibility: if this function is
@@ -1403,15 +1398,14 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 
 			var items [][]byte
 			for _, cm := range si.macros {
-				// Filter by type if requested
+				// Filter by type if requested. An unrecognized type filters
+				// nothing.
 				if req.Type != "" {
-					wantScalar := req.Type == "scalar_macro" || req.Type == "SCALAR_MACRO"
-					wantTable := req.Type == "table_macro" || req.Type == "TABLE_MACRO"
-					if wantScalar && cm.MacroType != MacroTypeScalar {
-						continue
-					}
-					if wantTable && cm.MacroType != MacroTypeTable {
-						continue
+					switch want := macroKindFilter(req.Type); want {
+					case MacroTypeScalar, MacroTypeTable:
+						if cm.MacroType != want {
+							continue
+						}
 					}
 				}
 				info := &MacroInfo{
@@ -1461,7 +1455,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	unaryCatalog[TableInsertFunctionGetRequestWire, TableScanFunctionGetResponseWire](w, s, "catalog_table_insert_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableInsertFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
 			if w.attachWriteFunctionGetHandler != nil {
-				if result, handled, err := w.attachWriteFunctionGetHandler("insert", req.AttachOpaqueData, req.SchemaName, req.Name); err != nil {
+				if result, handled, err := w.attachWriteFunctionGetHandler(WriteOpInsert, req.AttachOpaqueData, req.SchemaName, req.Name); err != nil {
 					return TableScanFunctionGetResponseWire{}, err
 				} else if handled {
 					return buildScanFunctionGetResponse(result)
@@ -1483,7 +1477,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	unaryCatalog[TableUpdateFunctionGetRequestWire, TableScanFunctionGetResponseWire](w, s, "catalog_table_update_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableUpdateFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
 			if w.attachWriteFunctionGetHandler != nil {
-				if result, handled, err := w.attachWriteFunctionGetHandler("update", req.AttachOpaqueData, req.SchemaName, req.Name); err != nil {
+				if result, handled, err := w.attachWriteFunctionGetHandler(WriteOpUpdate, req.AttachOpaqueData, req.SchemaName, req.Name); err != nil {
 					return TableScanFunctionGetResponseWire{}, err
 				} else if handled {
 					return buildScanFunctionGetResponse(result)
@@ -1505,7 +1499,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	unaryCatalog[TableDeleteFunctionGetRequestWire, TableScanFunctionGetResponseWire](w, s, "catalog_table_delete_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableDeleteFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
 			if w.attachWriteFunctionGetHandler != nil {
-				if result, handled, err := w.attachWriteFunctionGetHandler("delete", req.AttachOpaqueData, req.SchemaName, req.Name); err != nil {
+				if result, handled, err := w.attachWriteFunctionGetHandler(WriteOpDelete, req.AttachOpaqueData, req.SchemaName, req.Name); err != nil {
 					return TableScanFunctionGetResponseWire{}, err
 				} else if handled {
 					return buildScanFunctionGetResponse(result)

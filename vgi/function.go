@@ -117,6 +117,59 @@ const (
 	DistinctDependenceNotDependent DistinctDependence = "NOT_DISTINCT_DEPENDENT"
 )
 
+// Phase identifies the table-in-out init phase. Wire-protocol dictionary
+// constants — must not be changed.
+type Phase string
+
+const (
+	// PhaseInput is the streaming-input phase: the function processes input
+	// chunks as they arrive.
+	PhaseInput Phase = "INPUT"
+
+	// PhaseFinalize is the end-of-stream phase: the function flushes any
+	// accumulated state. Only reached for functions with HasFinalize set.
+	PhaseFinalize Phase = "FINALIZE"
+)
+
+// OrderByDirection is the sort direction carried by an ORDER BY pushdown hint.
+// Wire-protocol dictionary constants — must not be changed.
+type OrderByDirection string
+
+const (
+	// OrderByAscending sorts smallest-first (SQL ASC).
+	OrderByAscending OrderByDirection = "ASC"
+
+	// OrderByDescending sorts largest-first (SQL DESC).
+	OrderByDescending OrderByDirection = "DESC"
+)
+
+// OrderByNullOrder is the NULL placement carried by an ORDER BY pushdown hint.
+// Wire-protocol dictionary constants — must not be changed.
+type OrderByNullOrder string
+
+const (
+	// NullsFirst places NULL values before non-NULL values.
+	NullsFirst OrderByNullOrder = "NULLS_FIRST"
+
+	// NullsLast places NULL values after non-NULL values.
+	NullsLast OrderByNullOrder = "NULLS_LAST"
+)
+
+// WriteOp identifies which DML operation a writable-table function lookup is
+// for. Wire-protocol dictionary constants — must not be changed.
+type WriteOp string
+
+const (
+	// WriteOpInsert is an INSERT-time function lookup.
+	WriteOpInsert WriteOp = "insert"
+
+	// WriteOpUpdate is an UPDATE-time function lookup.
+	WriteOpUpdate WriteOp = "update"
+
+	// WriteOpDelete is a DELETE-time function lookup.
+	WriteOpDelete WriteOp = "delete"
+)
+
 // SecretRequirement describes a secret type that a function needs.
 type SecretRequirement struct {
 	SecretType string

@@ -176,7 +176,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 	}
 
 	// Resolve function with overload-aware resolution
-	fn, err := w.resolveFunctionWithOverload(recipe.FunctionName, FunctionType(recipe.FunctionType), bindParams.Args, bindParams.InputSchema)
+	fn, err := w.resolveFunctionWithOverload(recipe.FunctionName, recipe.FunctionType, bindParams.Args, bindParams.InputSchema)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -198,7 +198,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 
 	params := &ProcessParams{
 		FunctionName:   recipe.FunctionName,
-		FunctionType:   FunctionType(recipe.FunctionType),
+		FunctionType:   recipe.FunctionType,
 		Args:           bindParams.Args,
 		OutputSchema:   processOutputSchema,
 		ProjectionIDs:  recipe.ProjectionIDs,

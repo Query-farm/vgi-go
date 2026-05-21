@@ -84,10 +84,10 @@ func (f *OrderEchoFunction) NewState(params *vgi.ProcessParams) (*orderEchoState
 	if h := params.OrderByHint; h != nil {
 		col = h.ColumnName
 		if h.Direction != "" {
-			dir = h.Direction
+			dir = string(h.Direction)
 		}
 		if h.NullOrder != "" {
-			null = h.NullOrder
+			null = string(h.NullOrder)
 		}
 		limit = h.RowLimit
 	}

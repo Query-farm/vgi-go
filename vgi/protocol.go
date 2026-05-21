@@ -355,9 +355,9 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	bindParams.Args.RemapPositionalArgs(w.getArgSpecs(fn))
 
 	// Determine phase
-	phase := ""
+	var phase Phase
 	if req.Phase != nil {
-		phase = *req.Phase
+		phase = Phase(*req.Phase)
 	}
 
 	// Build init params
@@ -396,10 +396,10 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	if req.OrderByColumnName != nil {
 		hint := &OrderByHint{ColumnName: *req.OrderByColumnName, RowLimit: -1}
 		if req.OrderByDirection != nil {
-			hint.Direction = *req.OrderByDirection
+			hint.Direction = OrderByDirection(*req.OrderByDirection)
 		}
 		if req.OrderByNullOrder != nil {
-			hint.NullOrder = *req.OrderByNullOrder
+			hint.NullOrder = OrderByNullOrder(*req.OrderByNullOrder)
 		}
 		if req.OrderByLimit != nil {
 			hint.RowLimit = *req.OrderByLimit
@@ -450,7 +450,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		BindCallIPC:     req.BindCall,
 		OutputSchemaIPC: req.OutputSchema,
 		FunctionName:    bindReq.FunctionName,
-		FunctionType:    bindReq.FunctionType,
+		FunctionType:    FunctionType(bindReq.FunctionType),
 		ProjectionIDs:   initParams.ProjectionIDs,
 		ExecutionID:     initParams.ExecutionID,
 		BindOpaqueData:  initParams.BindOpaqueData,
@@ -628,7 +628,7 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 	}, nil
 }
 
-func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, initParams *InitParams, processParams *ProcessParams, outputSchema *arrow.Schema, phase string, recipe *InitRecipe) (*vgirpc.StreamResult, error) {
+func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, initParams *InitParams, processParams *ProcessParams, outputSchema *arrow.Schema, phase Phase, recipe *InitRecipe) (*vgirpc.StreamResult, error) {
 	// Pre-create storage so OnInit can use it
 	if initParams.ExecutionID == nil {
 		initParams.ExecutionID = newExecutionID()
@@ -680,7 +680,7 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 		header.OpaqueData = &resp.OpaqueData
 	}
 
-	if phase == "FINALIZE" {
+	if phase == PhaseFinalize {
 		// Finalize phase: call Finalize() to get batches, return as producer
 		userState, err := fn.NewState(processParams)
 		if err != nil {

@@ -456,11 +456,11 @@ func WithAttachScanFunctionGetHandler(h AttachScanFunctionGetHandler) WorkerOpti
 }
 
 // AttachWriteFunctionGetHandler is the attach-opaque-data-aware version of
-// catalog_table_{insert,update,delete}_function_get. Op is "insert",
-// "update", or "delete". Return (result, true) to route; (nil, false) to
-// fall through to the built-in writable-catalog path or the read-only
+// catalog_table_{insert,update,delete}_function_get. Op is WriteOpInsert,
+// WriteOpUpdate, or WriteOpDelete. Return (result, true) to route; (nil, false)
+// to fall through to the built-in writable-catalog path or the read-only
 // rejection.
-type AttachWriteFunctionGetHandler func(op string, attachOpaqueData []byte, schemaName, name string) (result *ScanFunctionResult, handled bool, err error)
+type AttachWriteFunctionGetHandler func(op WriteOp, attachOpaqueData []byte, schemaName, name string) (result *ScanFunctionResult, handled bool, err error)
 
 // WithAttachWriteFunctionGetHandler installs an attach-opaque-data-aware handler
 // that resolves the worker function backing INSERT/UPDATE/DELETE on a

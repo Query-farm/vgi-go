@@ -948,7 +948,7 @@ func AttachScanFunctionGetHandler(attachOpaqueData []byte, schemaName, name stri
 // AttachWriteFunctionGetHandler routes INSERT/UPDATE/DELETE-time function
 // lookups to schema_reconcile_{insert,update,delete}(<table_name>). Wired
 // via vgi.WithAttachWriteFunctionGetHandler.
-func AttachWriteFunctionGetHandler(op string, attachOpaqueData []byte, schemaName, name string) (*vgi.ScanFunctionResult, bool, error) {
+func AttachWriteFunctionGetHandler(op vgi.WriteOp, attachOpaqueData []byte, schemaName, name string) (*vgi.ScanFunctionResult, bool, error) {
 	if string(attachOpaqueData) != CatalogName {
 		return nil, false, nil
 	}
@@ -960,11 +960,11 @@ func AttachWriteFunctionGetHandler(op string, attachOpaqueData []byte, schemaNam
 	}
 	var fn string
 	switch op {
-	case "insert":
+	case vgi.WriteOpInsert:
 		fn = "schema_reconcile_insert"
-	case "update":
+	case vgi.WriteOpUpdate:
 		fn = "schema_reconcile_update"
-	case "delete":
+	case vgi.WriteOpDelete:
 		fn = "schema_reconcile_delete"
 	default:
 		return nil, false, nil

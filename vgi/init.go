@@ -19,8 +19,8 @@ type InitParams struct {
 	InputSchema *arrow.Schema
 	// ProjectionIDs are the projected column indices (nil = all columns).
 	ProjectionIDs []int32
-	// Phase is the table-in-out init phase ("INPUT" or "FINALIZE").
-	Phase string
+	// Phase is the table-in-out init phase.
+	Phase Phase
 	// ExecutionID is the execution ID for secondary inits.
 	ExecutionID []byte
 	// BindOpaqueData is opaque data from the bind phase.
@@ -50,9 +50,9 @@ type InitParams struct {
 // OrderByHint is an ORDER BY + LIMIT hint pushed by the optimizer.
 type OrderByHint struct {
 	ColumnName string
-	Direction  string // "ASC" or "DESC"
-	NullOrder  string // "NULLS_FIRST" or "NULLS_LAST"
-	RowLimit   int64  // -1 if unbounded
+	Direction  OrderByDirection // "" if unspecified
+	NullOrder  OrderByNullOrder // "" if unspecified
+	RowLimit   int64            // -1 if unbounded
 }
 
 // TableSampleHint is a TABLESAMPLE pushdown hint.

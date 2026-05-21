@@ -23,6 +23,18 @@ const (
 	MacroTypeTable  MacroType = "table"
 )
 
+// macroKindFilter maps a schema_contents_macros "type" filter value (as sent
+// by DuckDB) to a MacroType. Returns "" for an unrecognized value.
+func macroKindFilter(s string) MacroType {
+	switch s {
+	case "scalar_macro", "SCALAR_MACRO", "scalar", "SCALAR":
+		return MacroTypeScalar
+	case "table_macro", "TABLE_MACRO", "table", "TABLE":
+		return MacroTypeTable
+	}
+	return ""
+}
+
 // CatalogMacro describes a macro to register in the catalog.
 type CatalogMacro struct {
 	// Name is the macro name visible in SQL.

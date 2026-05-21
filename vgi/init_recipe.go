@@ -12,12 +12,12 @@ type InitRecipe struct {
 	BindCallIPC       []byte
 	OutputSchemaIPC   []byte
 	FunctionName      string
-	FunctionType      string
+	FunctionType      FunctionType
 	ProjectionIDs     []int32
 	ExecutionID       []byte
 	BindOpaqueData    []byte
 	InitOpaqueData    []byte
 	PushdownFilterIPC []byte
-	Phase             string
+	Phase             Phase
 	IsSecondary       bool
 }
