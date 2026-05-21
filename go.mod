@@ -14,6 +14,7 @@ require (
 	github.com/apache/arrow-go/v18 v18.5.2
 	github.com/duckdb/duckdb-go/v2 v2.10502.0
 	github.com/google/uuid v1.6.0
+	golang.org/x/crypto v0.51.0
 	modernc.org/sqlite v1.46.1
 )
 
@@ -44,7 +45,6 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect

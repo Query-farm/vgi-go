@@ -163,11 +163,8 @@ func (w *Worker) rehydrateFinalize(s *FinalizeProducerState) error {
 // It also returns the resolved function (via overload resolution) to avoid
 // a redundant second resolution by the caller.
 func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *ProcessParams, error) {
-	// Deserialize the bind call
-	bindReq, err := w.deserializeBindRequest(recipe.BindCallIPC)
-	if err != nil {
-		return nil, nil, fmt.Errorf("deserializing bind_call: %w", err)
-	}
+	// bind_call is carried structurally in the recipe.
+	bindReq := &recipe.BindCall
 
 	// Parse bind params for argument access
 	bindParams, err := w.parseBindRequest(*bindReq)

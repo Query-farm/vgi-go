@@ -324,6 +324,7 @@ type Worker struct {
 	schemaContentsHandler         SchemaContentsHandler
 	attachTableGetHandler         AttachTableGetHandler
 	attachScanFunctionGetHandler  AttachScanFunctionGetHandler
+	attachScanBranchesGetHandler  AttachScanBranchesGetHandler
 	attachWriteFunctionGetHandler AttachWriteFunctionGetHandler
 	catalogVersionHook            CatalogVersionHook
 	authenticateFunc              vgirpc.AuthenticateFunc
@@ -452,6 +453,20 @@ type AttachScanFunctionGetHandler func(attachOpaqueData []byte, schemaName, name
 func WithAttachScanFunctionGetHandler(h AttachScanFunctionGetHandler) WorkerOption {
 	return func(w *Worker) {
 		w.attachScanFunctionGetHandler = h
+	}
+}
+
+// AttachScanBranchesGetHandler is the attach-opaque-data-aware handler for
+// catalog_table_scan_branches_get. Return (result, true) to serve a
+// multi-branch table; (nil, false) to fall through (the C++ extension then
+// falls back to catalog_table_scan_function_get).
+type AttachScanBranchesGetHandler func(attachOpaqueData []byte, schemaName, name string, atUnit, atValue *string) (result *ScanBranchesResult, handled bool, err error)
+
+// WithAttachScanBranchesGetHandler installs an attach-opaque-data-aware
+// scan_branches_get handler for multi-branch (UNION-of-sources) tables.
+func WithAttachScanBranchesGetHandler(h AttachScanBranchesGetHandler) WorkerOption {
+	return func(w *Worker) {
+		w.attachScanBranchesGetHandler = h
 	}
 }
 

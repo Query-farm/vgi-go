@@ -19,17 +19,43 @@ import (
 // Wire types for RPC serialization (used with vgirpc struct tags)
 // ---------------------------------------------------------------------------
 
-// BindRequestWire is the wire format for bind requests.
+// BindRequestWire is the wire format for bind requests. It is deserialized
+// two ways: as the top-level params of the bind RPC (via the vgirpc tags) and
+// as the nested bind_call struct of init/cardinality/statistics/
+// dynamic_to_string (via the arrow tags, which the framework reads for struct
+// children).
 type BindRequestWire struct {
-	FunctionName            string  `vgirpc:"function_name"`
-	Arguments               []byte  `vgirpc:"arguments"`
-	FunctionType            string  `vgirpc:"function_type,enum"`
-	InputSchema             *[]byte `vgirpc:"input_schema"`
-	Settings                *[]byte `vgirpc:"settings"`
-	Secrets                 *[]byte `vgirpc:"secrets"`
-	AttachOpaqueData                *[]byte `vgirpc:"attach_opaque_data"`
-	TransactionOpaqueData           *[]byte `vgirpc:"transaction_opaque_data"`
-	ResolvedSecretsProvided bool    `vgirpc:"resolved_secrets_provided"`
+	FunctionName            string  `vgirpc:"function_name" arrow:"function_name"`
+	Arguments               []byte  `vgirpc:"arguments" arrow:"arguments"`
+	FunctionType            string  `vgirpc:"function_type,enum" arrow:"function_type,enum"`
+	InputSchema             *[]byte `vgirpc:"input_schema" arrow:"input_schema"`
+	Settings                *[]byte `vgirpc:"settings" arrow:"settings"`
+	Secrets                 *[]byte `vgirpc:"secrets" arrow:"secrets"`
+	AttachOpaqueData        *[]byte `vgirpc:"attach_opaque_data" arrow:"attach_opaque_data"`
+	TransactionOpaqueData   *[]byte `vgirpc:"transaction_opaque_data" arrow:"transaction_opaque_data"`
+	ResolvedSecretsProvided bool    `vgirpc:"resolved_secrets_provided" arrow:"resolved_secrets_provided"`
+}
+
+// bindRequestWireSchema is the Arrow struct schema for a bind_call. Field
+// names/types must match the arrow tags above.
+var bindRequestWireSchema = arrow.NewSchema([]arrow.Field{
+	{Name: "function_name", Type: arrow.BinaryTypes.String},
+	{Name: "arguments", Type: arrow.BinaryTypes.Binary},
+	{Name: "function_type", Type: &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int16, ValueType: arrow.BinaryTypes.String}},
+	{Name: "input_schema", Type: arrow.BinaryTypes.Binary, Nullable: true},
+	{Name: "settings", Type: arrow.BinaryTypes.Binary, Nullable: true},
+	{Name: "secrets", Type: arrow.BinaryTypes.Binary, Nullable: true},
+	{Name: "attach_opaque_data", Type: arrow.BinaryTypes.Binary, Nullable: true},
+	{Name: "transaction_opaque_data", Type: arrow.BinaryTypes.Binary, Nullable: true},
+	{Name: "resolved_secrets_provided", Type: &arrow.BooleanType{}},
+}, nil)
+
+// ArrowSchema makes BindRequestWire an ArrowSerializable. The framework then
+// encodes a nested bind_call as binary IPC at the parameter level (how the C++
+// extension sends it) while still accepting an inline struct column (how the
+// Python client sends it) — see vgi-rpc's setFieldFromArrow.
+func (BindRequestWire) ArrowSchema() *arrow.Schema {
+	return bindRequestWireSchema
 }
 
 // BindResponseWire is the wire format for bind responses.
@@ -43,21 +69,21 @@ type BindResponseWire struct {
 
 // InitRequestWire is the wire format for init requests.
 type InitRequestWire struct {
-	BindCall              []byte    `vgirpc:"bind_call"`
-	OutputSchema          []byte    `vgirpc:"output_schema"`
-	BindOpaqueData        *[]byte   `vgirpc:"bind_opaque_data"`
-	ProjectionIDs         *[]int32  `vgirpc:"projection_ids"`
-	PushdownFilters       *[]byte   `vgirpc:"pushdown_filters"`
-	JoinKeys              *[][]byte `vgirpc:"join_keys"`
-	Phase                 *string   `vgirpc:"phase,enum"`
-	ExecutionID           *[]byte   `vgirpc:"execution_id"`
-	InitOpaqueData        *[]byte   `vgirpc:"init_opaque_data"`
-	OrderByColumnName     *string   `vgirpc:"order_by_column_name"`
-	OrderByDirection      *string   `vgirpc:"order_by_direction,enum"`
-	OrderByNullOrder      *string   `vgirpc:"order_by_null_order,enum"`
-	OrderByLimit          *int64    `vgirpc:"order_by_limit"`
-	TablesamplePercentage *float64  `vgirpc:"tablesample_percentage"`
-	TablesampleSeed       *int64    `vgirpc:"tablesample_seed"`
+	BindCall              BindRequestWire `vgirpc:"bind_call"`
+	OutputSchema          []byte          `vgirpc:"output_schema"`
+	BindOpaqueData        *[]byte         `vgirpc:"bind_opaque_data"`
+	ProjectionIDs         *[]int32        `vgirpc:"projection_ids"`
+	PushdownFilters       *[]byte         `vgirpc:"pushdown_filters"`
+	JoinKeys              *[][]byte       `vgirpc:"join_keys"`
+	Phase                 *string         `vgirpc:"phase,enum"`
+	ExecutionID           *[]byte         `vgirpc:"execution_id"`
+	InitOpaqueData        *[]byte         `vgirpc:"init_opaque_data"`
+	OrderByColumnName     *string         `vgirpc:"order_by_column_name"`
+	OrderByDirection      *string         `vgirpc:"order_by_direction,enum"`
+	OrderByNullOrder      *string         `vgirpc:"order_by_null_order,enum"`
+	OrderByLimit          *int64          `vgirpc:"order_by_limit"`
+	TablesamplePercentage *float64        `vgirpc:"tablesample_percentage"`
+	TablesampleSeed       *int64          `vgirpc:"tablesample_seed"`
 }
 
 // GlobalInitResponseWire is the wire format for global init responses.
@@ -69,8 +95,8 @@ type GlobalInitResponseWire struct {
 
 // CardinalityRequestWire is the wire format for cardinality requests.
 type CardinalityRequestWire struct {
-	BindCall       []byte  `vgirpc:"bind_call"`
-	BindOpaqueData *[]byte `vgirpc:"bind_opaque_data"`
+	BindCall       BindRequestWire `vgirpc:"bind_call"`
+	BindOpaqueData *[]byte         `vgirpc:"bind_opaque_data"`
 }
 
 // ---------------------------------------------------------------------------
@@ -316,17 +342,13 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 // handleInit processes an init RPC request and returns a StreamResult.
 func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, req InitRequestWire) (*vgirpc.StreamResult, error) {
 	slog.Debug("init: received request",
-		"bind_call_len", len(req.BindCall),
+		"function", req.BindCall.FunctionName,
 		"output_schema_len", len(req.OutputSchema),
 		"phase", req.Phase,
 		"exec_id_present", req.ExecutionID != nil,
 	)
-	// Deserialize the embedded bind call
-	bindReq, err := w.deserializeBindRequest(req.BindCall)
-	if err != nil {
-		slog.Debug("init: deserialize bind_call failed", "err", err)
-		return nil, fmt.Errorf("deserializing bind_call: %w", err)
-	}
+	// bind_call arrives as a nested struct on the wire.
+	bindReq := &req.BindCall
 	slog.Debug("init: parsed bind call", "function", bindReq.FunctionName, "type", bindReq.FunctionType)
 
 	// Parse output schema
@@ -447,7 +469,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 
 	// Build InitRecipe for HTTP state serialization
 	recipe := InitRecipe{
-		BindCallIPC:     req.BindCall,
+		BindCall:        req.BindCall,
 		OutputSchemaIPC: req.OutputSchema,
 		FunctionName:    bindReq.FunctionName,
 		FunctionType:    FunctionType(bindReq.FunctionType),
@@ -754,10 +776,7 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 // request, returning serialized per-column statistics IPC bytes (or nil when
 // unknown).
 func (w *Worker) handleTableFunctionStatistics(ctx context.Context, callCtx *vgirpc.CallContext, req CardinalityRequestWire) ([]byte, error) {
-	bindReq, err := w.deserializeBindRequest(req.BindCall)
-	if err != nil {
-		return nil, fmt.Errorf("deserializing bind_call: %w", err)
-	}
+	bindReq := &req.BindCall
 	bindParams, err := w.parseBindRequest(*bindReq)
 	if err != nil {
 		return nil, err
@@ -784,10 +803,7 @@ func (w *Worker) handleTableFunctionStatistics(ctx context.Context, callCtx *vgi
 
 // handleCardinality processes a table_function_cardinality RPC request.
 func (w *Worker) handleCardinality(ctx context.Context, callCtx *vgirpc.CallContext, req CardinalityRequestWire) (TableCardinality, error) {
-	bindReq, err := w.deserializeBindRequest(req.BindCall)
-	if err != nil {
-		return TableCardinality{}, fmt.Errorf("deserializing bind_call: %w", err)
-	}
+	bindReq := &req.BindCall
 
 	bindParams, err := w.parseBindRequest(*bindReq)
 	if err != nil {

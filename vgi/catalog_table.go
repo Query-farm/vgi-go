@@ -129,6 +129,92 @@ type ScanArg struct {
 	Type  arrow.DataType
 }
 
+// ScanBranch is one physical source backing a multi-branch scan. It mirrors
+// vgi-python's ScanBranch.
+type ScanBranch struct {
+	// FunctionName is the function to call (a VGI table function or any native
+	// DuckDB function such as read_parquet).
+	FunctionName string
+	// PositionalArguments / NamedArguments are passed to the function's bind.
+	PositionalArguments []ScanArg
+	NamedArguments      map[string]ScanArg
+	// BranchFilter, when non-nil, is a SQL expression ANDed into every scan of
+	// this branch before filter pushdown. Used to make overlapping physical
+	// sources non-overlapping at scan time.
+	BranchFilter *string
+	// Writable declares this branch as the INSERT target. At most one branch
+	// per table may be writable (the C++ extension enforces this at parse time).
+	Writable bool
+}
+
+// ScanBranchesResult is the list of physical sources backing a multi-branch
+// table. The branches list must be non-empty. It mirrors vgi-python's
+// ScanBranchesResult.
+type ScanBranchesResult struct {
+	Branches []ScanBranch
+	// RequiredExtensions is the union of DuckDB extensions needed across all
+	// branches, hoisted to the top level.
+	RequiredExtensions []string
+}
+
+var scanBranchSchema = generated.ScanBranchSchema
+
+// SerializeScanBranch serializes one ScanBranch to IPC bytes (the per-branch
+// blob carried in ScanBranchesResult.branches).
+func SerializeScanBranch(branch *ScanBranch) ([]byte, error) {
+	mem := memory.NewGoAllocator()
+
+	argBytes, err := serializeScanArgs(mem, branch.PositionalArguments, branch.NamedArguments)
+	if err != nil {
+		return nil, fmt.Errorf("serializing branch arguments: %w", err)
+	}
+
+	fnNameBuilder := array.NewStringBuilder(mem)
+	defer fnNameBuilder.Release()
+	fnNameBuilder.Append(branch.FunctionName)
+
+	argBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	defer argBuilder.Release()
+	argBuilder.Append(argBytes)
+
+	filterBuilder := array.NewStringBuilder(mem)
+	defer filterBuilder.Release()
+	if branch.BranchFilter != nil {
+		filterBuilder.Append(*branch.BranchFilter)
+	} else {
+		filterBuilder.AppendNull()
+	}
+
+	writableBuilder := array.NewBooleanBuilder(mem)
+	defer writableBuilder.Release()
+	writableBuilder.Append(branch.Writable)
+
+	cols := []arrow.Array{
+		fnNameBuilder.NewArray(),
+		argBuilder.NewArray(),
+		filterBuilder.NewArray(),
+		writableBuilder.NewArray(),
+	}
+	defer func() {
+		for _, c := range cols {
+			c.Release()
+		}
+	}()
+
+	batch := array.NewRecordBatch(scanBranchSchema, cols, 1)
+	defer batch.Release()
+
+	var buf bytes.Buffer
+	w := ipc.NewWriter(&buf, ipc.WithSchema(scanBranchSchema))
+	if err := w.Write(batch); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 // scanFunctionResultSchema is the wire format for ScanFunctionResult.
 var scanFunctionResultSchema = generated.ScanFunctionResultSchema
 

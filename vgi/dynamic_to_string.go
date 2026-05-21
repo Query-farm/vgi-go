@@ -46,9 +46,9 @@ type DynamicToStringParams struct {
 // TableFunctionDynamicToStringRequestWire mirrors vgi-python's
 // TableFunctionDynamicToStringRequest dataclass.
 type TableFunctionDynamicToStringRequestWire struct {
-	BindCall          []byte  `vgirpc:"bind_call"`
-	BindOpaqueData    *[]byte `vgirpc:"bind_opaque_data"`
-	GlobalExecutionID []byte  `vgirpc:"global_execution_id"`
+	BindCall          BindRequestWire `vgirpc:"bind_call"`
+	BindOpaqueData    *[]byte         `vgirpc:"bind_opaque_data"`
+	GlobalExecutionID []byte          `vgirpc:"global_execution_id"`
 }
 
 // TableFunctionDynamicToStringResponseWire is the parallel-list wire format.
@@ -63,12 +63,9 @@ func (w *Worker) registerDynamicToStringRPCs(s *vgirpc.Server) {
 }
 
 func (w *Worker) handleTableFunctionDynamicToString(ctx context.Context, callCtx *vgirpc.CallContext, req TableFunctionDynamicToStringRequestWire) (TableFunctionDynamicToStringResponseWire, error) {
-	// The bind_call payload is a serialized BindRequestWire RecordBatch — we
-	// only need the function name to dispatch to the right TableFunction.
-	bindReq, err := DeserializeBindRequest(req.BindCall)
-	if err != nil {
-		return TableFunctionDynamicToStringResponseWire{}, fmt.Errorf("table_function_dynamic_to_string: parse bind_call: %w", err)
-	}
+	// bind_call arrives as a nested struct — we only need the function name to
+	// dispatch to the right TableFunction.
+	bindReq := &req.BindCall
 
 	fn, err := w.lookupTable(bindReq.FunctionName)
 	if err != nil {

@@ -187,6 +187,24 @@ type TableScanFunctionGetResponseWire struct {
 	RequiredExtensions []string `vgirpc:"required_extensions"`
 }
 
+// TableScanBranchesGetRequestWire is for catalog_table_scan_branches_get.
+type TableScanBranchesGetRequestWire struct {
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
+	SchemaName            string  `vgirpc:"schema_name"`
+	Name                  string  `vgirpc:"name"`
+	AtUnit                *string `vgirpc:"at_unit"`
+	AtValue               *string `vgirpc:"at_value"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
+}
+
+// TableScanBranchesGetResponseWire wraps a ScanBranchesResult. Branches holds
+// one IPC-serialized ScanBranch per physical source; field names/types match
+// generated.ScanBranchesResultSchema.
+type TableScanBranchesGetResponseWire struct {
+	Branches           [][]byte `vgirpc:"branches"`
+	RequiredExtensions []string `vgirpc:"required_extensions"`
+}
+
 // TableCommentSetRequestWire is for catalog_table_comment_set.
 type TableCommentSetRequestWire struct {
 	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
@@ -382,6 +400,9 @@ type TableInsertFunctionGetRequestWire struct {
 	SchemaName            string  `vgirpc:"schema_name"`
 	Name                  string  `vgirpc:"name"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
+	// WritableBranchFunctionName is set by the C++ extension for a multi-branch
+	// table's writable arm, naming the branch the INSERT routes to.
+	WritableBranchFunctionName *string `vgirpc:"writable_branch_function_name"`
 }
 
 // TableUpdateFunctionGetRequestWire is for catalog_table_update_function_get.
@@ -1184,60 +1205,51 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_table_scan_function_get
 	unaryCatalog[TableScanFunctionGetRequestWire, TableScanFunctionGetResponseWire](w, s, "catalog_table_scan_function_get",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableScanFunctionGetRequestWire) (TableScanFunctionGetResponseWire, error) {
-			if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
-				return buildScanFunctionGetResponse(&ScanFunctionResult{
-					FunctionName: writableScanFunctionName,
-					PositionalArguments: []ScanArg{
-						{Value: req.SchemaName, Type: arrow.BinaryTypes.String},
-						{Value: req.Name, Type: arrow.BinaryTypes.String},
-					},
-				})
+			result, err := w.resolveScanFunction(req)
+			if err != nil {
+				return TableScanFunctionGetResponseWire{}, err
 			}
-			slog.Debug("catalog: scan function get", "schema", req.SchemaName, "table", req.Name)
+			return buildScanFunctionGetResponse(result)
+		})
 
-			// Check for a registered catalog table with a backing function
-			// (skip if AT params are present — let the handler deal with time travel)
-			hasAt := req.AtUnit != nil && *req.AtUnit != ""
-			if !hasAt && w.catalog != nil {
-				if si, ok := w.catalog.schemas[req.SchemaName]; ok {
-					for i := range si.tables {
-						if si.tables[i].Name == req.Name && si.tables[i].Function != nil {
-							result := w.buildScanResultFromTable(&si.tables[i])
-							return buildScanFunctionGetResponse(result)
-						}
-					}
-				}
-			}
-
-			// Attach-id-aware handler takes precedence over the plain one.
-			if w.attachScanFunctionGetHandler != nil {
-				result, handled, err := w.attachScanFunctionGetHandler(req.AttachOpaqueData, req.SchemaName, req.Name, req.AtUnit, req.AtValue)
+	// catalog_table_scan_branches_get — multi-branch (UNION-of-sources) tables.
+	// For non-branch tables it wraps the single scan_function_get result as a
+	// one-branch list, mirroring vgi-python's default implementation, so the
+	// method is always implemented (never triggers a C++ legacy fallback).
+	unaryCatalog[TableScanBranchesGetRequestWire, TableScanBranchesGetResponseWire](w, s, "catalog_table_scan_branches_get",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableScanBranchesGetRequestWire) (TableScanBranchesGetResponseWire, error) {
+			if w.attachScanBranchesGetHandler != nil {
+				result, handled, err := w.attachScanBranchesGetHandler(req.AttachOpaqueData, req.SchemaName, req.Name, req.AtUnit, req.AtValue)
 				if err != nil {
-					return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{
+					return TableScanBranchesGetResponseWire{}, &vgirpc.RpcError{
 						Type:    "ValueError",
 						Message: err.Error(),
 					}
 				}
 				if handled {
-					return buildScanFunctionGetResponse(result)
+					return buildScanBranchesGetResponse(result)
 				}
 			}
-			// Delegate to the handler if set
-			if w.scanFunctionGetHandler != nil {
-				result, err := w.scanFunctionGetHandler(req.SchemaName, req.Name, req.AtUnit, req.AtValue)
-				if err != nil {
-					return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{
-						Type:    "ValueError",
-						Message: err.Error(),
-					}
-				}
-				return buildScanFunctionGetResponse(result)
+			// Default: wrap the single scan_function_get result as one branch.
+			sf, err := w.resolveScanFunction(TableScanFunctionGetRequestWire{
+				AttachOpaqueData:      req.AttachOpaqueData,
+				SchemaName:            req.SchemaName,
+				Name:                  req.Name,
+				AtUnit:                req.AtUnit,
+				AtValue:               req.AtValue,
+				TransactionOpaqueData: req.TransactionOpaqueData,
+			})
+			if err != nil {
+				return TableScanBranchesGetResponseWire{}, err
 			}
-
-			return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{
-				Type:    "NotImplementedError",
-				Message: fmt.Sprintf("table_scan_function_get not implemented for %s.%s", req.SchemaName, req.Name),
-			}
+			return buildScanBranchesGetResponse(&ScanBranchesResult{
+				Branches: []ScanBranch{{
+					FunctionName:        sf.FunctionName,
+					PositionalArguments: sf.PositionalArguments,
+					NamedArguments:      sf.NamedArguments,
+				}},
+				RequiredExtensions: sf.RequiredExtensions,
+			})
 		})
 
 	// catalog_table_comment_set (read-only)
@@ -1788,6 +1800,78 @@ func buildScanFunctionGetResponse(result *ScanFunctionResult) (TableScanFunction
 	return TableScanFunctionGetResponseWire{
 		FunctionName:       result.FunctionName,
 		Arguments:          argBytes,
+		RequiredExtensions: result.RequiredExtensions,
+	}, nil
+}
+
+// resolveScanFunction resolves the scan function backing a catalog table,
+// following the same precedence as catalog_table_scan_function_get: writable
+// catalog, registered function-backed table, attach-aware handler, then plain
+// handler. Returns an RpcError when no scan function is available.
+func (w *Worker) resolveScanFunction(req TableScanFunctionGetRequestWire) (*ScanFunctionResult, error) {
+	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
+		return &ScanFunctionResult{
+			FunctionName: writableScanFunctionName,
+			PositionalArguments: []ScanArg{
+				{Value: req.SchemaName, Type: arrow.BinaryTypes.String},
+				{Value: req.Name, Type: arrow.BinaryTypes.String},
+			},
+		}, nil
+	}
+	slog.Debug("catalog: scan function get", "schema", req.SchemaName, "table", req.Name)
+
+	// Registered catalog table with a backing function (skip when AT params
+	// are present — let the handler deal with time travel).
+	hasAt := req.AtUnit != nil && *req.AtUnit != ""
+	if !hasAt && w.catalog != nil {
+		if si, ok := w.catalog.schemas[req.SchemaName]; ok {
+			for i := range si.tables {
+				if si.tables[i].Name == req.Name && si.tables[i].Function != nil {
+					return w.buildScanResultFromTable(&si.tables[i]), nil
+				}
+			}
+		}
+	}
+
+	// Attach-id-aware handler takes precedence over the plain one.
+	if w.attachScanFunctionGetHandler != nil {
+		result, handled, err := w.attachScanFunctionGetHandler(req.AttachOpaqueData, req.SchemaName, req.Name, req.AtUnit, req.AtValue)
+		if err != nil {
+			return nil, &vgirpc.RpcError{Type: "ValueError", Message: err.Error()}
+		}
+		if handled {
+			return result, nil
+		}
+	}
+	if w.scanFunctionGetHandler != nil {
+		result, err := w.scanFunctionGetHandler(req.SchemaName, req.Name, req.AtUnit, req.AtValue)
+		if err != nil {
+			return nil, &vgirpc.RpcError{Type: "ValueError", Message: err.Error()}
+		}
+		return result, nil
+	}
+
+	return nil, &vgirpc.RpcError{
+		Type:    "NotImplementedError",
+		Message: fmt.Sprintf("table_scan_function_get not implemented for %s.%s", req.SchemaName, req.Name),
+	}
+}
+
+// buildScanBranchesGetResponse serializes each branch to IPC bytes and packs
+// them into the wire response. The branches list must be non-empty per the
+// protocol contract; an empty list is sent through as-is so the C++ extension
+// can surface the "loud at attach" BinderException.
+func buildScanBranchesGetResponse(result *ScanBranchesResult) (TableScanBranchesGetResponseWire, error) {
+	branches := make([][]byte, 0, len(result.Branches))
+	for i := range result.Branches {
+		blob, err := SerializeScanBranch(&result.Branches[i])
+		if err != nil {
+			return TableScanBranchesGetResponseWire{}, fmt.Errorf("serializing branch %d: %w", i, err)
+		}
+		branches = append(branches, blob)
+	}
+	return TableScanBranchesGetResponseWire{
+		Branches:           branches,
 		RequiredExtensions: result.RequiredExtensions,
 	}, nil
 }

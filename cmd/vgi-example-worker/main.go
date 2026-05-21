@@ -59,6 +59,7 @@ func main() {
 		vgi.WithSchemaContentsHandler(schema_reconcile.SchemaContentsHandler),
 		vgi.WithAttachTableGetHandler(schema_reconcile.AttachTableGetHandler),
 		vgi.WithAttachScanFunctionGetHandler(schema_reconcile.AttachScanFunctionGetHandler),
+		vgi.WithAttachScanBranchesGetHandler(multiBranchScanBranchesGet),
 		vgi.WithAttachWriteFunctionGetHandler(schema_reconcile.AttachWriteFunctionGetHandler),
 		vgi.WithSecretTypes(
 			vgi.SecretTypeSpec{
@@ -248,6 +249,50 @@ func main() {
 			{Position: 0, Value: int64(1_000_000), Type: arrow.PrimitiveTypes.Int64},
 		},
 	})
+
+	// Multi-branch (scan-branches) tables. Their physical sources are resolved
+	// by multiBranchScanBranchesGet via catalog_table_scan_branches_get.
+	{
+		nCol := arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int64}}, nil)
+		w.RegisterCatalogTable("data", vgi.CatalogTable{
+			Name:    "multi_branch_numbers",
+			Columns: nCol,
+			Comment: "Multi-branch: UNION of sequence(50) + sequence(50) — used by multi_branch_scan.test",
+		})
+		w.RegisterCatalogTable("data", vgi.CatalogTable{
+			Name:    "multi_branch_filtered_numbers",
+			Columns: nCol,
+			Comment: "Multi-branch with complementary branch_filters — exercises pruning",
+		})
+		w.RegisterCatalogTable("data", vgi.CatalogTable{
+			Name:    "multi_branch_hetero",
+			Columns: nCol,
+			Comment: "Multi-branch: sequence(50) + read_parquet — used by multi_branch_heterogeneous.test",
+		})
+		w.RegisterCatalogTable("data", vgi.CatalogTable{
+			Name:    "multi_branch_nopushdown",
+			Columns: nCol,
+			Comment: "Multi-branch: VGI + read_csv — used by multi_branch_pushdown_incapable.test",
+		})
+		w.RegisterCatalogTable("data", vgi.CatalogTable{
+			Name:    "multi_branch_empty",
+			Columns: nCol,
+			Comment: "Multi-branch: worker returns empty branches list — used by multi_branch_empty_branches.test",
+		})
+		w.RegisterCatalogTable("data", vgi.CatalogTable{
+			Name:    "multi_branch_two_writable",
+			Columns: nCol,
+			Comment: "Multi-branch with two writable=True arms — used by multi_branch_two_writable.test",
+		})
+		w.RegisterCatalogTable("data", vgi.CatalogTable{
+			Name: "multi_branch_recon",
+			Columns: arrow.NewSchema([]arrow.Field{
+				{Name: "a", Type: arrow.PrimitiveTypes.Int64},
+				{Name: "b", Type: arrow.PrimitiveTypes.Int64},
+			}, nil),
+			Comment: "Multi-branch: column reconciliation — used by multi_branch_reconciliation.test",
+		})
+	}
 
 	// Function-backed table over the no-arg ten_thousand function. Used by
 	// inlined_scan_function.test / inlined_cardinality.test / catalog/zero_count_bypass.test
@@ -705,6 +750,63 @@ func main() {
 
 func boolPtr(b bool) *bool    { return &b }
 func int64Ptr(n int64) *int64 { return &n }
+
+func strPtr(s string) *string { return &s }
+
+// multiBranchScanBranchesGet resolves the physical sources for the
+// multi_branch_* fixture tables. It mirrors vgi-python's
+// ExampleCatalog.table_scan_branches_get. Returns (nil, false) for any other
+// table so the C++ extension falls back to catalog_table_scan_function_get.
+func multiBranchScanBranchesGet(_ []byte, schemaName, name string, _, _ *string) (*vgi.ScanBranchesResult, bool, error) {
+	if !strings.EqualFold(schemaName, "data") {
+		return nil, false, nil
+	}
+	seq := func(n int64) vgi.ScanBranch {
+		return vgi.ScanBranch{
+			FunctionName:        "sequence",
+			PositionalArguments: []vgi.ScanArg{{Value: n, Type: arrow.PrimitiveTypes.Int64}},
+		}
+	}
+	readParquet := func(path string) vgi.ScanBranch {
+		return vgi.ScanBranch{
+			FunctionName:        "read_parquet",
+			PositionalArguments: []vgi.ScanArg{{Value: path, Type: arrow.BinaryTypes.String}},
+		}
+	}
+	switch strings.ToLower(name) {
+	case "multi_branch_numbers":
+		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{seq(50), seq(50)}}, true, nil
+	case "multi_branch_filtered_numbers":
+		a, b := seq(100), seq(100)
+		a.BranchFilter = strPtr("n < 50")
+		b.BranchFilter = strPtr("n >= 50")
+		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{a, b}}, true, nil
+	case "multi_branch_hetero":
+		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{
+			seq(50), readParquet("/tmp/vgi_hetero_branch.parquet"),
+		}}, true, nil
+	case "multi_branch_nopushdown":
+		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{
+			seq(50),
+			{FunctionName: "read_csv_auto", PositionalArguments: []vgi.ScanArg{{Value: "/tmp/vgi_nopushdown_branch.csv", Type: arrow.BinaryTypes.String}}},
+		}}, true, nil
+	case "multi_branch_recon":
+		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{
+			readParquet("/tmp/vgi_recon_a_b.parquet"),
+			readParquet("/tmp/vgi_recon_b_a.parquet"),
+			readParquet("/tmp/vgi_recon_a_only.parquet"),
+		}}, true, nil
+	case "multi_branch_empty":
+		// Intentionally empty — exercises the C++ "loud at attach" rejection.
+		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{}}, true, nil
+	case "multi_branch_two_writable":
+		a, b := seq(10), seq(10)
+		a.Writable = true
+		b.Writable = true
+		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{a, b}}, true, nil
+	}
+	return nil, false, nil
+}
 
 // wkbPoint encodes a 2D WKB point (little-endian) for stats min/max values
 // on geoarrow.wkb columns.

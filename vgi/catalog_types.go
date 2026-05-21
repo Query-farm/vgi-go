@@ -48,8 +48,12 @@ type FunctionInfo struct {
 	SupportsWindow             bool
 	StreamingPartitioned       bool
 	HasFinalize                bool
-	RequiredSettings           []string
-	RequiredSecrets            []SecretRequirement
+	// Table-buffering (sink/source) ordering hints. Default false.
+	SourceOrderDependent    bool
+	SinkOrderDependent      bool
+	RequiresInputBatchIndex bool
+	RequiredSettings        []string
+	RequiredSecrets         []SecretRequirement
 }
 
 var dictType = &arrow.DictionaryType{
@@ -291,6 +295,21 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	defer hfBuilder.Release()
 	hfBuilder.Append(info.HasFinalize)
 
+	// source_order_dependent
+	sodBuilder := array.NewBooleanBuilder(mem)
+	defer sodBuilder.Release()
+	sodBuilder.Append(info.SourceOrderDependent)
+
+	// sink_order_dependent
+	sinkodBuilder := array.NewBooleanBuilder(mem)
+	defer sinkodBuilder.Release()
+	sinkodBuilder.Append(info.SinkOrderDependent)
+
+	// requires_input_batch_index
+	ribiBuilder := array.NewBooleanBuilder(mem)
+	defer ribiBuilder.Release()
+	ribiBuilder.Append(info.RequiresInputBatchIndex)
+
 	// required_settings
 	reqSettingsBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
 	defer reqSettingsBuilder.Release()
@@ -346,6 +365,9 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		swBuilder.NewArray(),
 		spartBuilder.NewArray(),
 		hfBuilder.NewArray(),
+		sodBuilder.NewArray(),
+		sinkodBuilder.NewArray(),
+		ribiBuilder.NewArray(),
 		reqSettingsBuilder.NewArray(),
 		rsListBuilder.NewArray(),
 	}

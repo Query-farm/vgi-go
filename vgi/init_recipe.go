@@ -9,7 +9,7 @@ package vgi
 // rehydration path can replay the same bind/init logic without the
 // original wire message.
 type InitRecipe struct {
-	BindCallIPC       []byte
+	BindCall          BindRequestWire
 	OutputSchemaIPC   []byte
 	FunctionName      string
 	FunctionType      FunctionType
