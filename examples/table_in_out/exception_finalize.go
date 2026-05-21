@@ -15,7 +15,7 @@ import (
 // ExceptionFinalizeFunction raises an exception during finalize.
 type ExceptionFinalizeFunction struct{}
 
-var _ vgi.TypedTableInOutFunc[sumAllColumnsState] = (*ExceptionFinalizeFunction)(nil)
+var _ vgi.TypedTableInOutFunc[struct{}] = (*ExceptionFinalizeFunction)(nil)
 
 func (f *ExceptionFinalizeFunction) Name() string { return "exception_finalize" }
 
@@ -35,19 +35,19 @@ func (f *ExceptionFinalizeFunction) OnBind(params *vgi.BindParams) (*vgi.BindRes
 	return sumColumnsOnBind(params)
 }
 
-func (f *ExceptionFinalizeFunction) NewState(params *vgi.ProcessParams) (*sumAllColumnsState, error) {
-	return (&SumAllColumnsFunction{}).NewState(params)
+func (f *ExceptionFinalizeFunction) NewState(params *vgi.ProcessParams) (*struct{}, error) {
+	return &struct{}{}, nil
 }
 
-func (f *ExceptionFinalizeFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *sumAllColumnsState, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
-	return (&SumAllColumnsFunction{}).Process(ctx, params, state, batch, out)
+func (f *ExceptionFinalizeFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *struct{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
+	return out.Emit(vgi.EmptyBatch(params.OutputSchema))
 }
 
-func (f *ExceptionFinalizeFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *sumAllColumnsState) ([]arrow.RecordBatch, error) {
+func (f *ExceptionFinalizeFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *struct{}) ([]arrow.RecordBatch, error) {
 	return nil, fmt.Errorf("Intentional exception during finalize()")
 }
 
 // NewExceptionFinalizeFunction creates an ExceptionFinalizeFunction wrapped for registration.
 func NewExceptionFinalizeFunction() vgi.TableInOutFunction {
-	return vgi.AsTableInOutFunction[sumAllColumnsState](&ExceptionFinalizeFunction{})
+	return vgi.AsTableInOutFunction[struct{}](&ExceptionFinalizeFunction{})
 }

@@ -827,16 +827,21 @@ func (w *Worker) handleCardinality(ctx context.Context, callCtx *vgirpc.CallCont
 		return TableCardinality{}, err
 	}
 
-	tableFn, ok := fn.(TableFunctionWithCardinality)
-	if !ok {
-		return TableCardinality{Estimate: -1, Max: -1}, nil
+	switch cf := fn.(type) {
+	case TableFunctionWithCardinality:
+		card, err := cf.Cardinality(bindParams)
+		if err != nil {
+			return TableCardinality{}, err
+		}
+		return *card, nil
+	case TableBufferingFunctionWithCardinality:
+		card, err := cf.Cardinality(bindParams)
+		if err != nil {
+			return TableCardinality{}, err
+		}
+		return *card, nil
 	}
-
-	card, err := tableFn.Cardinality(bindParams)
-	if err != nil {
-		return TableCardinality{}, err
-	}
-	return *card, nil
+	return TableCardinality{Estimate: -1, Max: -1}, nil
 }
 
 // ---------------------------------------------------------------------------

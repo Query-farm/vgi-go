@@ -239,7 +239,7 @@ func main() {
 	w.RegisterTableInOut(table_in_out.NewFilterBySettingFunction())
 	w.RegisterTableInOut(table_in_out.NewRepeatInputsFunction())
 	w.RegisterTableInOut(table_in_out.NewSlowCancellableInOutFunction())
-	w.RegisterTableInOut(table_in_out.NewSumAllColumnsFunction())
+	w.RegisterTableBuffering(&table_in_out.SumAllColumnsFunction{})
 
 	// schema_reconcile fixture: 3 table-in-outs (insert/update/delete) + 1
 	// table function (scan), all scoped to the schema_reconcile catalog so
