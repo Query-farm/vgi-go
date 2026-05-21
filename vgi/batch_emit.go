@@ -60,26 +60,17 @@ type PartitionValue struct {
 }
 
 // EmitPartitioned emits a batch annotated with vgi_partition_values for a
-// partition-aware table function. Partition columns are the batch fields
-// annotated via PartitionField. When explicit is nil, min/max are auto-extracted
-// from each partition column in the batch; otherwise explicit overrides are
-// used. Mirrors vgi-python's _merge_partition_values contract, including the
-// SINGLE_VALUE distinct-value check and the annotated-but-absent error.
-func EmitPartitioned(out *vgirpc.OutputCollector, batch arrow.RecordBatch, kind PartitionKind, explicit map[string]PartitionValue) error {
-	schema := batch.Schema()
-	partFields := make([]arrow.Field, 0)
-	partIdx := make([]int, 0)
-	for i, f := range schema.Fields() {
-		if isPartitionField(f) {
-			partFields = append(partFields, f)
-			partIdx = append(partIdx, i)
+// partition-aware table function. partitionFields are the declared partition
+// columns (build them with PartitionField). For each, the (min, max) pair comes
+// from explicit when present, else is auto-extracted from the same-named column
+// in the emitted batch. Mirrors vgi-python's _merge_partition_values contract:
+// the SINGLE_VALUE distinct-value check, the "requires partition-annotated
+// fields" guard, and the annotated-but-absent error.
+func EmitPartitioned(out *vgirpc.OutputCollector, batch arrow.RecordBatch, partitionFields []arrow.Field, kind PartitionKind, explicit map[string]PartitionValue) error {
+	if len(partitionFields) == 0 {
+		if len(explicit) > 0 {
+			return fmt.Errorf("EmitPartitioned requires partition-annotated fields, but none were declared")
 		}
-	}
-	if len(explicit) > 0 && len(partFields) == 0 {
-		return fmt.Errorf("partition_values supplied but the output schema has no partition-annotated fields")
-	}
-	if len(partFields) == 0 {
-		// Nothing to annotate; emit plain.
 		return out.Emit(batch)
 	}
 	// Empty batches carry no partition metadata.
@@ -88,33 +79,33 @@ func EmitPartitioned(out *vgirpc.OutputCollector, batch arrow.RecordBatch, kind 
 	}
 
 	mem := memory.NewGoAllocator()
-	builders := make([]array.Builder, len(partFields))
-	for i, f := range partFields {
+	builders := make([]array.Builder, len(partitionFields))
+	releaseBuilders := func() {
+		for _, b := range builders {
+			if b != nil {
+				b.Release()
+			}
+		}
+	}
+	for i, f := range partitionFields {
 		b := array.NewBuilder(mem, f.Type)
 		builders[i] = b
 		var minV, maxV any
-		if explicit != nil {
-			pv, ok := explicit[f.Name]
-			if !ok {
-				for _, bb := range builders {
-					bb.Release()
-				}
-				return fmt.Errorf("partition column %q is partition-annotated but absent from partition_values", f.Name)
-			}
+		if pv, ok := explicit[f.Name]; ok {
 			minV, maxV = pv.Min, pv.Max
 		} else {
-			col := batch.Column(partIdx[i])
-			mn, mx, distinct, err := columnMinMax(col)
+			idx := batch.Schema().FieldIndices(f.Name)
+			if len(idx) == 0 {
+				releaseBuilders()
+				return fmt.Errorf("partition column %q is partition-annotated but absent from emitted batch; pass partition_values", f.Name)
+			}
+			mn, mx, distinct, err := columnMinMax(batch.Column(idx[0]))
 			if err != nil {
-				for _, bb := range builders {
-					bb.Release()
-				}
+				releaseBuilders()
 				return fmt.Errorf("partition column %q: %w", f.Name, err)
 			}
 			if kind == PartitionKindSingleValuePartitions && distinct > 1 {
-				for _, bb := range builders {
-					bb.Release()
-				}
+				releaseBuilders()
 				return fmt.Errorf("SINGLE_VALUE_PARTITIONS function emitted a chunk with %d distinct values in partition column %q (expected exactly 1)", distinct, f.Name)
 			}
 			minV, maxV = mn, mx
@@ -133,7 +124,7 @@ func EmitPartitioned(out *vgirpc.OutputCollector, batch arrow.RecordBatch, kind 
 			c.Release()
 		}
 	}()
-	pvSchema := arrow.NewSchema(partFields, nil)
+	pvSchema := arrow.NewSchema(partitionFields, nil)
 	pvBatch := array.NewRecordBatch(pvSchema, cols, 2)
 	defer pvBatch.Release()
 
