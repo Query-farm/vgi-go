@@ -223,6 +223,15 @@ func main() {
 
 	// Table-in-out functions
 	w.RegisterTableBuffering(&table_in_out.BufferInputFunction{})
+	w.RegisterTableBuffering(&table_in_out.OrderedBufferInputFunction{})
+	w.RegisterTableBuffering(&table_in_out.BatchIndexBufferInputFunction{})
+	w.RegisterTableBuffering(&table_in_out.OrderedSourceFunction{})
+	w.RegisterTableBuffering(&table_in_out.LargeStateFunction{})
+	w.RegisterTableBuffering(&table_in_out.CrashOnProcessFunction{})
+	w.RegisterTableBuffering(&table_in_out.CrashOnCombineFunction{})
+	w.RegisterTableBuffering(&table_in_out.CrashOnFinalizeFunction{})
+	w.RegisterTableBuffering(&table_in_out.HangOnProcessFunction{})
+	w.RegisterTableBuffering(&table_in_out.SlowCancellableBufferingFunction{})
 	w.RegisterTableInOut(table_in_out.NewDistributedSumFunction())
 	w.RegisterTableInOut(table_in_out.NewEchoFunction())
 	w.RegisterTableInOut(table_in_out.NewExceptionFinalizeFunction())
