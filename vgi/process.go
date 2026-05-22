@@ -53,4 +53,17 @@ type ProcessParams struct {
 	// table_buffering_process call when the function declares
 	// RequiresInputBatchIndex. Nil otherwise.
 	BatchIndex *int64
+	// clientLog forwards an in-band log message to the client (surfaced in
+	// duckdb_logs() with type='VGI'). Set by the framework on the unary
+	// table-buffering RPCs, which have no streaming OutputCollector. Nil when
+	// in-band logging is unavailable.
+	clientLog func(level vgirpc.LogLevel, msg string)
+}
+
+// ClientLog emits an in-band log message to the client, if the framework wired
+// a logging sink for this call (e.g. from table_buffering_process/combine).
+func (p *ProcessParams) ClientLog(level vgirpc.LogLevel, msg string) {
+	if p.clientLog != nil {
+		p.clientLog(level, msg)
+	}
 }

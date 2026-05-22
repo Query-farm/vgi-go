@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Query-farm/vgi-go/vgi"
+	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 )
@@ -117,6 +118,9 @@ func addBatchSums(schema *arrow.Schema, batch arrow.RecordBatch, intSums map[str
 }
 
 func (f *SumAllColumnsFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) ([]byte, error) {
+	if vgi.OptionalBool(params.Args, "logging", false) {
+		params.ClientLog(vgirpc.LogInfo, fmt.Sprintf("Processing batch with %d rows", batch.NumRows()))
+	}
 	intSums, floatSums := zeroSums(params.OutputSchema)
 	addBatchSums(params.OutputSchema, batch, intSums, floatSums)
 	data, err := vgi.SerializeRecordBatch(buildSumBatch(params.OutputSchema, intSums, floatSums))
@@ -130,6 +134,9 @@ func (f *SumAllColumnsFunction) Process(ctx context.Context, params *vgi.Process
 }
 
 func (f *SumAllColumnsFunction) Combine(ctx context.Context, params *vgi.ProcessParams, stateIDs [][]byte) ([][]byte, error) {
+	if vgi.OptionalBool(params.Args, "logging", false) {
+		params.ClientLog(vgirpc.LogInfo, fmt.Sprintf("Combining %d state_ids", len(stateIDs)))
+	}
 	intSums, floatSums := zeroSums(params.OutputSchema)
 	entries, err := params.Storage.StateLogScan(partialKey, -1, 0)
 	if err != nil {

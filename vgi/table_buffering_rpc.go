@@ -107,6 +107,7 @@ func (w *Worker) handleTableBufferingProcess(ctx context.Context, cc *vgirpc.Cal
 		return TableBufferingProcessResponseWire{}, err
 	}
 	params.Auth = cc.Auth
+	params.clientLog = func(level vgirpc.LogLevel, msg string) { cc.ClientLog(level, msg) }
 	if req.BatchIndex != nil {
 		params.BatchIndex = req.BatchIndex
 	}
@@ -128,6 +129,7 @@ func (w *Worker) handleTableBufferingCombine(ctx context.Context, cc *vgirpc.Cal
 		return TableBufferingCombineResponseWire{}, err
 	}
 	params.Auth = cc.Auth
+	params.clientLog = func(level vgirpc.LogLevel, msg string) { cc.ClientLog(level, msg) }
 	finalizeIDs, err := fn.Combine(ctx, params, req.StateIDs)
 	if err != nil {
 		return TableBufferingCombineResponseWire{}, err
