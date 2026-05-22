@@ -1731,6 +1731,17 @@ func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]b
 		info.ScanFunction = sfBytes
 	}
 
+	// Inline the bind result for static-schema tables so the C++ extension
+	// skips the per-scan bind RPC. Use the post-metadata columns so the inlined
+	// schema matches what a real bind would have produced.
+	if ct.InlineBind && columns != nil {
+		brBytes, err := serializeInlineBindResult(columns)
+		if err != nil {
+			return nil, fmt.Errorf("inlining bind_result for table %s: %w", ct.Name, err)
+		}
+		info.BindResult = brBytes
+	}
+
 	return SerializeTableInfo(info)
 }
 

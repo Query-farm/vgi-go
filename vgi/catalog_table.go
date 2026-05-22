@@ -75,6 +75,11 @@ type CatalogTable struct {
 	// duckdb_tables().tags. Useful for category/coverage/example_queries
 	// metadata.
 	Tags map[string]string
+	// InlineBind, when true and the table's columns are statically known,
+	// inlines the bind result onto TableInfo.bind_result so the C++ extension
+	// skips the per-scan bind RPC. Safe only for tables whose output schema is
+	// static (the resolved Columns schema is authoritative for every scan).
+	InlineBind bool
 }
 
 // ForeignKeyConstraint describes a foreign key relationship.

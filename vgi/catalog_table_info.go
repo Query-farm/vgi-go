@@ -276,3 +276,52 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
+
+// serializeInlineBindResult produces the IPC bytes for an inlined bind result
+// carrying a static output schema. It mirrors the payload a regular bind RPC
+// would return (vgi-python's BindResponse(output_schema=...).serialize_to_bytes()):
+// the given schema in output_schema, null opaque_data, and empty secret-lookup
+// lists. Set on TableInfo.BindResult so the C++ extension threads it straight
+// into bind_data and skips the per-scan bind RPC.
+func serializeInlineBindResult(schema *arrow.Schema) ([]byte, error) {
+	schemaBytes, err := SerializeSchema(schema)
+	if err != nil {
+		return nil, err
+	}
+
+	mem := memory.NewGoAllocator()
+
+	outputBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	defer outputBuilder.Release()
+	outputBuilder.Append(schemaBytes)
+
+	opaqueBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	defer opaqueBuilder.Release()
+	opaqueBuilder.AppendNull()
+
+	// Three empty (non-null) string lists: lookup_secret_types/scopes/names.
+	emptyList := func() arrow.Array {
+		lb := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+		defer lb.Release()
+		lb.Append(true)
+		return lb.NewArray()
+	}
+
+	cols := []arrow.Array{
+		outputBuilder.NewArray(),
+		opaqueBuilder.NewArray(),
+		emptyList(),
+		emptyList(),
+		emptyList(),
+	}
+	defer func() {
+		for _, c := range cols {
+			c.Release()
+		}
+	}()
+
+	batch := array.NewRecordBatch(generated.BindResultSchema, cols, 1)
+	defer batch.Release()
+
+	return SerializeRecordBatch(batch)
+}
