@@ -98,7 +98,7 @@ func (h *storageCleanupHook) OnDispatchEnd(ctx context.Context, token vgirpc.Hoo
 		if !reused {
 			if val, loaded := h.worker.storages.LoadAndDelete(key); loaded {
 				val.(*ExecutionStorage).Cleanup()
-				slog.Debug("storage: cleaned up execution", "key", key)
+				LogWorker.Debug("storage: cleaned up execution", "key", key)
 			}
 		}
 	}
@@ -337,6 +337,9 @@ type Worker struct {
 	attachOptions                 []AttachOptionSpec
 	logLevel                      slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
 	logHandler                    slog.Handler // nil means default TextHandler to stderr
+	logFormat                     LogFormat    // empty means text
+	logLoggers                    []string     // empty means all known loggers
+	logConfigured                 bool         // true once any logging WorkerOption fires
 	httpSigningKey                []byte       // optional explicit HMAC key for HTTP state tokens
 }
 
@@ -560,6 +563,26 @@ func WithAttachOptions(opts ...AttachOptionSpec) WorkerOption {
 func WithLogLevel(level slog.Level) WorkerOption {
 	return func(w *Worker) {
 		w.logLevel = level
+		w.logConfigured = true
+	}
+}
+
+// WithLogFormat selects the stderr log format. Default is text.
+// Ignored when WithLogHandler is also set (the custom handler wins).
+func WithLogFormat(format LogFormat) WorkerOption {
+	return func(w *Worker) {
+		w.logFormat = format
+		w.logConfigured = true
+	}
+}
+
+// WithLoggers restricts which named loggers emit records. Use to silence
+// noisy subsystems or focus on one (e.g. WithLoggers("vgi.catalog")).
+// Empty means all known loggers. Unknown names log a warning but are honored.
+func WithLoggers(names ...string) WorkerOption {
+	return func(w *Worker) {
+		w.logLoggers = append(w.logLoggers, names...)
+		w.logConfigured = true
 	}
 }
 
@@ -577,10 +600,13 @@ func WithHttpSigningKey(key []byte) WorkerOption {
 }
 
 // WithLogHandler sets a custom slog.Handler for all logging.
-// When set, WithLogLevel is ignored (the handler controls its own level).
+// When set, WithLogLevel/WithLogFormat/WithLoggers are ignored — the handler
+// controls its own level and formatting. The package's named loggers are
+// re-bound to the supplied handler at worker startup.
 func WithLogHandler(h slog.Handler) WorkerOption {
 	return func(w *Worker) {
 		w.logHandler = h
+		w.logConfigured = true
 	}
 }
 
@@ -753,12 +779,29 @@ const (
 
 func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 	// Configure structured logging.
-	// logLevel zero value is slog.LevelInfo (0) — Info by default is intentional.
-	handler := w.logHandler
-	if handler == nil {
-		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: w.logLevel})
+	// If a custom slog.Handler was supplied, install it directly — the caller
+	// owns level/format. Otherwise (re)configure the named-logger registry
+	// from the WorkerOptions. When no logging option fired, leave whatever
+	// ConfigureLogging (or the caller) installed alone, so main() can drive
+	// the configuration via ParseLoggingFlags.
+	if w.logHandler != nil {
+		loggerRegistryLock.Lock()
+		root := slog.New(w.logHandler)
+		slog.SetDefault(root)
+		Log = root
+		LogWorker = root.With("logger", LoggerNameWorker)
+		LogCatalog = root.With("logger", LoggerNameCatalog)
+		LogRPC = root.With("logger", LoggerNameRPC)
+		LogClient = root.With("logger", LoggerNameClient)
+		LogFilterPushdown = root.With("logger", LoggerNameFilterPushdown)
+		loggerRegistryLock.Unlock()
+	} else if w.logConfigured {
+		ConfigureLogging(LoggingConfig{
+			Level:   w.logLevel,
+			Format:  w.logFormat,
+			Loggers: w.logLoggers,
+		})
 	}
-	slog.SetDefault(slog.New(handler))
 
 	// Build catalog from registered functions
 	w.catalog = NewDefaultReadOnlyCatalog(w.catalogName, w)

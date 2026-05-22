@@ -1,0 +1,42 @@
+# golangci-lint configuration for vgi-go.
+# Run: make lint
+#
+# Keep this conservative — enable rules that catch real bugs and dead code,
+# avoid noisy/stylistic rules until contributors opt in.
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.25"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+linters-settings:
+  staticcheck:
+    checks:
+      - "all"
+      # Disabled: ST1000 ("missing package comment") fires on every example
+      # subpackage; we keep package comments on the public SDK only.
+      - "-ST1000"
+      # Disabled: ST1003 ("var should be in camelCase") flags Arrow-style
+      # snake_case wire field names used in serialized payloads.
+      - "-ST1003"
+
+issues:
+  # Show every issue per file (default: 3) — the suite is small enough.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # Generated code — leave alone.
+    - path: vgi/generated/
+      linters: [errcheck, govet, ineffassign, staticcheck, unused]
+    # Tests often defer Close/Cleanup without checking the error.
+    - path: _test\.go
+      linters: [errcheck]

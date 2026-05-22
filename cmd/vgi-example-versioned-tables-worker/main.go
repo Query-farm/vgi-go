@@ -68,7 +68,11 @@ var versionTables = map[string]map[string]versionedTable{
 
 func main() {
 	httpMode := flag.Bool("http", false, "Run as HTTP server instead of stdio")
+	logFlags := vgi.RegisterLoggingFlags(flag.CommandLine)
 	flag.Parse()
+	if err := logFlags.Apply(); err != nil {
+		log.Fatalf("logging flags: %v", err)
+	}
 
 	implDefault := defaultImplementationVersion
 	dvs := dataVersionSpec

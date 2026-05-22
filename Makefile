@@ -12,6 +12,8 @@
 #   make test-all               Run both stdio and HTTP tests
 #   make fmt                    Format all Go source files
 #   make vet                    Run go vet static analysis
+#   make lint                   Run golangci-lint (requires golangci-lint in PATH)
+#   make test-unit              Run pure-Go unit tests with coverage
 #   make clean                  Remove the built binary
 
 # Output binary name.
@@ -63,7 +65,7 @@ HTTP_TEST_TARGETS := $(patsubst $(TEST_DIR)/%.test,test-http/%,$(TEST_FILES))
 # Tests expected to fail over HTTP (currently none)
 HTTP_XFAIL_TESTS :=
 
-.PHONY: build clean fmt vet test test-single test-http test-all
+.PHONY: build clean fmt vet lint test test-unit test-single test-http test-all new-worker
 
 # Compile the example worker binaries.
 build:
@@ -83,6 +85,35 @@ fmt:
 # Run go vet across all packages.
 vet:
 	go vet ./...
+
+# Run golangci-lint (config: .golangci.yml).
+lint:
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+		echo "golangci-lint not found. Install: https://golangci-lint.run/usage/install/"; \
+		exit 1; \
+	}
+	golangci-lint run ./...
+
+# Pure-Go unit tests with coverage. Writes coverage.out and prints a summary.
+test-unit:
+	go test -race -coverprofile=coverage.out -covermode=atomic ./...
+	@go tool cover -func=coverage.out | tail -1
+
+# Scaffold a new VGI worker module from templates/worker. Usage:
+#   make new-worker NAME=myproj            # creates ./myproj/
+#   make new-worker NAME=myproj DIR=../    # creates ../myproj/
+DIR ?= .
+new-worker:
+	@test -n "$(NAME)" || { echo "usage: make new-worker NAME=<module-name> [DIR=<parent>]"; exit 2; }
+	@dest="$(DIR)/$(NAME)"; \
+	if [ -e "$$dest" ]; then echo "$$dest already exists"; exit 1; fi; \
+	mkdir -p "$$dest"; \
+	for f in templates/worker/*.tmpl; do \
+		out="$$dest/$$(basename $${f%.tmpl})"; \
+		sed "s/__NAME__/$(NAME)/g" "$$f" > "$$out"; \
+	done; \
+	echo "scaffolded $$dest"; \
+	echo "next: cd $$dest && go mod tidy && go build ./..."
 
 # Run the full integration test suite.
 # Rebuilds the workers first to ensure tests use the latest code.

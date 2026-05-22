@@ -15,9 +15,13 @@ import (
 // Returns the input value if not null, or -5000 if null.
 type NullHandlingFunction struct{}
 
-func (f *NullHandlingFunction) Name() string { return "null_handling" }
+type nullHandlingArgs struct {
+	Value int64 `vgi:"pos=0,const=false,doc=Integer value to process"`
+}
 
-func (f *NullHandlingFunction) Metadata() vgi.FunctionMetadata {
+func (*NullHandlingFunction) Name() string { return "null_handling" }
+
+func (*NullHandlingFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description:  "Returns value or -5000 if null",
 		Stability:    vgi.StabilityConsistent,
@@ -26,17 +30,11 @@ func (f *NullHandlingFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
-func (f *NullHandlingFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "int64", Doc: "Integer value to process"},
-	}
-}
-
-func (f *NullHandlingFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+func (*NullHandlingFunction) OnBindTyped(_ *nullHandlingArgs, _ *vgi.BindParams) (*vgi.BindResponse, error) {
 	return vgi.BindResult(arrow.PrimitiveTypes.Int64)
 }
 
-func (f *NullHandlingFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+func (*NullHandlingFunction) ProcessTyped(_ context.Context, _ *nullHandlingArgs, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 	return vgi.MapColumnCustomNulls(params, batch, 0, array.NewInt64Builder,
 		func(col arrow.Array, i int) int64 {
 			if col.IsNull(i) {
@@ -44,4 +42,9 @@ func (f *NullHandlingFunction) Process(ctx context.Context, params *vgi.ProcessP
 			}
 			return vgi.GetInt64Value(col, i)
 		})
+}
+
+// NewNullHandling returns the registration-ready ScalarFunction.
+func NewNullHandling() vgi.ScalarFunction {
+	return vgi.AsScalarFunction[nullHandlingArgs](&NullHandlingFunction{})
 }

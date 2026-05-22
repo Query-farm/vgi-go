@@ -13,35 +13,38 @@ import (
 // AddValuesFunction adds two numeric values together.
 type AddValuesFunction struct{}
 
-func (f *AddValuesFunction) Name() string { return "add_values" }
+type addValuesArgs struct {
+	Col1 arrow.Array `vgi:"pos=0,const=false,bound=addable,doc=First numeric value"`
+	Col2 arrow.Array `vgi:"pos=1,const=false,bound=addable,doc=Second numeric value"`
+}
 
-func (f *AddValuesFunction) Metadata() vgi.FunctionMetadata {
+func (*AddValuesFunction) Name() string { return "add_values" }
+
+func (*AddValuesFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Adds two numeric values",
 		Stability:   vgi.StabilityConsistent,
 	}
 }
 
-func (f *AddValuesFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "col1", Position: 0, ArrowType: "any", Doc: "First numeric value", TypeBound: []vgi.TypeBoundPredicate{vgi.IsAddableType}},
-		{Name: "col2", Position: 1, ArrowType: "any", Doc: "Second numeric value", TypeBound: []vgi.TypeBoundPredicate{vgi.IsAddableType}},
-	}
-}
-
-func (f *AddValuesFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+func (*AddValuesFunction) OnBindTyped(_ *addValuesArgs, params *vgi.BindParams) (*vgi.BindResponse, error) {
 	return vgi.BindResultFromInputs(params, []int{0, 1}, arrow.PrimitiveTypes.Int64,
 		func(types []arrow.DataType) arrow.DataType {
 			return vgi.CommonTypeForAddition(types[0], types[1])
 		})
 }
 
-func (f *AddValuesFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+func (*AddValuesFunction) ProcessTyped(_ context.Context, args *addValuesArgs, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 	return vgi.NumericDispatch(params, batch,
-		func(cols []arrow.Array, i int) int64 {
-			return vgi.GetInt64Value(cols[0], i) + vgi.GetInt64Value(cols[1], i)
+		func(_ []arrow.Array, i int) int64 {
+			return vgi.GetInt64Value(args.Col1, i) + vgi.GetInt64Value(args.Col2, i)
 		},
-		func(cols []arrow.Array, i int) float64 {
-			return vgi.GetFloat64Value(cols[0], i) + vgi.GetFloat64Value(cols[1], i)
+		func(_ []arrow.Array, i int) float64 {
+			return vgi.GetFloat64Value(args.Col1, i) + vgi.GetFloat64Value(args.Col2, i)
 		})
+}
+
+// NewAddValues returns the registration-ready ScalarFunction.
+func NewAddValues() vgi.ScalarFunction {
+	return vgi.AsScalarFunction[addValuesArgs](&AddValuesFunction{})
 }

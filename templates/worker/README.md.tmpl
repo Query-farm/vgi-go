@@ -1,0 +1,37 @@
+# __NAME__
+
+A VGI worker scaffolded with `make new-worker`. It registers one scalar
+function, `__NAME___greet`, so you can validate the end-to-end pipeline
+before adding more.
+
+## Build and try it
+
+```bash
+go mod tidy
+go build -o __NAME__ .
+```
+
+Then in DuckDB:
+
+```sql
+LOAD vgi;
+ATTACH '__NAME__:./__NAME__' AS __NAME__;
+SELECT __NAME__.__NAME___greet('world');
+-- => 'hello, world!'
+```
+
+## Add a function
+
+Each function needs: an args struct (with `vgi:"..."` tags), `Name()`,
+`Metadata()`, `OnBindTyped`, and `ProcessTyped`. Wrap it with
+`vgi.AsScalarFunction[args](&Impl{})` and pass to `w.RegisterScalar`.
+
+For table-shaped functions see `vgi.TypedTableFunc` + `vgi.AsTableFunction`
+in the upstream examples at
+<https://github.com/Query-farm/vgi-go/tree/main/examples>.
+
+## Logging
+
+The scaffold wires `vgi.RegisterLoggingFlags`, so you can pass
+`--log-level=debug`, `--log-format=json`, `--log-logger=vgi.rpc`, or set
+`VGI_WORKER_DEBUG=1`.

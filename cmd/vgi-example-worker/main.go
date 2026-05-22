@@ -13,15 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Query-farm/vgi-go/examples/aggregate"
-	"github.com/Query-farm/vgi-go/examples/scalar"
+	"github.com/Query-farm/vgi-go/examples/all"
 	"github.com/Query-farm/vgi-go/examples/schema_reconcile"
 	"github.com/Query-farm/vgi-go/examples/table"
-	table_in_out "github.com/Query-farm/vgi-go/examples/table_in_out"
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-go/vgi/storage/resolve"
-	"github.com/Query-farm/vgi-rpc/vgirpc"
-	"github.com/Query-farm/vgi-rpc/vgirpc/jwtauth"
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
@@ -34,10 +30,21 @@ func main() {
 	// socket/stdio transports, so it is currently a no-op here.
 	flag.Bool("describe", true, "Enable description pages (accepted for launcher compatibility)")
 	flag.Bool("no-describe", false, "Disable description pages (accepted for launcher compatibility)")
-	// The launcher varies a worker's argv (e.g. --threaded, --quiet, --debug) to
+	logFlags := vgi.RegisterLoggingFlags(flag.CommandLine)
+	// The launcher varies a worker's argv (e.g. --threaded, --quiet) to
 	// produce distinct cache keys for the same binary; tolerate unknown flags
-	// rather than failing to start. Only flags we define consume a value.
-	flag.CommandLine.Parse(filterKnownFlags(os.Args[1:], map[string]bool{"unix": true, "idle-timeout": true}))
+	// rather than failing to start. Flags named here consume a value token.
+	flag.CommandLine.Parse(filterKnownFlags(os.Args[1:], map[string]bool{
+		"unix":         true,
+		"idle-timeout": true,
+		"log-level":    true,
+		"log-format":   true,
+		"log-logger":   true,
+	}))
+
+	if err := logFlags.Apply(); err != nil {
+		log.Fatalf("logging flags: %v", err)
+	}
 
 	if *unixPath != "" && *httpMode {
 		log.Fatal("--unix and --http are mutually exclusive")
@@ -128,63 +135,10 @@ func main() {
 		),
 	)
 
-	// Scalar functions
-	w.RegisterScalar(&scalar.AddValuesFunction{})
-	w.RegisterScalar(&scalar.AnyMixedIntFunction{})
-	w.RegisterScalar(&scalar.AnyMixedStrFunction{})
-	w.RegisterScalar(&scalar.BernoulliFunction{})
-	w.RegisterScalar(&scalar.BinaryPacketFunction{})
-	w.RegisterScalar(&scalar.ConcatValuesIntFunction{})
-	w.RegisterScalar(&scalar.ConcatValuesStrFunction{})
-	w.RegisterScalar(&scalar.ConditionalMessageFunction{})
-	w.RegisterScalar(&scalar.DoubleFunction{})
-	w.RegisterScalar(&scalar.FormatNumberDefaultFunction{})
-	w.RegisterScalar(&scalar.FormatNumberPrecisionFunction{})
-	w.RegisterScalar(&scalar.FormatNumberFullFunction{})
-	w.RegisterScalar(&scalar.GeoCentroidFixedFunction{})
-	w.RegisterScalar(&scalar.GeoCentroidListFunction{})
-	w.RegisterScalar(&scalar.GeoCentroidStructFunction{})
-	w.RegisterScalar(&scalar.GeoDistanceFixedFunction{})
-	w.RegisterScalar(&scalar.GeoDistanceListFunction{})
-	w.RegisterScalar(&scalar.GeoDistanceStructFunction{})
-	w.RegisterScalar(&scalar.HashSeedFunction{})
-	w.RegisterScalar(&scalar.MultiplyBySettingFunction{})
-	w.RegisterScalar(&scalar.MultiplyFunction{})
-	w.RegisterScalar(&scalar.NullHandlingFunction{})
-	w.RegisterScalar(scalar.NewTypeInfoInt32Function())
-	w.RegisterScalar(scalar.NewTypeInfoInt64Function())
-	w.RegisterScalar(scalar.NewTypeInfoUint32Function())
-	w.RegisterScalar(scalar.NewTypeInfoUint64Function())
-	w.RegisterScalar(scalar.NewTypeInfoVarcharFunction())
-	w.RegisterScalar(&scalar.PairTypeIntIntFunction{})
-	w.RegisterScalar(&scalar.PairTypeStrStrFunction{})
-	w.RegisterScalar(&scalar.PairTypeIntStrFunction{})
-	w.RegisterScalar(&scalar.RandomBytesFunction{})
-	w.RegisterScalar(&scalar.RandomIntFunction{})
-	w.RegisterScalar(&scalar.ReturnSecretValueFunction{})
-	w.RegisterScalar(&scalar.SmartFormatWidthFunction{})
-	w.RegisterScalar(&scalar.SmartFormatPrefixFunction{})
-	w.RegisterScalar(&scalar.SumValuesFunction{})
-	w.RegisterScalar(&scalar.UnnestTensorFunction{})
-	w.RegisterScalar(&scalar.UpperCaseFunction{})
-	w.RegisterScalar(&scalar.WhoAmIFunction{})
-
-	// Table functions
-	w.RegisterTable(table.NewConstantColumnsFunction())
-	w.RegisterTable(table.NewFilterEchoFunction())
-	w.RegisterTable(table.NewFilterEchoPartitionedFunction())
-	w.RegisterTable(table.NewOrderEchoFunction())
-	w.RegisterTable(table.NewSampleEchoFunction())
-	w.RegisterTable(table.NewSpatialFilterExampleFunction())
-	w.RegisterTable(table.NewColorsScanFunction())
-	w.RegisterTable(table.NewExpressionFilterTestFunction())
-	// Note: geo_points is introspected via vgi_table_statistics only; no
-	// separate scan function is registered (matches the vgi-python example
-	// worker inventory). Direct `SELECT * FROM data.geo_points` will error
-	// because the backing scan function is not exposed.
-
-	// Aggregate functions
-	aggregate.RegisterAll(w)
+	// Register every example function (scalars, tables, table-in-outs,
+	// table-bufferings, aggregates, schema_reconcile). Catalog tables, secret
+	// types, and settings remain wired below — they're fixture-specific.
+	all.RegisterAll(w)
 
 	// Writable catalog (in-memory, per-process state). Gated off by default so
 	// the example worker's function inventory matches the reference vgi-python
@@ -192,92 +146,10 @@ func main() {
 	if os.Getenv("VGI_WORKER_ENABLE_WRITABLE") != "" {
 		w.RegisterWritableCatalog(vgi.NewWritableCatalog("writable"))
 	}
-	w.RegisterTable(table.NewDoubleSequenceFunction())
-	w.RegisterTable(table.NewDynamicFilterEchoFunction())
-	w.RegisterTable(table.NewGeneratorExceptionFunction())
-	w.RegisterTable(table.NewLoggingGeneratorFunction())
-	w.RegisterTable(table.NewMakePairsIntFunction())
-	w.RegisterTable(table.NewMakePairsMixedFunction())
-	w.RegisterTable(table.NewMakePairsStrFunction())
-	w.RegisterTable(table.NewMakeSeriesCountFunction())
-	w.RegisterTable(table.NewMakeSeriesRangeFunction())
-	w.RegisterTable(table.NewMakeSeriesStepFunction())
-	w.RegisterTable(table.NewMakeSeriesCsvFunction())
-	w.RegisterTable(table.NewMakeSeriesFloatStepFunction())
-	w.RegisterTable(table.NewNamedParamsEchoFunction())
-	w.RegisterTable(table.NewNestedSequenceFunction())
-	w.RegisterTable(table.NewPartitionedSequenceFunction())
-	w.RegisterTable(table.NewPartitionedBatchIndexFunction())
-	w.RegisterTable(table.NewPartitionedBatchIndexMarkedFunction())
-	w.RegisterTable(table.NewMissingBatchIndexTagFunction())
-	w.RegisterTable(table.NewNonMonotoneBatchIndexFunction())
-	w.RegisterTable(table.NewBatchIndexOverflowFunction())
-	w.RegisterTable(table.NewCountryPartitionedSalesFunction())
-	w.RegisterTable(table.NewRegionYearPartitionedFunction())
-	w.RegisterTable(table.NewPartitionedWithExplicitOverrideFunction())
-	w.RegisterTable(table.NewDisjointRangePartitionedFunction())
-	w.RegisterTable(table.NewBrokenMissingPartitionValuesFunction())
-	w.RegisterTable(table.NewBrokenPartitionMinNeqMaxFunction())
-	w.RegisterTable(table.NewBrokenPartitionValuesNoAnnotationFunction())
-	w.RegisterTable(table.NewBrokenPartitionColumnAbsentFromBatchFunction())
-	w.RegisterTable(table.NewTxCachedValueFunction())
-	w.RegisterTable(table.NewPartitionedFixedOrderFunction())
-	w.RegisterTable(table.NewPartitionedPreservesOrderFunction())
-	w.RegisterTable(table.NewPartitionedNoOrderGuaranteeFunction())
-	w.RegisterTable(table.NewProfilingDemoFunction())
-	w.RegisterTable(table.NewSlowCancellableFunction())
-	// Scope projection-pushdown reproducer functions to the
-	// ``projection_repro`` catalog only — they're invisible to the
-	// ``example`` catalog's function listing (function_registration.test
-	// asserts an exact 54-function count there).
-	w.RegisterTableForCatalog("projection_repro", table.NewProjReproStrictFunction())
-	w.RegisterTableForCatalog("projection_repro", table.NewProjReproFullSchemaFunction())
-	w.RegisterTableForCatalog("projection_repro", table.NewProjReproChunkedFunction())
-	w.RegisterTableForCatalog("projection_repro", table.NewProjReproMultiWorkerFunction())
-	w.RegisterTable(table.NewProjectedDataFunction())
-	w.RegisterTable(table.NewRepeatValueIntFunction())
-	w.RegisterTable(table.NewRowIdSequenceFunction())
-	w.RegisterTable(table.NewRepeatValueStrFunction())
-	w.RegisterTable(table.NewScopedSecretDemoFunction())
-	w.RegisterTable(table.NewSecretDemoFunction())
-	w.RegisterTable(table.NewSequenceFunction())
-	w.RegisterTable(table.NewSettingsAwareFunction())
-	w.RegisterTable(table.NewStructSettingsFunction())
-	w.RegisterTable(table.NewTenThousandFunction())
-	w.RegisterTable(table.NewVersionedDataFunction())
-	w.RegisterTable(table.NewDepartmentsScanFunction())
-	w.RegisterTable(table.NewEmployeesScanFunction())
-	w.RegisterTable(table.NewProductsScanFunction())
-	w.RegisterTable(table.NewProjectsScanFunction())
-	w.RegisterTable(table.NewVersionedConstraintsScanFunction())
-
-	// Table-in-out functions
-	w.RegisterTableBuffering(&table_in_out.BufferInputFunction{})
-	w.RegisterTableBuffering(&table_in_out.OrderedBufferInputFunction{})
-	w.RegisterTableBuffering(&table_in_out.BatchIndexBufferInputFunction{})
-	w.RegisterTableBuffering(&table_in_out.OrderedSourceFunction{})
-	w.RegisterTableBuffering(&table_in_out.LargeStateFunction{})
-	w.RegisterTableBuffering(&table_in_out.CrashOnProcessFunction{})
-	w.RegisterTableBuffering(&table_in_out.CrashOnCombineFunction{})
-	w.RegisterTableBuffering(&table_in_out.CrashOnFinalizeFunction{})
-	w.RegisterTableBuffering(&table_in_out.HangOnProcessFunction{})
-	w.RegisterTableBuffering(&table_in_out.SlowCancellableBufferingFunction{})
-	w.RegisterTableBuffering(&table_in_out.EchoBufferingFunction{})
-	w.RegisterTableInOut(table_in_out.NewEchoWitnessFunction())
-	w.RegisterTableInOut(table_in_out.NewDistributedSumFunction())
-	w.RegisterTableInOut(table_in_out.NewEchoFunction())
-	w.RegisterTableInOut(table_in_out.NewExceptionFinalizeFunction())
-	w.RegisterTableInOut(table_in_out.NewExceptionProcessFunction())
-	w.RegisterTableInOut(table_in_out.NewFilterBySettingFunction())
-	w.RegisterTableInOut(table_in_out.NewRepeatInputsFunction())
-	w.RegisterTableInOut(table_in_out.NewSlowCancellableInOutFunction())
-	w.RegisterTableBuffering(&table_in_out.SumAllColumnsFunction{})
-
-	// schema_reconcile fixture: 3 table-in-outs (insert/update/delete) + 1
-	// table function (scan), all scoped to the schema_reconcile catalog so
-	// they don't surface in the example catalog's function listing.
-	schema_reconcile.RegisterAll(w)
-	w.RegisterTableInOut(table_in_out.NewUnnestTensorRowsFunction())
+	// Note: geo_points is introspected via vgi_table_statistics only; no
+	// separate scan function is registered (matches the vgi-python example
+	// worker inventory). Direct `SELECT * FROM data.geo_points` will error
+	// because the backing scan function is not exposed.
 
 	// Catalog tables
 
@@ -897,149 +769,4 @@ func wkbPoint(x, y float64) []byte {
 	return buf
 }
 
-// ---------------------------------------------------------------------------
-// Auth environment variable resolution (matches vgi-python serve.py)
-// ---------------------------------------------------------------------------
-
-// resolveAuthenticate builds an AuthenticateFunc from environment variables.
-// Returns nil if no auth env vars are set. When both bearer and JWT are
-// configured, they are chained (JWT first, bearer fallback).
-func resolveAuthenticate() (vgirpc.AuthenticateFunc, func()) {
-	bearerAuth := resolveBearerAuthenticate()
-	jwtAuth, jwtCleanup := resolveJWTAuthenticate()
-
-	if bearerAuth != nil && jwtAuth != nil {
-		return vgirpc.ChainAuthenticate(jwtAuth, bearerAuth), jwtCleanup
-	}
-	if jwtAuth != nil {
-		return jwtAuth, jwtCleanup
-	}
-	return bearerAuth, nil
-}
-
-// resolveBearerAuthenticate parses VGI_BEARER_TOKENS into a static bearer
-// token authenticator. Format: "token=principal,token2=principal2".
-func resolveBearerAuthenticate() vgirpc.AuthenticateFunc {
-	raw := os.Getenv("VGI_BEARER_TOKENS")
-	if raw == "" {
-		return nil
-	}
-
-	tokens := make(map[string]*vgirpc.AuthContext)
-	for _, entry := range strings.Split(raw, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		if !strings.Contains(entry, "=") {
-			log.Fatalf("Error: malformed VGI_BEARER_TOKENS entry: %q\nExpected format: token=principal (e.g. 'mytoken=alice')", entry)
-		}
-		// Split on first = only — principals may contain =
-		token, principal, _ := strings.Cut(entry, "=")
-		tokens[token] = &vgirpc.AuthContext{
-			Principal:     principal,
-			Authenticated: true,
-			Domain:        "bearer",
-		}
-	}
-
-	if len(tokens) == 0 {
-		return nil
-	}
-	return vgirpc.BearerAuthenticateStatic(tokens)
-}
-
-// resolveJWTAuthenticate parses VGI_JWT_ISSUER, VGI_JWT_AUDIENCE, and
-// optional VGI_JWT_JWKS_URI into a JWT authenticator.
-func resolveJWTAuthenticate() (vgirpc.AuthenticateFunc, func()) {
-	issuer := os.Getenv("VGI_JWT_ISSUER")
-	if issuer == "" {
-		return nil, nil
-	}
-
-	audienceRaw := os.Getenv("VGI_JWT_AUDIENCE")
-	if audienceRaw == "" {
-		log.Fatal("Error: VGI_JWT_ISSUER is set but VGI_JWT_AUDIENCE is missing")
-	}
-
-	var audiences []string
-	for _, s := range strings.Split(audienceRaw, ",") {
-		s = strings.TrimSpace(s)
-		if s != "" {
-			audiences = append(audiences, s)
-		}
-	}
-	if len(audiences) == 0 {
-		log.Fatal("Error: VGI_JWT_AUDIENCE is set but contains no valid values")
-	}
-
-	jwksURI := os.Getenv("VGI_JWT_JWKS_URI")
-	if jwksURI == "" {
-		// Derive from issuer (matching Python behavior where jwks_uri is optional)
-		jwksURI = strings.TrimSuffix(issuer, "/") + "/.well-known/jwks.json"
-	}
-
-	authFn, cleanup, err := jwtauth.NewAuthenticateFunc(jwtauth.JWTAuthConfig{
-		Issuer:   issuer,
-		Audience: audiences,
-		JWKSURI:  jwksURI,
-	})
-	if err != nil {
-		log.Fatalf("Error: failed to initialize JWT auth: %v", err)
-	}
-	return authFn, cleanup
-}
-
-// resolveOAuthResourceMetadata parses VGI_OAUTH_* env vars into an
-// OAuthResourceMetadata for RFC 9728 discovery.
-func resolveOAuthResourceMetadata() *vgirpc.OAuthResourceMetadata {
-	resource := os.Getenv("VGI_OAUTH_RESOURCE")
-	if resource == "" {
-		return nil
-	}
-
-	authServersRaw := os.Getenv("VGI_OAUTH_AUTH_SERVERS")
-	if authServersRaw == "" {
-		log.Fatal("Error: VGI_OAUTH_RESOURCE is set but VGI_OAUTH_AUTH_SERVERS is missing")
-	}
-
-	var authServers []string
-	for _, s := range strings.Split(authServersRaw, ",") {
-		s = strings.TrimSpace(s)
-		if s != "" {
-			authServers = append(authServers, s)
-		}
-	}
-
-	var scopes []string
-	if scopesRaw := os.Getenv("VGI_OAUTH_SCOPES"); scopesRaw != "" {
-		for _, s := range strings.Split(scopesRaw, ",") {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				scopes = append(scopes, s)
-			}
-		}
-	}
-
-	useIDToken := false
-	if v := strings.ToLower(os.Getenv("VGI_OAUTH_USE_ID_TOKEN")); v == "1" || v == "true" || v == "yes" {
-		useIDToken = true
-	}
-
-	m := &vgirpc.OAuthResourceMetadata{
-		Resource:               resource,
-		AuthorizationServers:   authServers,
-		ScopesSupported:        scopes,
-		ResourceName:           os.Getenv("VGI_OAUTH_RESOURCE_NAME"),
-		ClientID:               os.Getenv("VGI_OAUTH_CLIENT_ID"),
-		ClientSecret:           os.Getenv("VGI_OAUTH_CLIENT_SECRET"),
-		DeviceCodeClientID:     os.Getenv("VGI_OAUTH_DEVICE_CODE_CLIENT_ID"),
-		DeviceCodeClientSecret: os.Getenv("VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET"),
-		UseIDTokenAsBearer:     useIDToken,
-	}
-
-	if err := m.Validate(); err != nil {
-		log.Fatalf("Error: invalid OAuth config: %v", err)
-	}
-	return m
-}
+// Auth + OAuth env-var wiring lives in auth.go.

@@ -15,9 +15,13 @@ import (
 // ConcatValuesIntFunction — concat_values(int64...) → sum as string
 type ConcatValuesIntFunction struct{}
 
-func (f *ConcatValuesIntFunction) Name() string { return "concat_values" }
+type concatIntArgs struct {
+	Values []int64 `vgi:"pos=0,const=false,varargs,type=int64,doc=Integer values"`
+}
 
-func (f *ConcatValuesIntFunction) Metadata() vgi.FunctionMetadata {
+func (*ConcatValuesIntFunction) Name() string { return "concat_values" }
+
+func (*ConcatValuesIntFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Sum integer varargs and return as string",
 		Stability:   vgi.StabilityConsistent,
@@ -25,17 +29,11 @@ func (f *ConcatValuesIntFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
-func (f *ConcatValuesIntFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "values", Position: 0, ArrowType: "int64", Doc: "Integer values", IsVarargs: true},
-	}
-}
-
-func (f *ConcatValuesIntFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+func (*ConcatValuesIntFunction) OnBindTyped(_ *concatIntArgs, _ *vgi.BindParams) (*vgi.BindResponse, error) {
 	return vgi.BindResult(arrow.BinaryTypes.String)
 }
 
-func (f *ConcatValuesIntFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+func (*ConcatValuesIntFunction) ProcessTyped(_ context.Context, _ *concatIntArgs, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 	return vgi.MapAllColumns(params, batch, array.NewStringBuilder,
 		func(cols []arrow.Array, i int) string {
 			var sum int64
@@ -46,12 +44,21 @@ func (f *ConcatValuesIntFunction) Process(ctx context.Context, params *vgi.Proce
 		})
 }
 
+// NewConcatValuesInt returns the registration-ready ScalarFunction.
+func NewConcatValuesInt() vgi.ScalarFunction {
+	return vgi.AsScalarFunction[concatIntArgs](&ConcatValuesIntFunction{})
+}
+
 // ConcatValuesStrFunction — concat_values(varchar...) → concatenated string
 type ConcatValuesStrFunction struct{}
 
-func (f *ConcatValuesStrFunction) Name() string { return "concat_values" }
+type concatStrArgs struct {
+	Values []string `vgi:"pos=0,const=false,varargs,type=varchar,doc=String values"`
+}
 
-func (f *ConcatValuesStrFunction) Metadata() vgi.FunctionMetadata {
+func (*ConcatValuesStrFunction) Name() string { return "concat_values" }
+
+func (*ConcatValuesStrFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Concatenate string varargs",
 		Stability:   vgi.StabilityConsistent,
@@ -59,17 +66,11 @@ func (f *ConcatValuesStrFunction) Metadata() vgi.FunctionMetadata {
 	}
 }
 
-func (f *ConcatValuesStrFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "values", Position: 0, ArrowType: "varchar", Doc: "String values", IsVarargs: true},
-	}
-}
-
-func (f *ConcatValuesStrFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+func (*ConcatValuesStrFunction) OnBindTyped(_ *concatStrArgs, _ *vgi.BindParams) (*vgi.BindResponse, error) {
 	return vgi.BindResult(arrow.BinaryTypes.String)
 }
 
-func (f *ConcatValuesStrFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+func (*ConcatValuesStrFunction) ProcessTyped(_ context.Context, _ *concatStrArgs, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 	return vgi.MapAllColumns(params, batch, array.NewStringBuilder,
 		func(cols []arrow.Array, i int) string {
 			var result string
@@ -78,4 +79,9 @@ func (f *ConcatValuesStrFunction) Process(ctx context.Context, params *vgi.Proce
 			}
 			return result
 		})
+}
+
+// NewConcatValuesStr returns the registration-ready ScalarFunction.
+func NewConcatValuesStr() vgi.ScalarFunction {
+	return vgi.AsScalarFunction[concatStrArgs](&ConcatValuesStrFunction{})
 }

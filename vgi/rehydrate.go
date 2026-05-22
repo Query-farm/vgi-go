@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
-	"log/slog"
 
 	"github.com/apache/arrow-go/v18/arrow"
 )
@@ -78,7 +77,7 @@ func (w *Worker) rehydrateTableProducer(s *TableProducerState) error {
 	if len(s.UserStateBytes) > 0 {
 		userState, err := gobDecode(s.UserStateBytes)
 		if err != nil {
-			slog.Debug("rehydrate: gob decode user state failed, calling NewState", "err", err)
+			LogRPC.Debug("rehydrate: gob decode user state failed, calling NewState", "err", err)
 			userState, err = tableFn.NewState(params)
 			if err != nil {
 				return fmt.Errorf("NewState fallback: %w", err)
@@ -120,7 +119,7 @@ func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
 	if len(s.UserStateBytes) > 0 {
 		userState, err := gobDecode(s.UserStateBytes)
 		if err != nil {
-			slog.Debug("rehydrate: gob decode user state failed, calling NewState", "err", err)
+			LogRPC.Debug("rehydrate: gob decode user state failed, calling NewState", "err", err)
 			userState, err = tioFn.NewState(params)
 			if err != nil {
 				return fmt.Errorf("NewState fallback: %w", err)

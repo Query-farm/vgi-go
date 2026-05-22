@@ -16,3 +16,6 @@ vgi-example-attach-options-worker-go
 # Temporary/stray files
 2
 .claude/
+
+# Test/build outputs
+coverage.out

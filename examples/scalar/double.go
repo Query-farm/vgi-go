@@ -13,26 +13,24 @@ import (
 // DoubleFunction doubles numeric values.
 type DoubleFunction struct{}
 
-func (f *DoubleFunction) Name() string { return "double" }
+type doubleArgs struct {
+	Value any `vgi:"pos=0,const=false,bound=multipliable,doc=Numeric value to double"`
+}
 
-func (f *DoubleFunction) Metadata() vgi.FunctionMetadata {
+func (*DoubleFunction) Name() string { return "double" }
+
+func (*DoubleFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Doubles numeric values",
 		Stability:   vgi.StabilityConsistent,
 	}
 }
 
-func (f *DoubleFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "value", Position: 0, ArrowType: "any", Doc: "Numeric value to double", TypeBound: []vgi.TypeBoundPredicate{vgi.IsMultipliableType}},
-	}
-}
-
-func (f *DoubleFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+func (*DoubleFunction) OnBindTyped(_ *doubleArgs, params *vgi.BindParams) (*vgi.BindResponse, error) {
 	return vgi.BindResultFromInput(params, 0, arrow.PrimitiveTypes.Int64, vgi.PromoteForAddition)
 }
 
-func (f *DoubleFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+func (*DoubleFunction) ProcessTyped(_ context.Context, _ *doubleArgs, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 	return vgi.NumericDispatch(params, batch,
 		func(cols []arrow.Array, i int) int64 {
 			return vgi.GetInt64Value(cols[0], i) * 2
@@ -40,4 +38,9 @@ func (f *DoubleFunction) Process(ctx context.Context, params *vgi.ProcessParams,
 		func(cols []arrow.Array, i int) float64 {
 			return vgi.GetFloat64Value(cols[0], i) * 2
 		})
+}
+
+// NewDouble returns the registration-ready ScalarFunction.
+func NewDouble() vgi.ScalarFunction {
+	return vgi.AsScalarFunction[doubleArgs](&DoubleFunction{})
 }

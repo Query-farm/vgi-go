@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 )
 
 // ---------------------------------------------------------------------------
@@ -372,6 +373,43 @@ var timeType = reflect.TypeOf(time.Time{})
 var durationType = reflect.TypeOf(time.Duration(0))
 var anyType = reflect.TypeOf((*any)(nil)).Elem()
 
+// arrowArrayConcreteTypes maps a concrete *array.X pointer type to the Arrow
+// type it represents. Used by inferArrowType so a typed scalar can declare
+// a column-arg field with the precise array type — e.g.
+//
+//	type multiplyArgs struct {
+//	    Value  *array.Int64 `vgi:"pos=0,const=false"`
+//	    Factor int64        `vgi:"pos=1"`
+//	}
+//
+// will produce ArgumentSpecs with ArrowType="int64" + the matching
+// ArrowDataType, and the scalar adapter will set the field to
+// batch.Column(N).(*array.Int64) at Process time.
+//
+// Only fixed (non-parametric) Arrow types live here. Nested or parametric
+// types — Struct, List, FixedSizeList, Timestamp, Duration, Decimal — are
+// intentionally absent because the Go pointer type doesn't capture their
+// inner shape (struct fields, list element type, decimal precision/scale).
+// For those, declare the column-arg field as arrow.Array and validate the
+// shape in OnBindTyped — same approach vgi-python uses.
+var arrowArrayConcreteTypes = map[reflect.Type]arrowTypeInfo{
+	reflect.TypeOf((*array.Int8)(nil)):    {ArrowTypeName: "int8", DataType: arrow.PrimitiveTypes.Int8},
+	reflect.TypeOf((*array.Int16)(nil)):   {ArrowTypeName: "int16", DataType: arrow.PrimitiveTypes.Int16},
+	reflect.TypeOf((*array.Int32)(nil)):   {ArrowTypeName: "int32", DataType: arrow.PrimitiveTypes.Int32},
+	reflect.TypeOf((*array.Int64)(nil)):   {ArrowTypeName: "int64", DataType: arrow.PrimitiveTypes.Int64},
+	reflect.TypeOf((*array.Uint8)(nil)):   {ArrowTypeName: "uint8", DataType: arrow.PrimitiveTypes.Uint8},
+	reflect.TypeOf((*array.Uint16)(nil)):  {ArrowTypeName: "uint16", DataType: arrow.PrimitiveTypes.Uint16},
+	reflect.TypeOf((*array.Uint32)(nil)):  {ArrowTypeName: "uint32", DataType: arrow.PrimitiveTypes.Uint32},
+	reflect.TypeOf((*array.Uint64)(nil)):  {ArrowTypeName: "uint64", DataType: arrow.PrimitiveTypes.Uint64},
+	reflect.TypeOf((*array.Float32)(nil)): {ArrowTypeName: "float", DataType: arrow.PrimitiveTypes.Float32},
+	reflect.TypeOf((*array.Float64)(nil)): {ArrowTypeName: "double", DataType: arrow.PrimitiveTypes.Float64},
+	reflect.TypeOf((*array.Boolean)(nil)): {ArrowTypeName: "bool", DataType: arrow.FixedWidthTypes.Boolean},
+	reflect.TypeOf((*array.String)(nil)):  {ArrowTypeName: "varchar", DataType: arrow.BinaryTypes.String},
+	reflect.TypeOf((*array.Binary)(nil)):  {ArrowTypeName: "blob", DataType: arrow.BinaryTypes.Binary},
+	reflect.TypeOf((*array.Date32)(nil)):  {ArrowTypeName: "date32", DataType: arrow.FixedWidthTypes.Date32},
+	reflect.TypeOf((*array.Date64)(nil)):  {ArrowTypeName: "date64", DataType: arrow.FixedWidthTypes.Date64},
+}
+
 // typeOverrides maps the string accepted in a `vgi:"type=..."` tag to a
 // concrete Arrow type. Used when the Go field type would otherwise infer
 // to a different (or no) Arrow type — e.g. a Go int64 field that the
@@ -418,6 +456,12 @@ func inferArrowType(t reflect.Type) arrowTypeInfo {
 	}
 	if t == anyType {
 		return arrowTypeInfo{ArrowTypeName: "any"}
+	}
+	// Concrete *array.X column types — e.g. `*array.Int64`. Used by typed
+	// scalar functions to declare column-arg fields with the precise array
+	// type instead of the generic arrow.Array interface.
+	if info, ok := arrowArrayConcreteTypes[t]; ok {
+		return info
 	}
 	switch t.Kind() {
 	case reflect.String:

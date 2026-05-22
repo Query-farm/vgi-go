@@ -6,7 +6,6 @@ package vgi
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -743,7 +742,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				for _, opt := range w.attachOptions {
 					data, err := serializeAttachOptionSpec(opt)
 					if err != nil {
-						slog.Error("failed to serialize attach option", "name", opt.Name, "err", err)
+						LogCatalog.Error("failed to serialize attach option", "name", opt.Name, "err", err)
 						continue
 					}
 					specs = append(specs, data)
@@ -796,7 +795,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			for _, spec := range w.settings {
 				data, err := serializeSettingSpec(spec)
 				if err != nil {
-					slog.Error("failed to serialize setting", "name", spec.Name, "err", err)
+					LogCatalog.Error("failed to serialize setting", "name", spec.Name, "err", err)
 					continue
 				}
 				serializedSettings = append(serializedSettings, data)
@@ -810,7 +809,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			for _, spec := range w.secretTypes {
 				data, err := serializeSecretTypeSpec(spec)
 				if err != nil {
-					slog.Error("failed to serialize secret type", "name", spec.Name, "err", err)
+					LogCatalog.Error("failed to serialize secret type", "name", spec.Name, "err", err)
 					continue
 				}
 				serializedSecretTypes = append(serializedSecretTypes, data)
@@ -1101,7 +1100,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_contents_functions
 	unaryCatalog[SchemaContentsFunctionsRequestWire, ItemsResponseWire](w, s, "catalog_schema_contents_functions",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsFunctionsRequestWire) (ItemsResponseWire, error) {
-			slog.Debug("catalog: listing functions", "schema", req.Name, "type", req.Type)
+			LogCatalog.Debug("catalog: listing functions", "schema", req.Name, "type", req.Type)
 			if w.catalog == nil {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
@@ -1143,7 +1142,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 						continue
 					}
 				}
-				slog.Debug("catalog: returning function", "name", fi.Name, "type", fi.FunctionType)
+				LogCatalog.Debug("catalog: returning function", "name", fi.Name, "type", fi.FunctionType)
 				data, err := SerializeFunctionInfo(fi)
 				if err != nil {
 					return ItemsResponseWire{}, err
@@ -1871,7 +1870,7 @@ func (w *Worker) resolveScanFunction(req TableScanFunctionGetRequestWire) (*Scan
 			},
 		}, nil
 	}
-	slog.Debug("catalog: scan function get", "schema", req.SchemaName, "table", req.Name)
+	LogCatalog.Debug("catalog: scan function get", "schema", req.SchemaName, "table", req.Name)
 
 	// Registered catalog table with a backing function (skip when AT params
 	// are present — let the handler deal with time travel).

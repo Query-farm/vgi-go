@@ -14,31 +14,27 @@ import (
 // SumValuesFunction sums multiple numeric values (varargs).
 type SumValuesFunction struct{}
 
-func (f *SumValuesFunction) Name() string { return "sum_values" }
+type sumValuesArgs struct {
+	Values []any `vgi:"pos=0,const=false,varargs,bound=addable,doc=Numeric values to sum"`
+}
 
-func (f *SumValuesFunction) Metadata() vgi.FunctionMetadata {
+func (*SumValuesFunction) Name() string { return "sum_values" }
+
+func (*SumValuesFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
 		Description: "Sum multiple numeric values",
 		Stability:   vgi.StabilityConsistent,
 	}
 }
 
-func (f *SumValuesFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return []vgi.ArgSpec{
-		{Name: "values", Position: 0, ArrowType: "any", Doc: "Numeric values to sum", IsVarargs: true, TypeBound: []vgi.TypeBoundPredicate{vgi.IsAddableType}},
-	}
-}
-
-func (f *SumValuesFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	// Zero-arg invocation has an empty input schema; bind without any input
-	// columns and surface a clear error before we read field(0) below.
+func (*SumValuesFunction) OnBindTyped(_ *sumValuesArgs, params *vgi.BindParams) (*vgi.BindResponse, error) {
 	if params.InputSchema == nil || params.InputSchema.NumFields() == 0 {
 		return nil, fmt.Errorf("sum_values requires at least 1 value")
 	}
 	return vgi.BindResultFromInput(params, 0, arrow.PrimitiveTypes.Int64, vgi.PromoteForAddition)
 }
 
-func (f *SumValuesFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+func (*SumValuesFunction) ProcessTyped(_ context.Context, _ *sumValuesArgs, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 	return vgi.NumericDispatch(params, batch,
 		func(cols []arrow.Array, i int) int64 {
 			var sum int64
@@ -54,4 +50,9 @@ func (f *SumValuesFunction) Process(ctx context.Context, params *vgi.ProcessPara
 			}
 			return sum
 		})
+}
+
+// NewSumValues returns the registration-ready ScalarFunction.
+func NewSumValues() vgi.ScalarFunction {
+	return vgi.AsScalarFunction[sumValuesArgs](&SumValuesFunction{})
 }

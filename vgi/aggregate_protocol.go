@@ -6,7 +6,6 @@ package vgi
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
@@ -246,13 +245,13 @@ func (w *Worker) loadAggArgs(funcName string, execID []byte) *Arguments {
 	data, err := bucket.getConstArgs()
 	if err != nil || len(data) == 0 {
 		if err != nil {
-			slog.Debug("aggregate: failed to load const args", "err", err)
+			LogRPC.Debug("aggregate: failed to load const args", "err", err)
 		}
 		return nil
 	}
 	args, err := ParseArguments(data)
 	if err != nil {
-		slog.Debug("aggregate: failed to deserialize stashed args", "err", err)
+		LogRPC.Debug("aggregate: failed to deserialize stashed args", "err", err)
 		return nil
 	}
 	return args

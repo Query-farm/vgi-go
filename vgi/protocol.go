@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"log/slog"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -288,8 +287,9 @@ func (s *FinalizeProducerState) Produce(ctx context.Context, out *vgirpc.OutputC
 // ---------------------------------------------------------------------------
 
 // handleBind processes a bind RPC request.
-func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, req BindRequestWire) (BindResponseWire, error) {
-	slog.Debug("bind: received request",
+func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, req BindRequestWire) (resp BindResponseWire, err error) {
+	defer RecoverPanic("bind", req.FunctionName, &err)
+	LogRPC.Debug("bind: received request",
 		"function", req.FunctionName,
 		"type", req.FunctionType,
 		"args_len", len(req.Arguments),
@@ -297,24 +297,24 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 	)
 	bindParams, err := w.parseBindRequest(req)
 	if err != nil {
-		slog.Debug("bind: parse failed", "err", err)
+		LogRPC.Debug("bind: parse failed", "err", err)
 		return BindResponseWire{}, err
 	}
 	bindParams.Auth = callCtx.Auth
 	if back, ferr := w.functionStorage(); ferr == nil {
 		bindParams.txBackend = back
 	}
-	slog.Debug("bind: parsed args",
+	LogRPC.Debug("bind: parsed args",
 		"positional", len(bindParams.Args.Positional),
 		"named", len(bindParams.Args.Named),
 	)
 
 	fn, err := w.resolveFunctionWithOverload(req.FunctionName, FunctionType(req.FunctionType), bindParams.Args, bindParams.InputSchema)
 	if err != nil {
-		slog.Debug("bind: resolve function failed", "function", req.FunctionName, "err", err)
+		LogRPC.Debug("bind: resolve function failed", "function", req.FunctionName, "err", err)
 		return BindResponseWire{}, err
 	}
-	slog.Debug("bind: resolved function", "function", req.FunctionName, "type", fmt.Sprintf("%T", fn))
+	LogRPC.Debug("bind: resolved function", "function", req.FunctionName, "type", fmt.Sprintf("%T", fn))
 
 	// Remap positional args to original ArgSpec positions
 	argSpecs := w.getArgSpecs(fn)
@@ -322,7 +322,7 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 
 	// Validate type bounds against input schema before calling OnBind
 	if err := ValidateTypeBounds(argSpecs, bindParams.InputSchema); err != nil {
-		slog.Debug("bind: type bound validation failed", "err", err)
+		LogRPC.Debug("bind: type bound validation failed", "err", err)
 		return BindResponseWire{}, err
 	}
 
@@ -348,7 +348,7 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 	// Two-phase bind: if the function requests scoped secret lookup, return
 	// the lookup columns instead of an output schema.
 	if bindResp.SecretScopeRequest != nil {
-		slog.Debug("bind: two-phase scope request", "function", req.FunctionName, "lookups", len(bindResp.SecretScopeRequest))
+		LogRPC.Debug("bind: two-phase scope request", "function", req.FunctionName, "lookups", len(bindResp.SecretScopeRequest))
 		types := make([]string, len(bindResp.SecretScopeRequest))
 		scopes := make([]string, len(bindResp.SecretScopeRequest))
 		names := make([]string, len(bindResp.SecretScopeRequest))
@@ -369,7 +369,7 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		return BindResponseWire{}, fmt.Errorf("serializing output schema: %w", err)
 	}
 
-	resp := BindResponseWire{
+	resp = BindResponseWire{
 		OutputSchema: outputSchemaBytes,
 		OpaqueData:   bindResp.OpaqueData,
 	}
@@ -377,8 +377,9 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 }
 
 // handleInit processes an init RPC request and returns a StreamResult.
-func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, req InitRequestWire) (*vgirpc.StreamResult, error) {
-	slog.Debug("init: received request",
+func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, req InitRequestWire) (result *vgirpc.StreamResult, err error) {
+	defer RecoverPanic("init", req.BindCall.FunctionName, &err)
+	LogRPC.Debug("init: received request",
 		"function", req.BindCall.FunctionName,
 		"output_schema_len", len(req.OutputSchema),
 		"phase", req.Phase,
@@ -386,15 +387,15 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	)
 	// bind_call arrives as a nested struct on the wire.
 	bindReq := &req.BindCall
-	slog.Debug("init: parsed bind call", "function", bindReq.FunctionName, "type", bindReq.FunctionType)
+	LogRPC.Debug("init: parsed bind call", "function", bindReq.FunctionName, "type", bindReq.FunctionType)
 
 	// Parse output schema
 	outputSchema, err := DeserializeSchema(req.OutputSchema)
 	if err != nil {
-		slog.Debug("init: deserialize output_schema failed", "err", err)
+		LogRPC.Debug("init: deserialize output_schema failed", "err", err)
 		return nil, fmt.Errorf("deserializing output_schema: %w", err)
 	}
-	slog.Debug("init: output schema", "fields", outputSchema.NumFields())
+	LogRPC.Debug("init: output schema", "fields", outputSchema.NumFields())
 
 	// Parse bind params for argument access
 	bindParams, err := w.parseBindRequest(*bindReq)
@@ -405,10 +406,10 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	// Resolve the function with overload resolution
 	fn, err := w.resolveFunctionWithOverload(bindReq.FunctionName, FunctionType(bindReq.FunctionType), bindParams.Args, bindParams.InputSchema)
 	if err != nil {
-		slog.Debug("init: resolve function failed", "function", bindReq.FunctionName, "err", err)
+		LogRPC.Debug("init: resolve function failed", "function", bindReq.FunctionName, "err", err)
 		return nil, err
 	}
-	slog.Debug("init: resolved function", "type", fmt.Sprintf("%T", fn))
+	LogRPC.Debug("init: resolved function", "type", fmt.Sprintf("%T", fn))
 
 	// Remap positional args to original ArgSpec positions
 	bindParams.Args.RemapPositionalArgs(w.getArgSpecs(fn))
@@ -521,38 +522,38 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		recipe.PushdownFilterIPC = *req.PushdownFilters
 	}
 
-	slog.Debug("init: dispatching", "type", fmt.Sprintf("%T", fn))
+	LogRPC.Debug("init: dispatching", "type", fmt.Sprintf("%T", fn))
 	switch f := fn.(type) {
 	case ScalarFunction:
 		result, err := w.initScalar(ctx, f, initParams, processParams, projectedSchema, &recipe)
 		if err != nil {
-			slog.Debug("init: scalar init failed", "err", err)
+			LogRPC.Debug("init: scalar init failed", "err", err)
 		} else {
-			slog.Debug("init: scalar init success", "state", fmt.Sprintf("%T", result.State))
+			LogRPC.Debug("init: scalar init success", "state", fmt.Sprintf("%T", result.State))
 		}
 		return result, err
 	case TableFunction:
 		result, err := w.initTable(ctx, f, initParams, processParams, projectedSchema, autoProjectIDs, &recipe)
 		if err != nil {
-			slog.Debug("init: table init failed", "err", err)
+			LogRPC.Debug("init: table init failed", "err", err)
 		} else {
-			slog.Debug("init: table init success", "state", fmt.Sprintf("%T", result.State))
+			LogRPC.Debug("init: table init success", "state", fmt.Sprintf("%T", result.State))
 		}
 		return result, err
 	case TableInOutFunction:
 		result, err := w.initTableInOut(ctx, f, initParams, processParams, projectedSchema, phase, &recipe)
 		if err != nil {
-			slog.Debug("init: table-in-out init failed", "err", err)
+			LogRPC.Debug("init: table-in-out init failed", "err", err)
 		} else {
-			slog.Debug("init: table-in-out init success", "state", fmt.Sprintf("%T", result.State))
+			LogRPC.Debug("init: table-in-out init success", "state", fmt.Sprintf("%T", result.State))
 		}
 		return result, err
 	case TableBufferingFunction:
 		result, err := w.initTableBuffering(ctx, f, initParams, processParams, projectedSchema, phase, &recipe, req.FinalizeStateID)
 		if err != nil {
-			slog.Debug("init: table-buffering init failed", "err", err)
+			LogRPC.Debug("init: table-buffering init failed", "err", err)
 		} else {
-			slog.Debug("init: table-buffering init success", "state", fmt.Sprintf("%T", result.State))
+			LogRPC.Debug("init: table-buffering init success", "state", fmt.Sprintf("%T", result.State))
 		}
 		return result, err
 	default:
@@ -820,7 +821,8 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 // handleTableFunctionStatistics processes a table_function_statistics RPC
 // request, returning serialized per-column statistics IPC bytes (or nil when
 // unknown).
-func (w *Worker) handleTableFunctionStatistics(ctx context.Context, callCtx *vgirpc.CallContext, req CardinalityRequestWire) ([]byte, error) {
+func (w *Worker) handleTableFunctionStatistics(ctx context.Context, callCtx *vgirpc.CallContext, req CardinalityRequestWire) (out []byte, err error) {
+	defer RecoverPanic("statistics", req.BindCall.FunctionName, &err)
 	bindReq := &req.BindCall
 	bindParams, err := w.parseBindRequest(*bindReq)
 	if err != nil {
@@ -847,7 +849,8 @@ func (w *Worker) handleTableFunctionStatistics(ctx context.Context, callCtx *vgi
 }
 
 // handleCardinality processes a table_function_cardinality RPC request.
-func (w *Worker) handleCardinality(ctx context.Context, callCtx *vgirpc.CallContext, req CardinalityRequestWire) (TableCardinality, error) {
+func (w *Worker) handleCardinality(ctx context.Context, callCtx *vgirpc.CallContext, req CardinalityRequestWire) (card TableCardinality, err error) {
+	defer RecoverPanic("cardinality", req.BindCall.FunctionName, &err)
 	bindReq := &req.BindCall
 
 	bindParams, err := w.parseBindRequest(*bindReq)

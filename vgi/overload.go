@@ -5,7 +5,6 @@ package vgi
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -176,7 +175,7 @@ func resolveOverload(candidates []interface{}, args *Arguments, inputSchema *arr
 		}
 	}
 
-	slog.Debug("overload: resolved",
+	LogRPC.Debug("overload: resolved",
 		"candidates", len(candidates),
 		"matches", len(matches),
 		"score", best.score,

@@ -6,7 +6,6 @@ package vgi
 import (
 	"bytes"
 	"fmt"
-	"log/slog"
 	"reflect"
 	"runtime"
 	"strings"
@@ -328,7 +327,7 @@ func extractScalarValue(col arrow.Array, idx int) interface{} {
 		}
 		return m
 	default:
-		slog.Debug("extractScalarValue: unhandled array type", "type", fmt.Sprintf("%T", col))
+		LogRPC.Debug("extractScalarValue: unhandled array type", "type", fmt.Sprintf("%T", col))
 		return nil
 	}
 }

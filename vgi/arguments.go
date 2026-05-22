@@ -6,7 +6,6 @@ package vgi
 import (
 	"bytes"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"time"
 
@@ -61,7 +60,7 @@ func ParseArguments(data []byte) (*Arguments, error) {
 	batch := reader.RecordBatch()
 	batch.Retain()
 
-	slog.Debug("parse arguments",
+	LogRPC.Debug("parse arguments",
 		"schema_fields", schema.NumFields(),
 		"batch_cols", batch.NumCols(),
 		"batch_rows", batch.NumRows(),
@@ -72,7 +71,7 @@ func ParseArguments(data []byte) (*Arguments, error) {
 		if f.HasMetadata() {
 			attrs = append(attrs, "meta", fmt.Sprintf("%v", f.Metadata))
 		}
-		slog.Debug("parse arguments: field", attrs...)
+		LogRPC.Debug("parse arguments: field", attrs...)
 	}
 
 	args := &Arguments{
@@ -130,7 +129,7 @@ func ParseArguments(data []byte) (*Arguments, error) {
 				}
 			}
 
-			slog.Debug("parse arguments: unwrapped args struct", "positional", len(args.Positional), "named", len(args.Named))
+			LogRPC.Debug("parse arguments: unwrapped args struct", "positional", len(args.Positional), "named", len(args.Named))
 			return args, nil
 		}
 	}
