@@ -332,6 +332,7 @@ type Worker struct {
 	catalogVersionHook            CatalogVersionHook
 	authenticateFunc              vgirpc.AuthenticateFunc
 	oauthMetadata                 *vgirpc.OAuthResourceMetadata
+	oauthPkce                     *vgirpc.OAuthPkceConfig
 	secretTypes                   []SecretTypeSpec
 	attachOptions                 []AttachOptionSpec
 	logLevel                      slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
@@ -728,6 +729,16 @@ func (w *Worker) SetOAuthResourceMetadata(m *vgirpc.OAuthResourceMetadata) {
 	w.oauthMetadata = m
 }
 
+// SetOAuthPkce enables the browser-based OAuth PKCE login flow for HTTP mode.
+// It requires SetAuthenticate and SetOAuthResourceMetadata (with a ClientID) to
+// also be configured; RunHttp applies it after both. When enabled, the server
+// serves /_oauth/callback, /_oauth/logout, and the /_oauth/token exchange proxy,
+// and redirects unauthenticated browser GETs to the authorization server.
+func (w *Worker) SetOAuthPkce(cfg vgirpc.OAuthPkceConfig) {
+	c := cfg
+	w.oauthPkce = &c
+}
+
 // buildServer creates and configures the vgirpc.Server with all handlers
 // registered. Shared between RunStdio and RunHttp.
 // serverTransport selects how the worker serves and how execution-storage
@@ -843,11 +854,31 @@ func (w *Worker) RunHttp(addr string) error {
 	}
 	hs.SetRehydrateFunc(w.rehydrateState)
 	hs.SetProducerBatchLimit(100)
+	// Honor framework-level HTTP env config. SetPrefix rebuilds the route
+	// table, so apply it before the OAuth setup (which derives redirect/proxy
+	// URLs and routes from the prefix).
+	if prefix := os.Getenv("VGI_HTTP_PREFIX"); prefix != "" {
+		hs.SetPrefix(prefix)
+	}
+	if cors := os.Getenv("VGI_HTTP_CORS_ORIGINS"); cors != "" {
+		hs.SetCorsOrigins(cors)
+	}
 	if w.authenticateFunc != nil {
 		hs.SetAuthenticate(w.authenticateFunc)
 	}
 	if w.oauthMetadata != nil {
-		hs.SetOAuthResourceMetadata(w.oauthMetadata)
+		if err := hs.SetOAuthResourceMetadata(w.oauthMetadata); err != nil {
+			return fmt.Errorf("oauth resource metadata: %w", err)
+		}
+	}
+	if w.oauthPkce != nil {
+		if err := hs.SetOAuthPkce(*w.oauthPkce); err != nil {
+			return fmt.Errorf("oauth pkce: %w", err)
+		}
+		// SetOAuthPkce flips on the /_oauth/* routes, which are only wired
+		// during route (re)build. Re-init pages now so they register
+		// deterministically rather than lazily on the first request.
+		hs.InitPages()
 	}
 
 	listener, err := net.Listen("tcp", addr)
