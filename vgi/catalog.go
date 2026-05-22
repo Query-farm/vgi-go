@@ -12,6 +12,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/google/uuid"
 )
 
 // SerializedItems is a list of Arrow-IPC-encoded items sent over the wire.
@@ -936,21 +937,30 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			return CatalogVersionResponseWire{Version: version}, nil
 		})
 
-	// catalog_transaction_begin
+	// catalog_transaction_begin — allocate a fresh transaction id when the
+	// worker advertises transaction support, so DuckDB threads it through
+	// bind/scan inside BEGIN/COMMIT (enables transaction-scoped storage).
 	unaryCatalog[TransactionBeginRequestWire, TransactionBeginResponseWire](w, s, "catalog_transaction_begin",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TransactionBeginRequestWire) (TransactionBeginResponseWire, error) {
-			return TransactionBeginResponseWire{}, nil
+			if !w.supportsTransactions {
+				return TransactionBeginResponseWire{}, nil
+			}
+			id := uuid.New()
+			tx := append([]byte(nil), id[:]...)
+			return TransactionBeginResponseWire{TransactionOpaqueData: &tx}, nil
 		})
 
-	// catalog_transaction_commit
+	// catalog_transaction_commit — clear per-transaction storage.
 	unaryVoidCatalog[TransactionRequestWire](w, s, "catalog_transaction_commit",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TransactionRequestWire) error {
+			w.clearTransactionState(req.TransactionOpaqueData)
 			return nil
 		})
 
-	// catalog_transaction_rollback
+	// catalog_transaction_rollback — same cleanup path as commit.
 	unaryVoidCatalog[TransactionRequestWire](w, s, "catalog_transaction_rollback",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req TransactionRequestWire) error {
+			w.clearTransactionState(req.TransactionOpaqueData)
 			return nil
 		})
 
@@ -1823,6 +1833,17 @@ func buildScanFunctionGetResponse(result *ScanFunctionResult) (TableScanFunction
 		Arguments:          argBytes,
 		RequiredExtensions: result.RequiredExtensions,
 	}, nil
+}
+
+// clearTransactionState best-effort clears per-transaction K/V storage when a
+// transaction commits or rolls back.
+func (w *Worker) clearTransactionState(txID []byte) {
+	if len(txID) == 0 {
+		return
+	}
+	if back, err := w.functionStorage(); err == nil {
+		_ = back.TransactionStateClear(txID)
+	}
 }
 
 // resolveScanFunction resolves the scan function backing a catalog table,

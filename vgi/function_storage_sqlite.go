@@ -148,8 +148,19 @@ func defaultSQLitePath() string {
 	return filepath.Join(dir, "storage.db")
 }
 
-// initSQLiteSchema creates the eight backing tables. Idempotent.
+// initSQLiteSchema creates the backing tables. Idempotent.
 func initSQLiteSchema(db *sql.DB) error {
+	// Migration: the transaction_state key column was renamed
+	// transaction_id -> transaction_opaque_data. A persisted DB created before
+	// the rename has the legacy schema, which breaks the queries below. The
+	// table holds only transient per-transaction scratch state, so drop a
+	// legacy copy and let the CREATE recreate it with the current columns.
+	if legacyTransactionStateSchema(db) {
+		if _, err := db.Exec(`DROP TABLE transaction_state`); err != nil {
+			return fmt.Errorf("migrating legacy transaction_state: %w", err)
+		}
+	}
+
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS worker_state (
 			execution_id BLOB NOT NULL,
@@ -219,6 +230,32 @@ func initSQLiteSchema(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// legacyTransactionStateSchema reports whether a transaction_state table exists
+// without the current transaction_opaque_data column (the pre-rename schema).
+func legacyTransactionStateSchema(db *sql.DB) bool {
+	rows, err := db.Query(`PRAGMA table_info(transaction_state)`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	exists := false
+	hasCol := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false
+		}
+		exists = true
+		if name == "transaction_opaque_data" {
+			hasCol = true
+		}
+	}
+	return exists && !hasCol
 }
 
 // maybeCleanup opportunistically prunes old rows on write paths. Uses
