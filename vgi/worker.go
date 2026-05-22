@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/Query-farm/vgi-rpc/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -729,7 +730,17 @@ func (w *Worker) SetOAuthResourceMetadata(m *vgirpc.OAuthResourceMetadata) {
 
 // buildServer creates and configures the vgirpc.Server with all handlers
 // registered. Shared between RunStdio and RunHttp.
-func (w *Worker) buildServer(isHTTP bool) *vgirpc.Server {
+// serverTransport selects how the worker serves and how execution-storage
+// cleanup is handled.
+type serverTransport int
+
+const (
+	transportStdio serverTransport = iota // single serial stream — deferred cleanup
+	transportHTTP                         // independent requests — no deferred cleanup (TTL sweep)
+	transportUnix                         // concurrent connections — no cleanup hook (TTL sweep)
+)
+
+func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 	// Configure structured logging.
 	// logLevel zero value is slog.LevelInfo (0) — Info by default is intentional.
 	handler := w.logHandler
@@ -742,7 +753,19 @@ func (w *Worker) buildServer(isHTTP bool) *vgirpc.Server {
 	w.catalog = NewDefaultReadOnlyCatalog(w.catalogName, w)
 
 	s := vgirpc.NewServer()
-	s.SetDispatchHook(&storageCleanupHook{worker: w, isHTTP: isHTTP})
+	// Execution-storage cleanup. The deferred-cleanup heuristic assumes a single
+	// serial dispatch stream (stdio); HTTP disables the deferred step. The unix
+	// (launcher) transport serves concurrent connections, where the hook's
+	// per-dispatch state is not safe to share — skip the hook entirely and rely
+	// on the storage backend's TTL sweep (CleanupOldEntries).
+	switch transport {
+	case transportStdio:
+		s.SetDispatchHook(&storageCleanupHook{worker: w, isHTTP: false})
+	case transportHTTP:
+		s.SetDispatchHook(&storageCleanupHook{worker: w, isHTTP: true})
+	case transportUnix:
+		// no cleanup hook
+	}
 
 	// Register bind (unary)
 	vgirpc.Unary[BindRequestWire, BindResponseWire](s, "bind", w.handleBind)
@@ -781,15 +804,28 @@ func (w *Worker) buildServer(isHTTP bool) *vgirpc.Server {
 
 // RunStdio runs the worker serving RPC over stdin/stdout.
 func (w *Worker) RunStdio() {
-	s := w.buildServer(false)
+	s := w.buildServer(transportStdio)
 	s.RunStdio()
+}
+
+// RunUnix runs the worker serving RPC over an AF_UNIX socket at path — the
+// "launcher" transport. It prints the readiness marker "UNIX:<path>" to stdout
+// once the socket is listening (then writes nothing further to stdout), and
+// self-shuts-down after idleTimeout with no active connections (<=0 disables
+// the timeout). Mutually exclusive with HTTP.
+func (w *Worker) RunUnix(path string, idleTimeout time.Duration) error {
+	s := w.buildServer(transportUnix)
+	return s.RunUnix(path, idleTimeout, func(bound string) {
+		fmt.Println("UNIX:" + bound)
+		os.Stdout.Sync()
+	})
 }
 
 // RunHttp runs the worker serving RPC over HTTP. It listens on the given
 // address (e.g. "127.0.0.1:0" for a random port) and prints "PORT:<n>" to
 // stdout so callers can discover the assigned port.
 func (w *Worker) RunHttp(addr string) error {
-	s := w.buildServer(true)
+	s := w.buildServer(transportHTTP)
 	// Resolve the signing key once so the worker (catalog opaque-data
 	// sealing — see crypto.go) and the HTTP state-token machinery share the
 	// same key. Generate an ephemeral per-process key when the operator did

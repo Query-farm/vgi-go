@@ -127,8 +127,19 @@ test-single: build
 # and cleans up. Tests in HTTP_XFAIL_TESTS are expected to fail.
 test-http: build $(HTTP_TEST_TARGETS)
 
-# Run both stdio and HTTP tests.
-test-all: test test-http
+# Run the launcher (AF_UNIX 'launch:' transport) integration tests. The worker
+# is wrapped in a launch: LOCATION so the extension spawns it directly with
+# --unix/--idle-timeout appended; VGI_REQUIRE_LAUNCHER_TRANSPORT un-skips the
+# launcher-only test group.
+test-launcher: build
+	cd $(VGI_EXT_DIR) && \
+	    VGI_SYNC_INIT_GLOBAL=1 \
+	    VGI_REQUIRE_LAUNCHER_TRANSPORT=1 \
+	    VGI_TEST_WORKER="launch:$(WORKER_PATH)" \
+	    $(UNITTEST) "test/sql/integration/launcher/*"
+
+# Run stdio, HTTP, and launcher tests.
+test-all: test test-http test-launcher
 
 # Pattern rule: HTTP transport — starts server per test, discovers port, cleans up
 test-http/%: build

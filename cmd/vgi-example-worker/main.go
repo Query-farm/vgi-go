@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Query-farm/vgi-go/examples/aggregate"
 	"github.com/Query-farm/vgi-go/examples/scalar"
@@ -26,7 +27,21 @@ import (
 
 func main() {
 	httpMode := flag.Bool("http", false, "Run as HTTP server instead of stdio")
-	flag.Parse()
+	unixPath := flag.String("unix", "", "Bind to this AF_UNIX socket path (launcher transport); mutually exclusive with --http")
+	idleTimeout := flag.Float64("idle-timeout", 300, "Self-shutdown after N seconds idle when serving --unix (0 = never)")
+	// --describe / --no-describe: accepted for launcher compatibility (the VGI
+	// extension passes it through). Description pages aren't served over the
+	// socket/stdio transports, so it is currently a no-op here.
+	flag.Bool("describe", true, "Enable description pages (accepted for launcher compatibility)")
+	flag.Bool("no-describe", false, "Disable description pages (accepted for launcher compatibility)")
+	// The launcher varies a worker's argv (e.g. --threaded, --quiet, --debug) to
+	// produce distinct cache keys for the same binary; tolerate unknown flags
+	// rather than failing to start. Only flags we define consume a value.
+	flag.CommandLine.Parse(filterKnownFlags(os.Args[1:], map[string]bool{"unix": true, "idle-timeout": true}))
+
+	if *unixPath != "" && *httpMode {
+		log.Fatal("--unix and --http are mutually exclusive")
+	}
 
 	// Pick the FunctionStorage backend from VGI_WORKER_SHARED_STORAGE.
 	// Defaults to local SQLite when the env var is unset — preserves the
@@ -755,7 +770,12 @@ func main() {
 		return nil, fmt.Errorf("no scan function for %s.%s", schemaName, tableName)
 	})
 
-	if *httpMode {
+	switch {
+	case *unixPath != "":
+		if err := w.RunUnix(*unixPath, time.Duration(*idleTimeout*float64(time.Second))); err != nil {
+			log.Fatal(err)
+		}
+	case *httpMode:
 		authFn, jwtCleanup := resolveAuthenticate()
 		if jwtCleanup != nil {
 			defer jwtCleanup()
@@ -769,9 +789,41 @@ func main() {
 		if err := w.RunHttp("127.0.0.1:0"); err != nil {
 			log.Fatal(err)
 		}
-	} else {
+	default:
 		w.RunStdio()
 	}
+}
+
+// filterKnownFlags drops command-line tokens for flags this binary doesn't
+// define, so launcher-injected argv-differentiation flags (e.g. --threaded,
+// --quiet, --debug) don't abort flag parsing. Flags named in valueFlags consume
+// the following token as their value (when not given in --flag=value form);
+// all other recognized flags are treated as valueless. Unknown flags and stray
+// positionals are dropped.
+func filterKnownFlags(args []string, valueFlags map[string]bool) []string {
+	defined := map[string]bool{}
+	flag.CommandLine.VisitAll(func(f *flag.Flag) { defined[f.Name] = true })
+	var out []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			continue // stray positional
+		}
+		name := strings.TrimLeft(a, "-")
+		hasInlineValue := strings.ContainsRune(name, '=')
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			name = name[:eq]
+		}
+		if !defined[name] {
+			continue // unknown flag — ignore
+		}
+		out = append(out, a)
+		if valueFlags[name] && !hasInlineValue && i+1 < len(args) {
+			i++
+			out = append(out, args[i])
+		}
+	}
+	return out
 }
 
 func boolPtr(b bool) *bool    { return &b }
