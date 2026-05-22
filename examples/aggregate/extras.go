@@ -5,6 +5,7 @@ package aggregate
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -222,12 +223,36 @@ func (PercentileFunction) ArgumentSpecs() []vgi.ArgSpec {
 }
 
 func (PercentileFunction) OnBind(p *vgi.AggregateBindParams) (*vgi.BindResponse, error) {
-	// NOTE: rejecting SQL NULL for the const `p` is intentionally not
-	// implemented here. DuckDB collapses a literal `NULL` const aggregate
-	// arg to a defaulted value with the null bit cleared on the wire (the
-	// arg arrives as decimal(2,1) value 0, isNull=false), so the worker
-	// has no signal to distinguish `NULL` from `0`. vgi-python rejects
-	// this at the C++/extension level before the bind RPC fires.
+	// Validate the constant percentile up front and raise a clear error,
+	// rather than crashing later in finalize on NULL/NaN/out-of-range input.
+	// The const arrives as a named arg "positional_0" (a NULL literal arrives
+	// as a null-typed array; positional decimals collapse NULL to 0).
+	if p.Args != nil {
+		var constArg arrow.Array
+		if a, ok := p.Args.Named["positional_0"]; ok {
+			constArg = a
+		} else {
+			for _, a := range p.Args.Positional {
+				if a != nil && a.Len() > 0 {
+					constArg = a
+					break
+				}
+			}
+		}
+		if constArg != nil && constArg.Len() > 0 {
+			if constArg.DataType().ID() == arrow.NULL || constArg.IsNull(0) {
+				return nil, fmt.Errorf("vgi_percentile: percentile must not be NULL")
+			}
+			if v, ok := scalarFloatFromArr(constArg); ok {
+				if math.IsNaN(v) || math.IsInf(v, 0) {
+					return nil, fmt.Errorf("vgi_percentile: percentile must be a finite number")
+				}
+				if v < 0 || v > 1 {
+					return nil, fmt.Errorf("vgi_percentile: percentile must be in [0, 1], got %v", v)
+				}
+			}
+		}
+	}
 	return vgi.BindSchema(arrow.NewSchema([]arrow.Field{
 		{Name: "result", Type: arrow.PrimitiveTypes.Float64},
 	}, nil))

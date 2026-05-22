@@ -884,7 +884,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			}
 			result := CatalogAttachResultWire{
 				AttachOpaqueData:              attachOpaqueData,
-				SupportsTransactions:          false,
+				SupportsTransactions:          w.supportsTransactions,
 				SupportsTimeTravel:            supportsTimeTravel,
 				CatalogVersionFrozen:          true,
 				CatalogVersion:                version,

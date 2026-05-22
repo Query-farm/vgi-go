@@ -27,9 +27,9 @@ import (
 )
 
 const (
-	CatalogName     = "attach_options"
+	CatalogName             = "attach_options"
 	attachOpaqueDataSepByte = 0x00
-	uuidBytes       = 16
+	uuidBytes               = 16
 )
 
 // OptionDef describes one declared attach option.

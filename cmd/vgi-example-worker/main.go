@@ -38,6 +38,7 @@ func main() {
 
 	w := vgi.NewWorker(
 		vgi.WithFunctionStorage(storage),
+		vgi.WithSupportsTransactions(true),
 		vgi.WithCatalogName("example"),
 		vgi.WithCatalogComment("Example VGI catalog for testing"),
 		vgi.WithCatalogTags(map[string]string{
@@ -204,6 +205,7 @@ func main() {
 	w.RegisterTable(table.NewBrokenPartitionMinNeqMaxFunction())
 	w.RegisterTable(table.NewBrokenPartitionValuesNoAnnotationFunction())
 	w.RegisterTable(table.NewBrokenPartitionColumnAbsentFromBatchFunction())
+	w.RegisterTable(table.NewTxCachedValueFunction())
 	w.RegisterTable(table.NewPartitionedFixedOrderFunction())
 	w.RegisterTable(table.NewPartitionedPreservesOrderFunction())
 	w.RegisterTable(table.NewPartitionedNoOrderGuaranteeFunction())

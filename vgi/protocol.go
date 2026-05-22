@@ -301,6 +301,9 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		return BindResponseWire{}, err
 	}
 	bindParams.Auth = callCtx.Auth
+	if back, ferr := w.functionStorage(); ferr == nil {
+		bindParams.txBackend = back
+	}
 	slog.Debug("bind: parsed args",
 		"positional", len(bindParams.Args.Positional),
 		"named", len(bindParams.Args.Named),

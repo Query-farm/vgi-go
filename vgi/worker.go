@@ -288,12 +288,13 @@ type Worker struct {
 	aggStorage      *aggregateStorage
 	// streamingSessions tracks per-execution_id state for streaming-partitioned
 	// aggregates (aggregate_streaming_open/_chunk/_close).
-	streamingSessions streamingSessionStore
-	catalogName       string
-	catalogComment    string
-	catalogTags       map[string]string
-	schemaComments    map[string]string
-	catalog           *DefaultReadOnlyCatalog
+	streamingSessions    streamingSessionStore
+	catalogName          string
+	catalogComment       string
+	catalogTags          map[string]string
+	supportsTransactions bool
+	schemaComments       map[string]string
+	catalog              *DefaultReadOnlyCatalog
 	// extraCatalogs are additional catalog names this worker accepts via
 	// catalog_attach. They share the worker's registered functions but
 	// have their own (writable) table/schema state. Indexed by name.
@@ -375,6 +376,15 @@ func WithCatalogComment(comment string) WorkerOption {
 func WithCatalogTags(tags map[string]string) WorkerOption {
 	return func(w *Worker) {
 		w.catalogTags = tags
+	}
+}
+
+// WithSupportsTransactions makes the catalog report supports_transactions=true
+// on attach, so DuckDB threads a transaction_opaque_data through bind/scan
+// inside BEGIN/COMMIT (needed by transaction-scoped storage like tx_cached_value).
+func WithSupportsTransactions(v bool) WorkerOption {
+	return func(w *Worker) {
+		w.supportsTransactions = v
 	}
 }
 
