@@ -44,6 +44,12 @@ BUILD_TYPE   ?= release
 # Timeout per individual test (seconds).
 TEST_TIMEOUT ?= 60
 
+# Shared-memory side-channel segment size (bytes) for `make test-shm`.
+# Setting VGI_RPC_SHM_SIZE_BYTES makes the DuckDB extension (the RPC client)
+# create a POSIX shm segment and advertise it per request; the Go worker then
+# attaches and uses zero-copy batch transfer. Default: 256 MiB.
+SHM_SIZE_BYTES ?= 268435456
+
 # Path to the DuckDB unittest runner for the selected build type.
 UNITTEST     := $(VGI_EXT_DIR)/build/$(BUILD_TYPE)/test/unittest
 DEBUG_BIN    := $(VGI_EXT_DIR)/build/debug/test/unittest
@@ -65,7 +71,7 @@ HTTP_TEST_TARGETS := $(patsubst $(TEST_DIR)/%.test,test-http/%,$(TEST_FILES))
 # Tests expected to fail over HTTP (currently none)
 HTTP_XFAIL_TESTS :=
 
-.PHONY: build clean fmt vet lint test test-unit test-single test-http test-all new-worker
+.PHONY: build clean fmt vet lint test test-unit test-single test-shm test-http test-all new-worker
 
 # Compile the example worker binaries.
 build:
@@ -153,6 +159,24 @@ test-single: build
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    $(UNITTEST) "$(TEST)"
 
+# Run the full integration test suite with the shared-memory side-channel
+# enabled. Identical to `make test` plus VGI_RPC_SHM_SIZE_BYTES, which makes
+# the extension (RPC client) create a POSIX shm segment and advertise it; the
+# Go worker attaches and uses zero-copy batch transfer over stdio. SHM is
+# transparent to test outcomes, so the same .test files exercise the SHM path.
+# Set VGI_RPC_SHM_DEBUG=1 in your environment to trace resolved/fallback batches.
+#   make test-shm                         # 256 MiB segment (default)
+#   make test-shm SHM_SIZE_BYTES=67108864 # 64 MiB segment
+test-shm: build
+	cd $(VGI_EXT_DIR) && \
+	    VGI_SYNC_INIT_GLOBAL=1 \
+	    VGI_RPC_SHM_SIZE_BYTES=$(SHM_SIZE_BYTES) \
+	    VGI_TEST_WORKER=$(WORKER_PATH) \
+	    VGI_VERSIONED_WORKER=$(VERSIONED_WORKER_PATH) \
+	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
+	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
+	    $(UNITTEST) "test/*" "~test/sql/integration/writable/*"
+
 # Run the full integration test suite over HTTP transport.
 # Each test starts a fresh HTTP worker, discovers the port, runs the test,
 # and cleans up. Tests in HTTP_XFAIL_TESTS are expected to fail.
@@ -169,8 +193,8 @@ test-launcher: build
 	    VGI_TEST_WORKER="launch:$(WORKER_PATH)" \
 	    $(UNITTEST) "test/sql/integration/launcher/*"
 
-# Run stdio, HTTP, and launcher tests.
-test-all: test test-http test-launcher
+# Run stdio, stdio+shm, HTTP, and launcher tests.
+test-all: test test-shm test-http test-launcher
 
 # Pattern rule: HTTP transport — starts server per test, discovers port, cleans up
 test-http/%: build
