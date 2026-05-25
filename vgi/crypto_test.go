@@ -74,7 +74,7 @@ func TestOpenRejectsTamperedAndMalformed(t *testing.T) {
 	if _, err := openBytes([]byte("garbage"), key, aad, attachEnvelopeVersion); err != errOpaqueDataRejected {
 		t.Fatalf("expected rejection for malformed token, got %v", err)
 	}
-	if _, err := openBytes(token, key, aad, transactionEnvelopeVersion); err != errOpaqueDataRejected {
+	if _, err := openBytes(token, key, aad, attachEnvelopeVersion+1); err != errOpaqueDataRejected {
 		t.Fatalf("expected rejection for wrong version byte, got %v", err)
 	}
 }
@@ -113,17 +113,25 @@ func TestWorkerHelpersSealWithSigningKey(t *testing.T) {
 	alice := &vgirpc.CallContext{Auth: authCtx("test", "alice")}
 	bob := &vgirpc.CallContext{Auth: authCtx("test", "bob")}
 
-	sealed, err := w.sealAttach([]byte("readonly-catalog-"), alice)
+	// The framework attach plaintext is uuid(16) || catalog_bytes; openAttach
+	// strips the uuid and returns the catalog bytes, openAttachFull keeps both.
+	plaintext := append(make([]byte, attachUUIDLen), []byte("readonly-catalog-")...)
+	sealed, err := w.sealAttach(plaintext, alice)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	if bytes.Equal(sealed, []byte("readonly-catalog-")) {
+	if bytes.Equal(sealed, plaintext) {
 		t.Fatal("expected sealed envelope to differ from plaintext")
 	}
-	// Alice opens her own envelope.
+	// Alice opens her own envelope; openAttach returns the catalog bytes (uuid stripped).
 	got, err := w.openAttach(sealed, alice)
 	if err != nil || string(got) != "readonly-catalog-" {
 		t.Fatalf("alice open: %q err=%v", got, err)
+	}
+	// openAttachFull returns the full uuid(16) || catalog_bytes.
+	full, err := w.openAttachFull(sealed, alice)
+	if err != nil || !bytes.Equal(full, plaintext) {
+		t.Fatalf("alice openFull: %q err=%v", full, err)
 	}
 	// Bob cannot.
 	if _, err := w.openAttach(sealed, bob); err != errOpaqueDataRejected {

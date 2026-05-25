@@ -20,4 +20,9 @@ type InitRecipe struct {
 	PushdownFilterIPC []byte
 	Phase             Phase
 	IsSecondary       bool
+	// ShardKey is the per-attach Durable Object routing key (att-<hex uuid>),
+	// derived once at init from the unwrapped attach UUID and carried through
+	// serialization so a rehydrated process/finalize turn routes storage to the
+	// same DO without re-opening the auth-scoped seal. "" for non-attach paths.
+	ShardKey string
 }

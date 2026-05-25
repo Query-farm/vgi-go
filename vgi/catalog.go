@@ -901,10 +901,20 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				c := w.catalogComment
 				result.Comment = &c
 			}
+			// Mint the shard identity: prepend a fresh framework UUID to the
+			// catalog's plaintext (uuid(16) || catalog_bytes), then seal. Storage
+			// shards on this UUID — stable across re-seals and globally unique,
+			// unlike the random-nonce ciphertext or the (possibly non-unique)
+			// catalog bytes. openAttach strips the UUID back off, so the catalog
+			// only ever sees its own bytes.
+			u := uuid.New()
+			minted := make([]byte, attachUUIDLen+len(result.AttachOpaqueData))
+			copy(minted, u[:])
+			copy(minted[attachUUIDLen:], result.AttachOpaqueData)
 			// Seal the attach value into an AEAD envelope bound to the
 			// caller's identity before it leaves the worker (HTTP transport;
 			// pass-through on subprocess / unix).
-			sealed, sErr := w.sealAttach(result.AttachOpaqueData, callCtx)
+			sealed, sErr := w.sealAttach(minted, callCtx)
 			if sErr != nil {
 				return CatalogAttachResultWire{}, sErr
 			}

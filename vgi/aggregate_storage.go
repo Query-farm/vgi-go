@@ -78,17 +78,37 @@ type stateBucket struct {
 	storage      *aggregateStorage
 	functionName string
 	executionID  []byte
+	// shardKey routes per logical ATTACH (att-<hex uuid>) for the CfDo backend;
+	// "" for non-sharding backends. Derived by the handler from the request's
+	// unwrapped attach UUID.
+	shardKey string
 }
 
-func (s *aggregateStorage) bucket(funcName string, execID []byte) *stateBucket {
-	return &stateBucket{storage: s, functionName: funcName, executionID: execID}
+func (s *aggregateStorage) bucket(funcName string, execID []byte, shardKey string) *stateBucket {
+	return &stateBucket{storage: s, functionName: funcName, executionID: execID, shardKey: shardKey}
+}
+
+// backend resolves the shared backend and, for a remote-sharding backend
+// (CfDo), pins it to this bucket's shard key — so aggregate state routes to
+// the same Durable Object as the execution's other storage.
+func (b *stateBucket) backend() (FunctionStorage, error) {
+	back, err := b.storage.ensureOpen()
+	if err != nil {
+		return nil, err
+	}
+	if b.shardKey != "" {
+		if sb, ok := back.(ShardedBackend); ok {
+			return sb.ForShard(b.shardKey), nil
+		}
+	}
+	return back, nil
 }
 
 // loadStates fetches all states for the given group_ids. Returns a map keyed
 // by group_id; gids absent from the result are not yet stored. Matches the
 // pre-shared-backend surface so callers don't change.
 func (b *stateBucket) loadStates(gids []int64) (map[int64][]byte, error) {
-	back, err := b.storage.ensureOpen()
+	back, err := b.backend()
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +131,7 @@ func (b *stateBucket) loadStates(gids []int64) (map[int64][]byte, error) {
 
 // saveStates writes (gid, bytes) pairs.
 func (b *stateBucket) saveStates(states map[int64][]byte) error {
-	back, err := b.storage.ensureOpen()
+	back, err := b.backend()
 	if err != nil {
 		return err
 	}
@@ -130,7 +150,7 @@ func (b *stateBucket) saveStates(states map[int64][]byte) error {
 // keyed by (execution_id, function_name), and reaped by the FunctionStorage's
 // TTL sweep. Matches vgi-python which also has no per-call const-args clear.
 func (b *stateBucket) clear() error {
-	back, err := b.storage.ensureOpen()
+	back, err := b.backend()
 	if err != nil {
 		return err
 	}
@@ -141,7 +161,7 @@ func (b *stateBucket) clear() error {
 }
 
 func (b *stateBucket) putConstArgs(args []byte) error {
-	back, err := b.storage.ensureOpen()
+	back, err := b.backend()
 	if err != nil {
 		return err
 	}
@@ -149,7 +169,7 @@ func (b *stateBucket) putConstArgs(args []byte) error {
 }
 
 func (b *stateBucket) getConstArgs() ([]byte, error) {
-	back, err := b.storage.ensureOpen()
+	back, err := b.backend()
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +177,7 @@ func (b *stateBucket) getConstArgs() ([]byte, error) {
 }
 
 func (b *stateBucket) putWindowPartition(partitionID int64, payload []byte) error {
-	back, err := b.storage.ensureOpen()
+	back, err := b.backend()
 	if err != nil {
 		return err
 	}
@@ -165,7 +185,7 @@ func (b *stateBucket) putWindowPartition(partitionID int64, payload []byte) erro
 }
 
 func (b *stateBucket) getWindowPartition(partitionID int64) ([]byte, error) {
-	back, err := b.storage.ensureOpen()
+	back, err := b.backend()
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +193,7 @@ func (b *stateBucket) getWindowPartition(partitionID int64) ([]byte, error) {
 }
 
 func (b *stateBucket) deleteWindowPartition(partitionID int64) error {
-	back, err := b.storage.ensureOpen()
+	back, err := b.backend()
 	if err != nil {
 		return err
 	}

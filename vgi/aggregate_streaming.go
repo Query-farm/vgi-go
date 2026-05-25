@@ -181,7 +181,7 @@ func (w *Worker) handleAggregateStreamingOpen(ctx context.Context, callCtx *vgir
 		Auth:         callCtx.Auth,
 	}
 	if req.AttachOpaqueData != nil {
-		params.AttachOpaqueData = *req.AttachOpaqueData
+		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 	}
 
 	state, err := sFn.StreamingOpen(params)

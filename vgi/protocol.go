@@ -295,7 +295,7 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		"args_len", len(req.Arguments),
 		"has_input_schema", req.InputSchema != nil,
 	)
-	bindParams, err := w.parseBindRequest(req)
+	bindParams, err := w.parseBindRequest(req, callCtx)
 	if err != nil {
 		LogRPC.Debug("bind: parse failed", "err", err)
 		return BindResponseWire{}, err
@@ -398,7 +398,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	LogRPC.Debug("init: output schema", "fields", outputSchema.NumFields())
 
 	// Parse bind params for argument access
-	bindParams, err := w.parseBindRequest(*bindReq)
+	bindParams, err := w.parseBindRequest(*bindReq, callCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -522,6 +522,19 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		recipe.PushdownFilterIPC = *req.PushdownFilters
 	}
 
+	// Derive the per-attach shard key once (from the unwrapped attach UUID) and
+	// carry it on the recipe so storage routes per logical ATTACH and rehydrated
+	// turns reuse it without re-opening the auth-scoped seal.
+	var sealedAttach []byte
+	if bindReq.AttachOpaqueData != nil {
+		sealedAttach = *bindReq.AttachOpaqueData
+	}
+	shardKey, err := w.shardKeyForAttach(sealedAttach, callCtx)
+	if err != nil {
+		return nil, err
+	}
+	recipe.ShardKey = shardKey
+
 	LogRPC.Debug("init: dispatching", "type", fmt.Sprintf("%T", fn))
 	switch f := fn.(type) {
 	case ScalarFunction:
@@ -580,7 +593,7 @@ func (w *Worker) initScalar(ctx context.Context, fn ScalarFunction, initParams *
 		processParams.InitOpaqueData = initParams.BindOpaqueData
 		recipe.InitOpaqueData = initParams.BindOpaqueData
 	}
-	storage, err := w.getOrCreateStorage(ctx, resp.ExecutionID)
+	storage, err := w.getOrCreateStorage(ctx, resp.ExecutionID, recipe.ShardKey)
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +627,7 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 	if initParams.ExecutionID == nil {
 		initParams.ExecutionID = newExecutionID()
 	}
-	initStorage, err := w.getOrCreateStorage(ctx, initParams.ExecutionID)
+	initStorage, err := w.getOrCreateStorage(ctx, initParams.ExecutionID, recipe.ShardKey)
 	if err != nil {
 		return nil, err
 	}
@@ -647,7 +660,7 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 	recipe.ExecutionID = resp.ExecutionID
 	recipe.InitOpaqueData = resp.OpaqueData
 	processParams.InitOpaqueData = resp.OpaqueData
-	processStorage, err := w.getOrCreateStorage(ctx, resp.ExecutionID)
+	processStorage, err := w.getOrCreateStorage(ctx, resp.ExecutionID, recipe.ShardKey)
 	if err != nil {
 		return nil, err
 	}
@@ -701,7 +714,7 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 	if initParams.ExecutionID == nil {
 		initParams.ExecutionID = newExecutionID()
 	}
-	initStorage, err := w.getOrCreateStorage(ctx, initParams.ExecutionID)
+	initStorage, err := w.getOrCreateStorage(ctx, initParams.ExecutionID, recipe.ShardKey)
 	if err != nil {
 		return nil, err
 	}
@@ -734,7 +747,7 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 	recipe.ExecutionID = resp.ExecutionID
 	recipe.InitOpaqueData = resp.OpaqueData
 	processParams.InitOpaqueData = resp.OpaqueData
-	processStorage, err := w.getOrCreateStorage(ctx, resp.ExecutionID)
+	processStorage, err := w.getOrCreateStorage(ctx, resp.ExecutionID, recipe.ShardKey)
 	if err != nil {
 		return nil, err
 	}
@@ -824,7 +837,7 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 func (w *Worker) handleTableFunctionStatistics(ctx context.Context, callCtx *vgirpc.CallContext, req CardinalityRequestWire) (out []byte, err error) {
 	defer RecoverPanic("statistics", req.BindCall.FunctionName, &err)
 	bindReq := &req.BindCall
-	bindParams, err := w.parseBindRequest(*bindReq)
+	bindParams, err := w.parseBindRequest(*bindReq, callCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -853,7 +866,7 @@ func (w *Worker) handleCardinality(ctx context.Context, callCtx *vgirpc.CallCont
 	defer RecoverPanic("cardinality", req.BindCall.FunctionName, &err)
 	bindReq := &req.BindCall
 
-	bindParams, err := w.parseBindRequest(*bindReq)
+	bindParams, err := w.parseBindRequest(*bindReq, callCtx)
 	if err != nil {
 		return TableCardinality{}, err
 	}
@@ -886,7 +899,7 @@ func (w *Worker) handleCardinality(ctx context.Context, callCtx *vgirpc.CallCont
 // ---------------------------------------------------------------------------
 
 // parseBindRequest converts a wire bind request into BindParams.
-func (w *Worker) parseBindRequest(req BindRequestWire) (*BindParams, error) {
+func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallContext) (*BindParams, error) {
 	args, err := ParseArguments(req.Arguments)
 	if err != nil {
 		return nil, fmt.Errorf("parsing arguments: %w", err)
@@ -923,7 +936,14 @@ func (w *Worker) parseBindRequest(req BindRequestWire) (*BindParams, error) {
 	}
 
 	if req.AttachOpaqueData != nil {
-		params.AttachOpaqueData = *req.AttachOpaqueData
+		// User-facing attach is the catalog's bytes with the framework shard-UUID
+		// prefix stripped. Rehydration (callCtx == nil) has no auth context to
+		// reopen the auth-scoped seal, so it keeps the raw value.
+		if callCtx != nil {
+			params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
+		} else {
+			params.AttachOpaqueData = *req.AttachOpaqueData
+		}
 	}
 	if req.TransactionOpaqueData != nil {
 		params.TransactionOpaqueData = *req.TransactionOpaqueData

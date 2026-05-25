@@ -5,12 +5,11 @@ package vgi
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -18,52 +17,70 @@ import (
 // ---------------------------------------------------------------------------
 // SQLite-backed FunctionStorage
 //
-// One shared SQLite database covers every method group on FunctionStorage.
-// Tables key by execution_id (or transaction_opaque_data) so a single DB is safe for
-// many concurrent invocations — matching the vgi-python SQLite backend and
-// making cloud backends (Cloudflare DO etc.) straightforward to add against
-// the same interface.
+// Every method group maps onto the three unified tables shared by all backends
+// (the Cloudflare DO adds an HTTP-idempotency column layer on top):
+//
+//	function_state      composite-key K/V over (scope_id, ns, key). Worker,
+//	                    scan-worker, aggregate, window-partition, const-args and
+//	                    transaction state all live here under a reserved ns.
+//	function_state_log  append-only log keyed by (scope_id, ns, key); the
+//	                    AUTOINCREMENT id is the scan cursor.
+//	work_queue          FIFO work items, destructive pop (no registration).
+//
+// scope_id holds either execution_id or transaction_opaque_data (caller's
+// choice). The local tier carries none of the DO's idempotency machinery
+// (no last_attempt_id / drained_* / attempt_id) and no created_at: a single
+// SQLite connection per process has no network retries to dedup.
 // ---------------------------------------------------------------------------
+
+// Reserved namespaces — identical to the Cloudflare DO client's mapping so both
+// backends share one schema and one mental model.
+var (
+	nsWorker     = []byte("worker")
+	nsScanWorker = []byte("scan_worker")
+	nsAgg        = []byte("agg")
+	nsAggConst   = []byte("agg_const")
+	nsWin        = []byte("win")
+	nsTxn        = []byte("txn")
+	nsLog        = []byte("log")
+)
+
+// int64Key encodes an int64 worker/group/partition id as an 8-byte big-endian
+// state key (matching the DO client).
+func int64Key(v int64) []byte {
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, uint64(v))
+	return b
+}
+
+func int64FromKey(b []byte) int64 {
+	if len(b) != 8 {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(b))
+}
 
 // SQLiteStorageOptions tunes a SQLite-backed FunctionStorage.
 type SQLiteStorageOptions struct {
-	// Path is the SQLite database file path. Empty defaults to
-	// $TMPDIR/vgi-storage-<pid>.db. Use ":memory:" or "file::memory:?cache=shared"
-	// for in-process testing.
+	// Path is the SQLite database file path. Empty defaults to a per-user,
+	// per-machine state path. Use ":memory:" for the in-process tier.
 	Path string
-
-	// CleanupSampleRate is the probability that a per-call operation
-	// opportunistically prunes old rows (matching vgi-python's 1% sample).
-	// Set to 0 to disable.
-	CleanupSampleRate float64
-
-	// CleanupMaxAge is the maximum age of rows kept by opportunistic
-	// cleanup. Default: 24h.
-	CleanupMaxAge time.Duration
 }
 
 // sqliteStorage implements FunctionStorage against a single SQLite database.
 // Concurrency is handled entirely by database/sql + SQLite WAL:
 //   - Within-process: MaxOpenConns(1) serializes operations through one
-//     connection. database/sql queues callers transparently — no Go-level
-//     mutex needed.
+//     connection. database/sql queues callers transparently.
 //   - Cross-process: WAL mode + busy_timeout=30000 lets multiple worker
-//     subprocesses share the file. The per-conn busy_timeout means writers
-//     wait up to 30s for the file lock before returning SQLITE_BUSY.
+//     subprocesses share the file.
 type sqliteStorage struct {
-	db                *sql.DB
-	cleanupSampleRate float64
-	cleanupMaxAge     time.Duration
+	db *sql.DB
 }
 
-// NewSQLiteStorage opens (or creates) a SQLite-backed FunctionStorage. Safe
-// for concurrent use across goroutines and across processes (WAL mode +
-// busy_timeout): when DuckDB spawns subprocess workers for one execution,
-// every subprocess opens the same database file and sees the others' rows.
-//
-// The default path is fixed per-user (not per-process) so worker subprocesses
-// of a parallel scan share state. Override with opts.Path when the caller
-// wants isolation (e.g. tests passing ":memory:").
+// NewSQLiteStorage opens (or creates) a SQLite-backed FunctionStorage. Safe for
+// concurrent use across goroutines and across processes (WAL + busy_timeout):
+// when DuckDB spawns subprocess workers for one execution, every subprocess
+// opens the same database file and sees the others' rows.
 func NewSQLiteStorage(opts SQLiteStorageOptions) (FunctionStorage, error) {
 	path := opts.Path
 	if path == "" {
@@ -73,27 +90,11 @@ func NewSQLiteStorage(opts SQLiteStorageOptions) (FunctionStorage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening SQLite storage at %q: %w", path, err)
 	}
-	// One connection per process: writes serialize through it (matches
-	// Python's per-thread-connection model — each Go process is the unit
-	// of write serialization, with WAL coordinating across processes).
-	// Multiple readers within the same process don't need pool depth
-	// because reads complete fast and busy_timeout absorbs collisions.
+	// One connection per process: writes serialize through it (matches Python's
+	// per-thread-connection model), with WAL coordinating across processes.
 	db.SetMaxOpenConns(1)
 	if path != ":memory:" {
-		// Mirrors vgi-python's per-connection pragmas — these are what
-		// make multi-process write contention tolerable:
-		//
-		//   journal_mode=WAL      cross-process reader/writer concurrency
-		//   synchronous=NORMAL    skip fsync on every commit (fsync at
-		//                         WAL checkpoint only) — dominant write-
-		//                         throughput win
-		//   busy_timeout=30000    wait up to 30s for a lock before
-		//                         returning SQLITE_BUSY; matches Python
-		//   temp_store=MEMORY     small temp materializations stay in RAM
-		//   cache_size=-65536     64 MB page cache per connection
-		//
-		// With MaxOpenConns(1) the pool has at most one connection, so
-		// these pragmas apply to every operation that follows.
+		// Per-connection pragmas, matching vgi-python / vgi-typescript / vgi-java.
 		for _, p := range []string{
 			"PRAGMA journal_mode=WAL",
 			"PRAGMA synchronous=NORMAL",
@@ -111,27 +112,13 @@ func NewSQLiteStorage(opts SQLiteStorageOptions) (FunctionStorage, error) {
 		db.Close()
 		return nil, err
 	}
-	// Opportunistic cleanup is opt-in: at 0 by default. Tests and short-
-	// lived workers don't need it; long-running deployments should set
-	// 0.01 (matches vgi-python's per-call sample rate) or call
-	// CleanupOldEntries explicitly on a timer.
-	rate := opts.CleanupSampleRate
-	maxAge := opts.CleanupMaxAge
-	if maxAge == 0 {
-		maxAge = 24 * time.Hour
-	}
-	return &sqliteStorage{
-		db:                db,
-		cleanupSampleRate: rate,
-		cleanupMaxAge:     maxAge,
-	}, nil
+	return &sqliteStorage{db: db}, nil
 }
 
 // defaultSQLitePath returns a per-user, per-machine stable path for the
 // FunctionStorage SQLite database. Honors XDG_STATE_HOME, falling back to
 // ~/.local/state/vgi/storage.db on Unix or %LOCALAPPDATA%/vgi/storage.db on
-// Windows. Mirrors vgi-python's _get_default_db_path semantics. The path
-// is created if absent.
+// Windows. The path is created if absent.
 func defaultSQLitePath() string {
 	var base string
 	if v := os.Getenv("XDG_STATE_HOME"); v != "" {
@@ -148,81 +135,57 @@ func defaultSQLitePath() string {
 	return filepath.Join(dir, "storage.db")
 }
 
-// initSQLiteSchema creates the backing tables. Idempotent.
+// initSQLiteSchema creates the three unified tables. Idempotent. Drops any
+// legacy split-schema or idempotency-column tables left over from an older
+// on-disk DB (all this state is ephemeral in-progress worker state).
 func initSQLiteSchema(db *sql.DB) error {
-	// Migration: the transaction_state key column was renamed
-	// transaction_id -> transaction_opaque_data. A persisted DB created before
-	// the rename has the legacy schema, which breaks the queries below. The
-	// table holds only transient per-transaction scratch state, so drop a
-	// legacy copy and let the CREATE recreate it with the current columns.
-	if legacyTransactionStateSchema(db) {
-		if _, err := db.Exec(`DROP TABLE transaction_state`); err != nil {
-			return fmt.Errorf("migrating legacy transaction_state: %w", err)
+	for _, dead := range []string{
+		"worker_state", "scan_worker_state", "invocation_registry",
+		"aggregate_state", "aggregate_const_args", "aggregate_window_partitions",
+		"transaction_state", "state_log", "global_state_storage",
+	} {
+		if _, err := db.Exec(`DROP TABLE IF EXISTS ` + dead); err != nil {
+			return fmt.Errorf("dropping legacy table %s: %w", dead, err)
+		}
+	}
+	// Drop a stale function_state / _log / work_queue carrying a created_at or
+	// idempotency column (older schema), so the CREATEs below recreate the
+	// minimal shape.
+	for table, staleCol := range map[string]string{
+		"function_state":     "created_at",
+		"function_state_log": "created_at",
+		"work_queue":         "created_at",
+	} {
+		if columnExists(db, table, staleCol) {
+			if _, err := db.Exec(`DROP TABLE IF EXISTS ` + table); err != nil {
+				return fmt.Errorf("dropping stale %s: %w", table, err)
+			}
 		}
 	}
 
 	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS worker_state (
-			execution_id BLOB NOT NULL,
-			worker_id INTEGER NOT NULL,
-			state_data BLOB NOT NULL,
-			created_at REAL DEFAULT (julianday('now')),
-			PRIMARY KEY (execution_id, worker_id)
-		)`,
-		`CREATE TABLE IF NOT EXISTS scan_worker_state (
-			execution_id BLOB NOT NULL,
-			stream_id BLOB NOT NULL,
-			state_data BLOB NOT NULL,
-			created_at REAL DEFAULT (julianday('now')),
-			PRIMARY KEY (execution_id, stream_id)
-		)`,
 		`CREATE TABLE IF NOT EXISTS work_queue (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			execution_id BLOB NOT NULL,
-			work_item BLOB NOT NULL,
-			created_at REAL DEFAULT (julianday('now'))
+			work_item BLOB NOT NULL
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_work_queue_exec ON work_queue(execution_id)`,
-		`CREATE TABLE IF NOT EXISTS invocation_registry (
-			execution_id BLOB PRIMARY KEY,
-			created_at REAL DEFAULT (julianday('now'))
-		)`,
-		`CREATE TABLE IF NOT EXISTS aggregate_state (
-			execution_id BLOB NOT NULL,
-			group_id INTEGER NOT NULL,
-			state_data BLOB NOT NULL,
-			created_at REAL DEFAULT (julianday('now')),
-			PRIMARY KEY (execution_id, group_id)
-		)`,
-		`CREATE TABLE IF NOT EXISTS aggregate_const_args (
-			execution_id BLOB NOT NULL,
-			function_name TEXT NOT NULL,
-			args BLOB NOT NULL,
-			created_at REAL DEFAULT (julianday('now')),
-			PRIMARY KEY (execution_id, function_name)
-		)`,
-		`CREATE TABLE IF NOT EXISTS aggregate_window_partitions (
-			execution_id BLOB NOT NULL,
-			partition_id INTEGER NOT NULL,
-			payload BLOB NOT NULL,
-			created_at REAL DEFAULT (julianday('now')),
-			PRIMARY KEY (execution_id, partition_id)
-		)`,
-		`CREATE TABLE IF NOT EXISTS transaction_state (
-			transaction_opaque_data BLOB NOT NULL,
+		`CREATE INDEX IF NOT EXISTS idx_work_queue_execution ON work_queue(execution_id, id)`,
+		`CREATE TABLE IF NOT EXISTS function_state (
+			scope_id BLOB NOT NULL,
+			ns BLOB NOT NULL,
 			key BLOB NOT NULL,
 			value BLOB NOT NULL,
-			created_at REAL DEFAULT (julianday('now')),
-			PRIMARY KEY (transaction_opaque_data, key)
+			PRIMARY KEY (scope_id, ns, key)
 		)`,
-		`CREATE TABLE IF NOT EXISTS state_log (
+		`CREATE TABLE IF NOT EXISTS function_state_log (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			execution_id BLOB NOT NULL,
-			log_key BLOB NOT NULL,
-			value BLOB NOT NULL,
-			created_at REAL DEFAULT (julianday('now'))
+			scope_id BLOB NOT NULL,
+			ns BLOB NOT NULL,
+			key BLOB NOT NULL,
+			value BLOB NOT NULL
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_state_log ON state_log(execution_id, log_key, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_function_state_log_lookup
+			ON function_state_log(scope_id, ns, key, id)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
@@ -232,175 +195,190 @@ func initSQLiteSchema(db *sql.DB) error {
 	return nil
 }
 
-// legacyTransactionStateSchema reports whether a transaction_state table exists
-// without the current transaction_opaque_data column (the pre-rename schema).
-func legacyTransactionStateSchema(db *sql.DB) bool {
-	rows, err := db.Query(`PRAGMA table_info(transaction_state)`)
+func columnExists(db *sql.DB, table, col string) bool {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		return false
 	}
 	defer rows.Close()
-	exists := false
-	hasCol := false
 	for rows.Next() {
-		var cid int
+		var cid, notnull, pk int
 		var name, ctype string
-		var notnull, pk int
 		var dflt any
 		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
 			return false
 		}
-		exists = true
-		if name == "transaction_opaque_data" {
-			hasCol = true
+		if name == col {
+			return true
 		}
 	}
-	return exists && !hasCol
+	return false
 }
 
-// maybeCleanup opportunistically prunes old rows on write paths. Uses
-// math/rand/v2's goroutine-safe top-level Float64. No-op when the sample
-// rate is 0 (the default).
-func (s *sqliteStorage) maybeCleanup() {
-	if s.cleanupSampleRate <= 0 {
-		return
-	}
-	if rand.Float64() < s.cleanupSampleRate {
-		_, _ = s.CleanupOldEntries(s.cleanupMaxAge)
-	}
-}
+// --- Internal unified helpers over function_state -------------------------
 
-// ---------------------------------------------------------------------------
-// Worker state
-// ---------------------------------------------------------------------------
-
-func (s *sqliteStorage) WorkerPut(executionID []byte, workerID int64, state []byte) error {
-	s.maybeCleanup()
+func (s *sqliteStorage) statePut(scope, ns, key, value []byte) error {
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO worker_state (execution_id, worker_id, state_data, created_at)
-		 VALUES (?, ?, ?, julianday('now'))`,
-		executionID, workerID, state,
+		`INSERT OR REPLACE INTO function_state (scope_id, ns, key, value) VALUES (?, ?, ?, ?)`,
+		scope, ns, key, value,
 	)
 	return err
 }
 
-func (s *sqliteStorage) WorkerCollect(executionID []byte) ([][]byte, error) {
+func (s *sqliteStorage) stateGetOne(scope, ns, key []byte) ([]byte, error) {
+	var v []byte
+	err := s.db.QueryRow(
+		`SELECT value FROM function_state WHERE scope_id = ? AND ns = ? AND key = ?`,
+		scope, ns, key,
+	).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return v, err
+}
+
+// stateDrain reads and deletes every (key, value) in (scope, ns), ordered by
+// key, in one transaction.
+func (s *sqliteStorage) stateDrain(scope, ns []byte) ([][2][]byte, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	rows, err := tx.Query(
-		`SELECT state_data FROM worker_state WHERE execution_id = ? ORDER BY worker_id`,
-		executionID,
+		`SELECT key, value FROM function_state WHERE scope_id = ? AND ns = ? ORDER BY key`,
+		scope, ns,
 	)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, err
 	}
-	var states [][]byte
+	var out [][2][]byte
 	for rows.Next() {
-		var data []byte
-		if err := rows.Scan(&data); err != nil {
+		var k, v []byte
+		if err := rows.Scan(&k, &v); err != nil {
 			_ = rows.Close()
 			_ = tx.Rollback()
 			return nil, err
 		}
-		states = append(states, data)
+		out = append(out, [2][]byte{k, v})
 	}
 	rows.Close()
-	if _, err := tx.Exec(`DELETE FROM worker_state WHERE execution_id = ?`, executionID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM function_state WHERE scope_id = ? AND ns = ?`, scope, ns); err != nil {
 		_ = tx.Rollback()
 		return nil, err
 	}
-	return states, tx.Commit()
+	return out, tx.Commit()
 }
 
-func (s *sqliteStorage) WorkerScan(executionID []byte) ([]WorkerStateEntry, error) {
+// stateScan returns every (key, value) in (scope, ns), ordered by key.
+func (s *sqliteStorage) stateScan(scope, ns []byte) ([][2][]byte, error) {
 	rows, err := s.db.Query(
-		`SELECT worker_id, state_data FROM worker_state WHERE execution_id = ? ORDER BY worker_id`,
-		executionID,
+		`SELECT key, value FROM function_state WHERE scope_id = ? AND ns = ? ORDER BY key`,
+		scope, ns,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []WorkerStateEntry
+	var out [][2][]byte
 	for rows.Next() {
-		var e WorkerStateEntry
-		if err := rows.Scan(&e.WorkerID, &e.State); err != nil {
+		var k, v []byte
+		if err := rows.Scan(&k, &v); err != nil {
 			return nil, err
 		}
-		out = append(out, e)
+		out = append(out, [2][]byte{k, v})
 	}
 	return out, rows.Err()
 }
 
-// ---------------------------------------------------------------------------
-// Scan-worker state
-// ---------------------------------------------------------------------------
-
-func (s *sqliteStorage) ScanWorkerPut(executionID, streamID, state []byte) error {
-	s.maybeCleanup()
-	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO scan_worker_state (execution_id, stream_id, state_data, created_at)
-		 VALUES (?, ?, ?, julianday('now'))`,
-		executionID, streamID, state,
-	)
+func (s *sqliteStorage) stateDeleteNS(scope, ns []byte) error {
+	_, err := s.db.Exec(`DELETE FROM function_state WHERE scope_id = ? AND ns = ?`, scope, ns)
 	return err
 }
 
-func (s *sqliteStorage) ScanWorkerScan(executionID []byte) ([]ScanWorkerStateEntry, error) {
-	rows, err := s.db.Query(
-		`SELECT stream_id, state_data FROM scan_worker_state WHERE execution_id = ?`,
-		executionID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []ScanWorkerStateEntry
-	for rows.Next() {
-		var e ScanWorkerStateEntry
-		if err := rows.Scan(&e.StreamID, &e.State); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+func (s *sqliteStorage) stateDeleteKey(scope, ns, key []byte) error {
+	_, err := s.db.Exec(
+		`DELETE FROM function_state WHERE scope_id = ? AND ns = ? AND key = ?`, scope, ns, key)
+	return err
 }
 
 // ---------------------------------------------------------------------------
-// Work queue
+// Worker state  (ns=worker, key=int64(worker_id))
+// ---------------------------------------------------------------------------
+
+func (s *sqliteStorage) WorkerPut(executionID []byte, workerID int64, state []byte) error {
+	return s.statePut(executionID, nsWorker, int64Key(workerID), state)
+}
+
+func (s *sqliteStorage) WorkerCollect(executionID []byte) ([][]byte, error) {
+	rows, err := s.stateDrain(executionID, nsWorker)
+	if err != nil {
+		return nil, err
+	}
+	out := make([][]byte, len(rows))
+	for i, kv := range rows {
+		out[i] = kv[1]
+	}
+	return out, nil
+}
+
+func (s *sqliteStorage) WorkerScan(executionID []byte) ([]WorkerStateEntry, error) {
+	rows, err := s.stateScan(executionID, nsWorker)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]WorkerStateEntry, len(rows))
+	for i, kv := range rows {
+		out[i] = WorkerStateEntry{WorkerID: int64FromKey(kv[0]), State: kv[1]}
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Scan-worker state  (ns=scan_worker, key=stream_id)
+// ---------------------------------------------------------------------------
+
+func (s *sqliteStorage) ScanWorkerPut(executionID, streamID, state []byte) error {
+	return s.statePut(executionID, nsScanWorker, streamID, state)
+}
+
+func (s *sqliteStorage) ScanWorkerScan(executionID []byte) ([]ScanWorkerStateEntry, error) {
+	rows, err := s.stateScan(executionID, nsScanWorker)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ScanWorkerStateEntry, len(rows))
+	for i, kv := range rows {
+		out[i] = ScanWorkerStateEntry{StreamID: kv[0], State: kv[1]}
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Work queue  (no registration: pop on empty/unknown returns nil, nil)
 // ---------------------------------------------------------------------------
 
 func (s *sqliteStorage) QueuePush(executionID []byte, items [][]byte) (int, error) {
-	s.maybeCleanup()
+	if len(items) == 0 {
+		return 0, nil
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(
-		`INSERT OR IGNORE INTO invocation_registry (execution_id) VALUES (?)`,
-		executionID,
-	); err != nil {
+	stmt, err := tx.Prepare(`INSERT INTO work_queue (execution_id, work_item) VALUES (?, ?)`)
+	if err != nil {
 		_ = tx.Rollback()
 		return 0, err
 	}
+	defer stmt.Close()
 	count := 0
-	if len(items) > 0 {
-		stmt, err := tx.Prepare(`INSERT INTO work_queue (execution_id, work_item) VALUES (?, ?)`)
-		if err != nil {
+	for _, item := range items {
+		if _, err := stmt.Exec(executionID, item); err != nil {
 			_ = tx.Rollback()
 			return 0, err
 		}
-		defer stmt.Close()
-		for _, item := range items {
-			if _, err := stmt.Exec(executionID, item); err != nil {
-				_ = tx.Rollback()
-				return 0, err
-			}
-			count++
-		}
+		count++
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
@@ -409,10 +387,9 @@ func (s *sqliteStorage) QueuePush(executionID []byte, items [][]byte) (int, erro
 }
 
 func (s *sqliteStorage) QueuePop(executionID []byte) ([]byte, error) {
-	// Fast path: single DELETE ... RETURNING claims the next item atomically
-	// without a separate transaction. Holds the writer lock only for the
-	// duration of one statement — short enough that even busy file-level
-	// contention across worker subprocesses fits inside busy_timeout.
+	// Single DELETE ... RETURNING claims the next item atomically. An empty or
+	// never-pushed queue both return (nil, nil) — there is no registration,
+	// matching the Cloudflare DO.
 	var item []byte
 	err := s.db.QueryRow(
 		`DELETE FROM work_queue
@@ -424,73 +401,38 @@ func (s *sqliteStorage) QueuePop(executionID []byte) ([]byte, error) {
 		 RETURNING work_item`,
 		executionID,
 	).Scan(&item)
-	if err == nil {
-		return item, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	// No row returned — disambiguate "empty queue" from "unknown invocation".
-	// This second query only fires when the queue is exhausted, so it doesn't
-	// add cost to the steady-state pop path.
-	var registered int
-	err = s.db.QueryRow(
-		`SELECT 1 FROM invocation_registry WHERE execution_id = ?`,
-		executionID,
-	).Scan(&registered)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrUnknownInvocation
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return nil, nil // registered but empty
+	return item, nil
 }
 
 func (s *sqliteStorage) QueueClear(executionID []byte) (int, error) {
-	tx, err := s.db.Begin()
+	res, err := s.db.Exec(`DELETE FROM work_queue WHERE execution_id = ?`, executionID)
 	if err != nil {
-		return 0, err
-	}
-	res, err := tx.Exec(`DELETE FROM work_queue WHERE execution_id = ?`, executionID)
-	if err != nil {
-		_ = tx.Rollback()
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
-	if _, err := tx.Exec(`DELETE FROM invocation_registry WHERE execution_id = ?`, executionID); err != nil {
-		_ = tx.Rollback()
-		return 0, err
-	}
-	return int(n), tx.Commit()
+	return int(n), nil
 }
 
 // ---------------------------------------------------------------------------
-// Aggregate state
+// Aggregate state  (ns=agg, key=int64(group_id))
 // ---------------------------------------------------------------------------
 
 func (s *sqliteStorage) AggregateStateGet(executionID []byte, groupIDs []int64) ([]AggregateStateEntry, error) {
 	out := make([]AggregateStateEntry, len(groupIDs))
-	if len(groupIDs) == 0 {
-		return out, nil
-	}
-	stmt, err := s.db.Prepare(
-		`SELECT state_data FROM aggregate_state WHERE execution_id = ? AND group_id = ?`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer stmt.Close()
 	for i, gid := range groupIDs {
-		var data []byte
-		err := stmt.QueryRow(executionID, gid).Scan(&data)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue // leave zero-value
-		}
+		v, err := s.stateGetOne(executionID, nsAgg, int64Key(gid))
 		if err != nil {
 			return nil, err
 		}
-		out[i] = AggregateStateEntry{GroupID: gid, State: data}
+		if v != nil {
+			out[i] = AggregateStateEntry{GroupID: gid, State: v}
+		}
 	}
 	return out, nil
 }
@@ -499,22 +441,19 @@ func (s *sqliteStorage) AggregateStatePut(executionID []byte, entries []Aggregat
 	if len(entries) == 0 {
 		return nil
 	}
-	s.maybeCleanup()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	stmt, err := tx.Prepare(
-		`INSERT OR REPLACE INTO aggregate_state (execution_id, group_id, state_data, created_at)
-		 VALUES (?, ?, ?, julianday('now'))`,
-	)
+		`INSERT OR REPLACE INTO function_state (scope_id, ns, key, value) VALUES (?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
 	}
 	defer stmt.Close()
 	for _, e := range entries {
-		if _, err := stmt.Exec(executionID, e.GroupID, e.State); err != nil {
+		if _, err := stmt.Exec(executionID, nsAgg, int64Key(e.GroupID), e.State); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -523,99 +462,49 @@ func (s *sqliteStorage) AggregateStatePut(executionID []byte, entries []Aggregat
 }
 
 func (s *sqliteStorage) AggregateStateClear(executionID []byte) error {
-	_, err := s.db.Exec(`DELETE FROM aggregate_state WHERE execution_id = ?`, executionID)
-	return err
+	return s.stateDeleteNS(executionID, nsAgg)
 }
 
 // ---------------------------------------------------------------------------
-// Aggregate const args (Go-specific)
+// Aggregate const args  (ns=agg_const, key=function_name)
 // ---------------------------------------------------------------------------
 
 func (s *sqliteStorage) AggregateConstArgsPut(executionID []byte, functionName string, args []byte) error {
-	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO aggregate_const_args (execution_id, function_name, args, created_at)
-		 VALUES (?, ?, ?, julianday('now'))`,
-		executionID, functionName, args,
-	)
-	return err
+	return s.statePut(executionID, nsAggConst, []byte(functionName), args)
 }
 
 func (s *sqliteStorage) AggregateConstArgsGet(executionID []byte, functionName string) ([]byte, error) {
-	var data []byte
-	err := s.db.QueryRow(
-		`SELECT args FROM aggregate_const_args WHERE execution_id = ? AND function_name = ?`,
-		executionID, functionName,
-	).Scan(&data)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	return data, err
+	return s.stateGetOne(executionID, nsAggConst, []byte(functionName))
 }
 
 // ---------------------------------------------------------------------------
-// Aggregate window partition
+// Aggregate window partition  (ns=win, key=int64(partition_id))
 // ---------------------------------------------------------------------------
 
 func (s *sqliteStorage) AggregateWindowPartitionPut(executionID []byte, partitionID int64, data []byte) error {
-	s.maybeCleanup()
-	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO aggregate_window_partitions (execution_id, partition_id, payload, created_at)
-		 VALUES (?, ?, ?, julianday('now'))`,
-		executionID, partitionID, data,
-	)
-	return err
+	return s.statePut(executionID, nsWin, int64Key(partitionID), data)
 }
 
 func (s *sqliteStorage) AggregateWindowPartitionGet(executionID []byte, partitionID int64) ([]byte, error) {
-	var data []byte
-	err := s.db.QueryRow(
-		`SELECT payload FROM aggregate_window_partitions WHERE execution_id = ? AND partition_id = ?`,
-		executionID, partitionID,
-	).Scan(&data)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	return data, err
+	return s.stateGetOne(executionID, nsWin, int64Key(partitionID))
 }
 
 func (s *sqliteStorage) AggregateWindowPartitionDelete(executionID []byte, partitionID int64) error {
-	_, err := s.db.Exec(
-		`DELETE FROM aggregate_window_partitions WHERE execution_id = ? AND partition_id = ?`,
-		executionID, partitionID,
-	)
-	return err
+	return s.stateDeleteKey(executionID, nsWin, int64Key(partitionID))
 }
 
 func (s *sqliteStorage) AggregateWindowPartitionClear(executionID []byte) error {
-	_, err := s.db.Exec(
-		`DELETE FROM aggregate_window_partitions WHERE execution_id = ?`,
-		executionID,
-	)
-	return err
+	return s.stateDeleteNS(executionID, nsWin)
 }
 
 // ---------------------------------------------------------------------------
-// Transaction state
+// Transaction state  (scope=transaction_opaque_data, ns=txn)
 // ---------------------------------------------------------------------------
 
 func (s *sqliteStorage) TransactionStateGet(transactionOpaqueData []byte, keys [][]byte) ([][]byte, error) {
 	out := make([][]byte, len(keys))
-	if len(keys) == 0 {
-		return out, nil
-	}
-	stmt, err := s.db.Prepare(
-		`SELECT value FROM transaction_state WHERE transaction_opaque_data = ? AND key = ?`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer stmt.Close()
 	for i, k := range keys {
-		var v []byte
-		err := stmt.QueryRow(transactionOpaqueData, k).Scan(&v)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
+		v, err := s.stateGetOne(transactionOpaqueData, nsTxn, k)
 		if err != nil {
 			return nil, err
 		}
@@ -628,22 +517,19 @@ func (s *sqliteStorage) TransactionStatePut(transactionOpaqueData []byte, items 
 	if len(items) == 0 {
 		return nil
 	}
-	s.maybeCleanup()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	stmt, err := tx.Prepare(
-		`INSERT OR REPLACE INTO transaction_state (transaction_opaque_data, key, value, created_at)
-		 VALUES (?, ?, ?, julianday('now'))`,
-	)
+		`INSERT OR REPLACE INTO function_state (scope_id, ns, key, value) VALUES (?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
 	}
 	defer stmt.Close()
 	for _, it := range items {
-		if _, err := stmt.Exec(transactionOpaqueData, it.Key, it.Value); err != nil {
+		if _, err := stmt.Exec(transactionOpaqueData, nsTxn, it.Key, it.Value); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -651,15 +537,20 @@ func (s *sqliteStorage) TransactionStatePut(transactionOpaqueData []byte, items 
 	return tx.Commit()
 }
 
-// --- State log (execution-scoped, keyed append-only log) ---
+func (s *sqliteStorage) TransactionStateClear(transactionOpaqueData []byte) error {
+	return s.stateDeleteNS(transactionOpaqueData, nsTxn)
+}
+
+// ---------------------------------------------------------------------------
+// State log  (ns=log; append-only, keyed)
+// ---------------------------------------------------------------------------
 
 // StateAppend appends a value to the (executionID, key) log and returns the new
 // monotonic log id.
 func (s *sqliteStorage) StateAppend(executionID, key, value []byte) (int64, error) {
-	s.maybeCleanup()
 	res, err := s.db.Exec(
-		`INSERT INTO state_log (execution_id, log_key, value) VALUES (?, ?, ?)`,
-		executionID, key, value,
+		`INSERT INTO function_state_log (scope_id, ns, key, value) VALUES (?, ?, ?, ?)`,
+		executionID, nsLog, key, value,
 	)
 	if err != nil {
 		return 0, err
@@ -670,8 +561,9 @@ func (s *sqliteStorage) StateAppend(executionID, key, value []byte) (int64, erro
 // StateLogScan returns log entries for (executionID, key) with id > afterID,
 // ordered by id. afterID = -1 reads from the start. limit <= 0 means no limit.
 func (s *sqliteStorage) StateLogScan(executionID, key []byte, afterID int64, limit int) ([]StateLogEntry, error) {
-	q := `SELECT id, value FROM state_log WHERE execution_id = ? AND log_key = ? AND id > ? ORDER BY id`
-	args := []any{executionID, key, afterID}
+	q := `SELECT id, value FROM function_state_log
+	      WHERE scope_id = ? AND ns = ? AND key = ? AND id > ? ORDER BY id`
+	args := []any{executionID, nsLog, key, afterID}
 	if limit > 0 {
 		q += ` LIMIT ?`
 		args = append(args, limit)
@@ -694,45 +586,11 @@ func (s *sqliteStorage) StateLogScan(executionID, key []byte, afterID int64, lim
 
 // StateLogClear removes all state-log rows for an execution_id.
 func (s *sqliteStorage) StateLogClear(executionID []byte) error {
-	_, err := s.db.Exec(`DELETE FROM state_log WHERE execution_id = ?`, executionID)
-	return err
-}
-
-func (s *sqliteStorage) TransactionStateClear(transactionOpaqueData []byte) error {
-	_, err := s.db.Exec(`DELETE FROM transaction_state WHERE transaction_opaque_data = ?`, transactionOpaqueData)
+	_, err := s.db.Exec(`DELETE FROM function_state_log WHERE scope_id = ? AND ns = ?`, executionID, nsLog)
 	return err
 }
 
 // ---------------------------------------------------------------------------
-// Maintenance
-// ---------------------------------------------------------------------------
-
-func (s *sqliteStorage) CleanupOldEntries(maxAge time.Duration) (int, error) {
-	// julianday math: 1 day = 1.0; convert maxAge to days.
-	days := maxAge.Hours() / 24.0
-	total := 0
-	for _, table := range []string{
-		"worker_state",
-		"scan_worker_state",
-		"work_queue",
-		"invocation_registry",
-		"aggregate_state",
-		"aggregate_const_args",
-		"aggregate_window_partitions",
-		"transaction_state",
-	} {
-		res, err := s.db.Exec(
-			fmt.Sprintf(`DELETE FROM %s WHERE created_at < julianday('now') - ?`, table),
-			days,
-		)
-		if err != nil {
-			return total, err
-		}
-		n, _ := res.RowsAffected()
-		total += int(n)
-	}
-	return total, nil
-}
 
 func (s *sqliteStorage) Close() error {
 	if s.db == nil {

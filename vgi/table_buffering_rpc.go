@@ -74,8 +74,8 @@ func (w *Worker) registerTableBufferingRPCs(s *vgirpc.Server) {
 
 // loadBufferingParams cold-loads the InitRecipe persisted at sink init and
 // rebuilds the (function, ProcessParams) pair for a process/combine RPC.
-func (w *Worker) loadBufferingParams(executionID []byte) (TableBufferingFunction, *ProcessParams, error) {
-	storage, err := w.getOrCreateStorage(context.Background(), executionID)
+func (w *Worker) loadBufferingParams(executionID []byte, shardKey string) (TableBufferingFunction, *ProcessParams, error) {
+	storage, err := w.getOrCreateStorage(context.Background(), executionID, shardKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -102,7 +102,11 @@ func (w *Worker) loadBufferingParams(executionID []byte) (TableBufferingFunction
 }
 
 func (w *Worker) handleTableBufferingProcess(ctx context.Context, cc *vgirpc.CallContext, req TableBufferingProcessRequestWire) (TableBufferingProcessResponseWire, error) {
-	fn, params, err := w.loadBufferingParams(req.ExecutionID)
+	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, cc)
+	if err != nil {
+		return TableBufferingProcessResponseWire{}, err
+	}
+	fn, params, err := w.loadBufferingParams(req.ExecutionID, shardKey)
 	if err != nil {
 		return TableBufferingProcessResponseWire{}, err
 	}
@@ -124,7 +128,11 @@ func (w *Worker) handleTableBufferingProcess(ctx context.Context, cc *vgirpc.Cal
 }
 
 func (w *Worker) handleTableBufferingCombine(ctx context.Context, cc *vgirpc.CallContext, req TableBufferingCombineRequestWire) (TableBufferingCombineResponseWire, error) {
-	fn, params, err := w.loadBufferingParams(req.ExecutionID)
+	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, cc)
+	if err != nil {
+		return TableBufferingCombineResponseWire{}, err
+	}
+	fn, params, err := w.loadBufferingParams(req.ExecutionID, shardKey)
 	if err != nil {
 		return TableBufferingCombineResponseWire{}, err
 	}
@@ -139,7 +147,8 @@ func (w *Worker) handleTableBufferingCombine(ctx context.Context, cc *vgirpc.Cal
 
 func (w *Worker) handleTableBufferingDestructor(ctx context.Context, cc *vgirpc.CallContext, req TableBufferingDestructorRequestWire) (TableBufferingDestructorResponseWire, error) {
 	// Best-effort cleanup: clear all execution-scoped state. Never errors.
-	storage, err := w.getOrCreateStorage(ctx, req.ExecutionID)
+	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, cc)
+	storage, err := w.getOrCreateStorage(ctx, req.ExecutionID, shardKey)
 	if err == nil {
 		_ = storage.StateLogClear()
 	}
@@ -158,7 +167,7 @@ func (w *Worker) initTableBuffering(ctx context.Context, fn TableBufferingFuncti
 	execID := initParams.ExecutionID
 	processParams.ExecutionID = execID
 	recipe.ExecutionID = execID
-	storage, err := w.getOrCreateStorage(ctx, execID)
+	storage, err := w.getOrCreateStorage(ctx, execID, recipe.ShardKey)
 	if err != nil {
 		return nil, err
 	}

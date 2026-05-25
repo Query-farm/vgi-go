@@ -9,11 +9,9 @@ package storagetest
 
 import (
 	"bytes"
-	"errors"
 	"reflect"
 	"sort"
 	"testing"
-	"time"
 
 	"github.com/Query-farm/vgi-go/vgi"
 )
@@ -26,8 +24,6 @@ type (
 	AggregateStateEntry   = vgi.AggregateStateEntry
 	TransactionStateItem  = vgi.TransactionStateItem
 )
-
-var ErrUnknownInvocation = vgi.ErrUnknownInvocation
 
 // RunFunctionStorageConformance runs the full FunctionStorage behavioral
 // contract against the provided factory. Each subtest gets a freshly
@@ -60,14 +56,8 @@ type SkipSet int
 const (
 	// SkipAggregate skips aggregate state, aggregate const args, and
 	// aggregate window partition subtests. Use for backends that don't
-	// support aggregate functions (e.g. the Cloudflare DO client, which
-	// matches vgi-python in returning NotImplemented for those methods).
+	// support aggregate functions.
 	SkipAggregate SkipSet = 1 << iota
-
-	// SkipCleanup skips the cleanup-purges subtest. Use for backends
-	// whose CleanupOldEntries is a no-op (e.g. cloud services that handle
-	// TTL on the server side).
-	SkipCleanup
 )
 
 // RunConformanceFiltered runs the conformance suite with optional skips.
@@ -81,13 +71,11 @@ func RunConformanceFiltered(t *testing.T, factory func(t *testing.T) FunctionSto
 		skip |= s
 	}
 	skipAgg := skip&SkipAggregate != 0
-	skipCleanup := skip&SkipCleanup != 0
 
 	type subtest struct {
 		name      string
 		run       func(t *testing.T, s FunctionStorage)
 		aggregate bool
-		cleanup   bool
 	}
 
 	subtests := []subtest{
@@ -97,25 +85,21 @@ func RunConformanceFiltered(t *testing.T, factory func(t *testing.T) FunctionSto
 		{name: "WorkerScan_isolates_by_executionID", run: testWorkerScanIsolation},
 		{name: "ScanWorkerPut_then_ScanWorkerScan", run: testScanWorkerRoundtrip},
 		{name: "QueuePush_then_QueuePop_FIFO", run: testQueueFIFO},
-		{name: "QueuePop_unknown_invocation_errors", run: testQueuePopUnknown},
-		{name: "QueuePop_empty_registered_queue_returns_nil_nil", run: testQueuePopEmpty},
-		{name: "QueuePush_empty_items_registers", run: testQueuePushEmptyRegisters},
-		{name: "QueueClear_drops_and_unregisters", run: testQueueClearUnregisters},
+		{name: "QueuePop_empty_or_unknown_returns_nil_nil", run: testQueuePopEmpty},
+		{name: "QueuePush_empty_items_noop", run: testQueuePushEmpty},
+		{name: "QueueClear_drops_items", run: testQueueClear},
 		{name: "AggregateState_put_get_clear", run: testAggregateStateLifecycle, aggregate: true},
 		{name: "AggregateState_get_with_missing_groups", run: testAggregateStateMissing, aggregate: true},
 		{name: "AggregateConstArgs_put_get", run: testAggregateConstArgs, aggregate: true},
 		{name: "AggregateWindowPartition_put_get_delete_clear", run: testAggregateWindowPartition, aggregate: true},
 		{name: "TransactionState_put_get_clear", run: testTransactionStateLifecycle},
-		{name: "CleanupOldEntries_zero_window_purges_everything", run: testCleanupPurges, cleanup: true},
+		{name: "StateLog_append_scan_clear", run: testStateLogLifecycle},
 		{name: "Close_idempotent", run: testCloseIdempotent},
 	}
 
 	for _, st := range subtests {
 		st := st
 		if skipAgg && st.aggregate {
-			continue
-		}
-		if skipCleanup && st.cleanup {
 			continue
 		}
 		t.Run(st.name, func(t *testing.T) {
@@ -239,38 +223,32 @@ func testQueueFIFO(t *testing.T, s FunctionStorage) {
 	}
 }
 
-func testQueuePopUnknown(t *testing.T, s FunctionStorage) {
-	_, err := s.QueuePop([]byte("never-pushed"))
-	if !errors.Is(err, ErrUnknownInvocation) {
-		t.Errorf("expected ErrUnknownInvocation, got %v", err)
-	}
-}
-
 func testQueuePopEmpty(t *testing.T, s FunctionStorage) {
+	// No registration: both an empty queue and a never-pushed id return (nil, nil).
+	got, err := s.QueuePop([]byte("never-pushed"))
+	if got != nil || err != nil {
+		t.Errorf("never-pushed queue: got %v err %v", got, err)
+	}
 	exec := []byte("q-empty")
 	_, _ = s.QueuePush(exec, nil)
-	got, err := s.QueuePop(exec)
+	got, err = s.QueuePop(exec)
 	if got != nil || err != nil {
-		t.Errorf("registered empty queue: got %v err %v", got, err)
+		t.Errorf("empty queue: got %v err %v", got, err)
 	}
 }
 
-func testQueuePushEmptyRegisters(t *testing.T, s FunctionStorage) {
+func testQueuePushEmpty(t *testing.T, s FunctionStorage) {
 	exec := []byte("q-empty-push")
 	if _, err := s.QueuePush(exec, nil); err != nil {
 		t.Fatal(err)
 	}
-	// Should now be registered — QueuePop returns (nil, nil), not ErrUnknownInvocation.
 	got, err := s.QueuePop(exec)
-	if err != nil {
-		t.Errorf("after empty push, QueuePop unexpectedly errored: %v", err)
-	}
-	if got != nil {
-		t.Errorf("after empty push, expected (nil, nil), got %v", got)
+	if err != nil || got != nil {
+		t.Errorf("after empty push, expected (nil, nil), got %v err %v", got, err)
 	}
 }
 
-func testQueueClearUnregisters(t *testing.T, s FunctionStorage) {
+func testQueueClear(t *testing.T, s FunctionStorage) {
 	exec := []byte("q-clear")
 	_, _ = s.QueuePush(exec, [][]byte{[]byte("x"), []byte("y")})
 	n, err := s.QueueClear(exec)
@@ -280,10 +258,9 @@ func testQueueClearUnregisters(t *testing.T, s FunctionStorage) {
 	if n != 2 {
 		t.Errorf("QueueClear returned %d, want 2", n)
 	}
-	// Subsequent pop should be ErrUnknownInvocation.
-	_, err = s.QueuePop(exec)
-	if !errors.Is(err, ErrUnknownInvocation) {
-		t.Errorf("after clear, expected ErrUnknownInvocation, got %v", err)
+	got, err := s.QueuePop(exec)
+	if got != nil || err != nil {
+		t.Errorf("after clear, expected (nil, nil), got %v err %v", got, err)
 	}
 }
 
@@ -414,25 +391,85 @@ func testTransactionStateLifecycle(t *testing.T, s FunctionStorage) {
 	}
 }
 
-func testCleanupPurges(t *testing.T, s FunctionStorage) {
-	exec := []byte("cleanup")
-	_ = s.WorkerPut(exec, 1, []byte("a"))
-	_, _ = s.QueuePush(exec, [][]byte{[]byte("x")})
-	_ = s.AggregateStatePut(exec, []AggregateStateEntry{{GroupID: 0, State: []byte("g")}})
+// testStateLogLifecycle exercises the optional StateLogStorage capability
+// (StateAppend / StateLogScan / StateLogClear) used by table-buffering: a
+// per-(execution,key) append-only log with a monotonic cursor. Backends that
+// don't implement it (none currently) skip.
+func testStateLogLifecycle(t *testing.T, s FunctionStorage) {
+	ls, ok := s.(vgi.StateLogStorage)
+	if !ok {
+		t.Skip("backend does not implement StateLogStorage")
+	}
+	exec := []byte("exec-statelog")
+	key := []byte("log-key")
 
-	// Negative duration → "older than future now" → everything is too old.
-	deleted, err := s.CleanupOldEntries(-1 * time.Hour)
+	id1, err := ls.StateAppend(exec, key, []byte("a"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleted < 3 {
-		t.Errorf("expected at least 3 rows deleted, got %d", deleted)
+	id2, err := ls.StateAppend(exec, key, []byte("b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id3, err := ls.StateAppend(exec, key, []byte("c"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(id1 < id2 && id2 < id3) {
+		t.Fatalf("ordinals not monotonic: %d, %d, %d", id1, id2, id3)
 	}
 
-	// Worker state should be gone.
-	got, _ := s.WorkerScan(exec)
-	if len(got) != 0 {
-		t.Errorf("worker_state not purged: %v", got)
+	// Scan from the start returns all rows in append order, with their ids.
+	rows, err := ls.StateLogScan(exec, key, -1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("scan from start: expected 3 rows, got %d", len(rows))
+	}
+	if rows[0].ID != id1 || !bytes.Equal(rows[0].Value, []byte("a")) ||
+		rows[1].ID != id2 || !bytes.Equal(rows[1].Value, []byte("b")) ||
+		rows[2].ID != id3 || !bytes.Equal(rows[2].Value, []byte("c")) {
+		t.Errorf("scan rows mismatch: %+v", rows)
+	}
+
+	// after_id cursor: rows with id > id1.
+	tail, err := ls.StateLogScan(exec, key, id1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) != 2 || !bytes.Equal(tail[0].Value, []byte("b")) || !bytes.Equal(tail[1].Value, []byte("c")) {
+		t.Errorf("after_id cursor: %+v", tail)
+	}
+
+	// limit caps the page.
+	limited, err := ls.StateLogScan(exec, key, -1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited) != 2 {
+		t.Errorf("limit=2: expected 2 rows, got %d", len(limited))
+	}
+
+	// A different key under the same execution is isolated.
+	other, err := ls.StateLogScan(exec, []byte("other-key"), -1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) != 0 {
+		t.Errorf("distinct key should be empty, got %d rows", len(other))
+	}
+
+	// Clear drops the log rows for the execution.
+	if err := ls.StateLogClear(exec); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := ls.StateLogScan(exec, key, -1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleared) != 0 {
+		t.Errorf("after clear: expected 0 rows, got %d", len(cleared))
 	}
 }
 

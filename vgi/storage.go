@@ -26,11 +26,24 @@ import (
 
 var errStorageNotInitialized = errors.New("storage: execution ID not set")
 
+// ShardedBackend is implemented by FunctionStorage backends that route remotely
+// on a per-attach shard key (the Cloudflare Durable Object backend). ForShard
+// returns a view of the backend pinned to one shard key; backends that ignore
+// sharding (SQLite) don't implement it. Lets ExecutionStorage attach the shard
+// key without threading it through all ~22 FunctionStorage methods.
+type ShardedBackend interface {
+	ForShard(shardKey string) FunctionStorage
+}
+
 // ExecutionStorage binds a FunctionStorage to one execution_id.
 type ExecutionStorage struct {
 	mu          sync.Mutex
 	back        FunctionStorage
 	executionID []byte
+	// shardKey routes per logical ATTACH for the CfDo backend (att-<hex uuid>);
+	// "" for non-attach / non-sharding paths. The framework sets it from the
+	// unwrapped attach UUID when the execution's storage is created.
+	shardKey string
 }
 
 // NewExecutionStorage creates a new unbound ExecutionStorage. SetBackend and
@@ -55,6 +68,15 @@ func (s *ExecutionStorage) SetExecutionID(execID []byte) error {
 	return nil
 }
 
+// SetShardKey pins the per-attach routing key (att-<hex uuid>). A no-op for
+// backends that ignore sharding; used by the CfDo backend to route to the
+// right Durable Object. Empty means "no attach" (CfDo would reject it).
+func (s *ExecutionStorage) SetShardKey(shardKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.shardKey = shardKey
+}
+
 // ExecutionID returns the bound execution_id, or nil if unset.
 func (s *ExecutionStorage) ExecutionID() []byte {
 	s.mu.Lock()
@@ -64,13 +86,19 @@ func (s *ExecutionStorage) ExecutionID() []byte {
 
 func (s *ExecutionStorage) resolve() (FunctionStorage, []byte, error) {
 	s.mu.Lock()
-	back, exec := s.back, s.executionID
+	back, exec, shardKey := s.back, s.executionID, s.shardKey
 	s.mu.Unlock()
 	if back == nil {
 		return nil, nil, errors.New("storage: backend not set (Worker should call SetBackend)")
 	}
 	if exec == nil {
 		return nil, nil, errStorageNotInitialized
+	}
+	// Pin a sharded backend to this attach's shard key, if it shards remotely.
+	if shardKey != "" {
+		if sb, ok := back.(ShardedBackend); ok {
+			back = sb.ForShard(shardKey)
+		}
 	}
 	return back, exec, nil
 }
@@ -90,18 +118,13 @@ func (s *ExecutionStorage) QueuePush(items [][]byte) error {
 }
 
 // QueuePop atomically claims one item. Returns (nil, nil) when the queue is
-// registered but empty. ErrUnknownInvocation is masked as (nil, nil) for
-// backwards compatibility with consumers that poll without registering.
+// empty or the execution_id was never pushed (no registration).
 func (s *ExecutionStorage) QueuePop() ([]byte, error) {
 	back, exec, err := s.resolve()
 	if err != nil {
 		return nil, err
 	}
-	item, err := back.QueuePop(exec)
-	if errors.Is(err, ErrUnknownInvocation) {
-		return nil, nil
-	}
-	return item, err
+	return back.QueuePop(exec)
 }
 
 // QueuePushBatches serializes record batches and appends them.

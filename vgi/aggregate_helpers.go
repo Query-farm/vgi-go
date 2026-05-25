@@ -109,8 +109,8 @@ func unpackWindowPartition(req AggregateWindowInitRequestWire) (*WindowPartition
 
 // loadCachedPartition rebuilds a WindowPartition from the gob-encoded payload
 // stored at WindowInit time, plus the optional gob-encoded WindowInit state.
-func (w *Worker) loadCachedPartition(funcName string, execID []byte, partitionID int64) (*WindowPartition, interface{}, error) {
-	bucket := w.aggStorage.bucket(funcName, execID)
+func (w *Worker) loadCachedPartition(funcName string, execID []byte, partitionID int64, shardKey string) (*WindowPartition, interface{}, error) {
+	bucket := w.aggStorage.bucket(funcName, execID, shardKey)
 	data, err := bucket.getWindowPartition(partitionID)
 	if err != nil {
 		return nil, nil, err

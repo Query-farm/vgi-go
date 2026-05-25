@@ -33,8 +33,16 @@ import (
 // This matches vgi-python's vgi_rpc.crypto / vgi.worker envelope exactly.
 
 const (
-	attachEnvelopeVersion      byte = 1
+	// attachEnvelopeVersion is 2: the inner attach plaintext is
+	// uuid(16) || catalog_bytes — catalog_attach prepends a framework-minted
+	// 16-byte UUID that storage shards on. Bumped from 1 so a stale v1 token
+	// (no uuid prefix) is cleanly rejected at open rather than mis-parsed.
+	attachEnvelopeVersion      byte = 2
 	transactionEnvelopeVersion byte = 2
+
+	// attachUUIDLen is the width of the framework UUID prepended to every
+	// attach plaintext. Mirrors vgi-python's _ATTACH_UUID_LEN.
+	attachUUIDLen = 16
 
 	cryptoNonceLen = chacha20poly1305.NonceSizeX // 24
 	cryptoTagLen   = chacha20poly1305.Overhead   // 16
@@ -147,12 +155,30 @@ func (w *Worker) sealAttach(plaintext []byte, cc *vgirpc.CallContext) ([]byte, e
 	return sealBytes(plaintext, w.httpSigningKey, attachAAD(cc.Auth), attachEnvelopeVersion)
 }
 
-// openAttach opens an attach_opaque_data envelope, returning the plaintext.
-func (w *Worker) openAttach(envelope []byte, cc *vgirpc.CallContext) ([]byte, error) {
+// openAttachFull opens an attach_opaque_data envelope, returning the full
+// framework plaintext uuid(16) || catalog_bytes (not stripped). Storage shards
+// on the leading UUID, so the function-execution paths use this to derive the
+// shard key. Pass-through when there is no signing key.
+func (w *Worker) openAttachFull(envelope []byte, cc *vgirpc.CallContext) ([]byte, error) {
 	if len(w.httpSigningKey) == 0 {
 		return envelope, nil
 	}
 	return openBytes(envelope, w.httpSigningKey, attachAAD(cc.Auth), attachEnvelopeVersion)
+}
+
+// openAttach opens an attach_opaque_data envelope, returning the catalog's own
+// bytes — the framework UUID prefix is stripped. This is what catalog handlers
+// and function bodies see (the catalog never knows about the shard UUID);
+// storage routing uses openAttachFull to reach the UUID instead.
+func (w *Worker) openAttach(envelope []byte, cc *vgirpc.CallContext) ([]byte, error) {
+	full, err := w.openAttachFull(envelope, cc)
+	if err != nil {
+		return nil, err
+	}
+	if len(full) < attachUUIDLen {
+		return full, nil
+	}
+	return full[attachUUIDLen:], nil
 }
 
 // sealTransaction seals a plaintext transaction value into an envelope bound

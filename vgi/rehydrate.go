@@ -166,7 +166,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 	bindReq := &recipe.BindCall
 
 	// Parse bind params for argument access
-	bindParams, err := w.parseBindRequest(*bindReq)
+	bindParams, err := w.parseBindRequest(*bindReq, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -212,9 +212,10 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		}
 	}
 
-	// Restore storage
+	// Restore storage — reuse the shard key the recipe persisted at init so a
+	// rehydrated turn routes to the same DO without re-opening the sealed attach.
 	ctx := context.Background()
-	storage, err := w.getOrCreateStorage(ctx, recipe.ExecutionID)
+	storage, err := w.getOrCreateStorage(ctx, recipe.ExecutionID, recipe.ShardKey)
 	if err != nil {
 		return nil, nil, err
 	}

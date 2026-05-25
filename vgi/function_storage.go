@@ -3,10 +3,6 @@
 
 package vgi
 
-import (
-	"errors"
-	"time"
-)
 
 // ---------------------------------------------------------------------------
 // FunctionStorage: pluggable shared storage for VGI distributed execution
@@ -32,17 +28,9 @@ import (
 //     key overwrites without error.
 //   - Methods that take a list/slice may receive an empty slice; result
 //     ordering is parallel to the input.
-//   - QueuePop returns (nil, ErrUnknownInvocation) if the execution_id was
-//     never registered via QueuePush or has been cleared via QueueClear.
-//     Returning (nil, nil) means the queue is registered but empty.
-//   - Implementations should periodically (or opportunistically) call
-//     CleanupOldEntries to bound storage growth.
+//   - QueuePop returns (nil, nil) when the queue is empty or the execution_id
+//     was never pushed. There is no registration — matching the Cloudflare DO.
 // ---------------------------------------------------------------------------
-
-// ErrUnknownInvocation indicates QueuePop was called for an execution_id
-// that was never registered via QueuePush (or has been cleared). Callers
-// should treat this as "stop polling for work."
-var ErrUnknownInvocation = errors.New("vgi: unknown invocation (queue_pop without queue_push)")
 
 // WorkerStateEntry is one (worker_id, state) pair returned by WorkerScan.
 type WorkerStateEntry struct {
@@ -135,21 +123,18 @@ type FunctionStorage interface {
 
 	// --- Work queue (FIFO over per-invocation queues) ---
 
-	// QueuePush appends items to the queue for the given execution_id. Also
-	// registers the invocation: subsequent QueuePop calls will succeed for
-	// this execution_id (returning items or nil-on-empty) instead of
-	// returning ErrUnknownInvocation. Empty items still registers.
+	// QueuePush appends items to the queue for the given execution_id. There
+	// is no registration step (matching the Cloudflare DO).
 	QueuePush(executionID []byte, items [][]byte) (int, error)
 
 	// QueuePop atomically claims one item from the queue. Returns:
 	//   - (item, nil) when an item was claimed.
-	//   - (nil, nil) when the invocation is registered but the queue is empty.
-	//   - (nil, ErrUnknownInvocation) when the invocation was never
-	//     registered or has been cleared.
+	//   - (nil, nil) when the queue is empty or the execution_id was never
+	//     pushed (the two are indistinguishable — no registration).
 	QueuePop(executionID []byte) ([]byte, error)
 
-	// QueueClear removes all remaining items for an execution_id and
-	// unregisters the invocation. Returns the number of items dropped.
+	// QueueClear removes all remaining items for an execution_id. Returns the
+	// number of items dropped.
 	QueueClear(executionID []byte) (int, error)
 
 	// --- Aggregate state (per group_id, keyed by execution_id) ---
@@ -219,14 +204,6 @@ type FunctionStorage interface {
 	// when the catalog observes commit/rollback; implementations should
 	// also TTL-sweep to handle leaked transaction_opaque_data values.
 	TransactionStateClear(transactionOpaqueData []byte) error
-
-	// --- Maintenance ---
-
-	// CleanupOldEntries removes entries older than maxAge from every table.
-	// Returns the total number of rows deleted. Implementations may amortize
-	// this work across regular calls (1% sample) so users rarely need to
-	// invoke it directly.
-	CleanupOldEntries(maxAge time.Duration) (int, error)
 
 	// Close releases any underlying resources (DB handles, HTTP clients).
 	// Safe to call multiple times.

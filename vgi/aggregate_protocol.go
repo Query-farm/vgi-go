@@ -172,6 +172,7 @@ func (w *Worker) lookupAggregate(name string) (AggregateFunction, error) {
 }
 
 func (w *Worker) handleAggregateBind(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateBindRequestWire) (AggregateBindResponseWire, error) {
+	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
 	fn, err := w.lookupAggregate(req.FunctionName)
 	if err != nil {
 		return AggregateBindResponseWire{}, err
@@ -230,7 +231,7 @@ func (w *Worker) handleAggregateBind(ctx context.Context, callCtx *vgirpc.CallCo
 	// Stash the const args under group_id=-2 in storage so subsequent calls
 	// can rebuild AggregateProcessParams.Args without resending them.
 	if args != nil && len(args.Positional) > 0 {
-		bucket := w.aggStorage.bucket(req.FunctionName, executionID)
+		bucket := w.aggStorage.bucket(req.FunctionName, executionID, shardKey)
 		if err := bucket.putConstArgs(req.Arguments); err != nil {
 			return AggregateBindResponseWire{}, err
 		}
@@ -240,8 +241,8 @@ func (w *Worker) handleAggregateBind(ctx context.Context, callCtx *vgirpc.CallCo
 }
 
 // loadAggArgs returns the bind-time arguments stashed by handleAggregateBind.
-func (w *Worker) loadAggArgs(funcName string, execID []byte) *Arguments {
-	bucket := w.aggStorage.bucket(funcName, execID)
+func (w *Worker) loadAggArgs(funcName string, execID []byte, shardKey string) *Arguments {
+	bucket := w.aggStorage.bucket(funcName, execID, shardKey)
 	data, err := bucket.getConstArgs()
 	if err != nil || len(data) == 0 {
 		if err != nil {
@@ -258,6 +259,7 @@ func (w *Worker) loadAggArgs(funcName string, execID []byte) *Arguments {
 }
 
 func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateUpdateRequestWire) (AggregateUpdateResponseWire, error) {
+	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
 	fn, err := w.lookupAggregate(req.FunctionName)
 	if err != nil {
 		return AggregateUpdateResponseWire{}, err
@@ -275,13 +277,13 @@ func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.Call
 	}
 	_ = gidIdx
 
-	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID)
+	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID, shardKey)
 	params := &AggregateProcessParams{
-		Args: w.loadAggArgs(req.FunctionName, req.ExecutionID),
+		Args: w.loadAggArgs(req.FunctionName, req.ExecutionID, shardKey),
 		Auth: callCtx.Auth,
 	}
 	if req.AttachOpaqueData != nil {
-		params.AttachOpaqueData = *req.AttachOpaqueData
+		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 	}
 
 	uniqueGIDs := uniqueInt64(gids)
@@ -334,6 +336,7 @@ func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.Call
 }
 
 func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateCombineRequestWire) (AggregateCombineResponseWire, error) {
+	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
 	fn, err := w.lookupAggregate(req.FunctionName)
 	if err != nil {
 		return AggregateCombineResponseWire{}, err
@@ -363,13 +366,13 @@ func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.Cal
 		tgtIDs[i] = tgtCol.Value(i)
 	}
 
-	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID)
+	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID, shardKey)
 	params := &AggregateProcessParams{
-		Args: w.loadAggArgs(req.FunctionName, req.ExecutionID),
+		Args: w.loadAggArgs(req.FunctionName, req.ExecutionID, shardKey),
 		Auth: callCtx.Auth,
 	}
 	if req.AttachOpaqueData != nil {
-		params.AttachOpaqueData = *req.AttachOpaqueData
+		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 	}
 
 	allGIDs := uniqueInt64(append(append([]int64{}, srcIDs...), tgtIDs...))
@@ -425,6 +428,7 @@ func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.Cal
 }
 
 func (w *Worker) handleAggregateFinalize(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateFinalizeRequestWire) (AggregateFinalizeResponseWire, error) {
+	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
 	fn, err := w.lookupAggregate(req.FunctionName)
 	if err != nil {
 		return AggregateFinalizeResponseWire{}, err
@@ -450,14 +454,14 @@ func (w *Worker) handleAggregateFinalize(ctx context.Context, callCtx *vgirpc.Ca
 		return AggregateFinalizeResponseWire{}, fmt.Errorf("aggregate_finalize: deserialize output_schema: %w", err)
 	}
 
-	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID)
+	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID, shardKey)
 	params := &AggregateProcessParams{
-		Args:         w.loadAggArgs(req.FunctionName, req.ExecutionID),
+		Args:         w.loadAggArgs(req.FunctionName, req.ExecutionID, shardKey),
 		OutputSchema: outSchema,
 		Auth:         callCtx.Auth,
 	}
 	if req.AttachOpaqueData != nil {
-		params.AttachOpaqueData = *req.AttachOpaqueData
+		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 	}
 
 	stored, err := bucket.loadStates(gids)
@@ -494,7 +498,8 @@ func (w *Worker) handleAggregateFinalize(ctx context.Context, callCtx *vgirpc.Ca
 }
 
 func (w *Worker) handleAggregateDestructor(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateDestructorRequestWire) (AggregateDestructorResponseWire, error) {
-	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID)
+	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID, shardKey)
 	if err := bucket.clear(); err != nil {
 		return AggregateDestructorResponseWire{}, err
 	}
@@ -502,11 +507,12 @@ func (w *Worker) handleAggregateDestructor(ctx context.Context, callCtx *vgirpc.
 }
 
 func (w *Worker) handleAggregateWindowInit(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowInitRequestWire) (AggregateWindowInitResponseWire, error) {
+	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
 	fn, err := w.lookupAggregate(req.FunctionName)
 	if err != nil {
 		return AggregateWindowInitResponseWire{}, err
 	}
-	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID)
+	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID, shardKey)
 
 	wfn, _ := fn.(AggregateWindowFunction)
 	if wfn != nil {
@@ -517,12 +523,12 @@ func (w *Worker) handleAggregateWindowInit(ctx context.Context, callCtx *vgirpc.
 			return AggregateWindowInitResponseWire{}, err
 		}
 		params := &AggregateProcessParams{
-			Args:         w.loadAggArgs(req.FunctionName, req.ExecutionID),
+			Args:         w.loadAggArgs(req.FunctionName, req.ExecutionID, shardKey),
 			OutputSchema: partition.OutputSchema,
 			Auth:         callCtx.Auth,
 		}
 		if req.AttachOpaqueData != nil {
-			params.AttachOpaqueData = *req.AttachOpaqueData
+			params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 		}
 		ws, err := wfn.WindowInit(partition, params)
 		if err != nil {
@@ -549,6 +555,7 @@ func (w *Worker) handleAggregateWindowInit(ctx context.Context, callCtx *vgirpc.
 }
 
 func (w *Worker) handleAggregateWindow(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowRequestWire) (AggregateWindowResponseWire, error) {
+	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
 	fn, err := w.lookupAggregate(req.FunctionName)
 	if err != nil {
 		return AggregateWindowResponseWire{}, err
@@ -558,17 +565,17 @@ func (w *Worker) handleAggregateWindow(ctx context.Context, callCtx *vgirpc.Call
 		return AggregateWindowResponseWire{}, fmt.Errorf("aggregate_window: %s does not implement AggregateWindowFunction", req.FunctionName)
 	}
 
-	partition, ws, err := w.loadCachedPartition(req.FunctionName, req.ExecutionID, req.PartitionID)
+	partition, ws, err := w.loadCachedPartition(req.FunctionName, req.ExecutionID, req.PartitionID, shardKey)
 	if err != nil {
 		return AggregateWindowResponseWire{}, err
 	}
 	params := &AggregateProcessParams{
-		Args:         w.loadAggArgs(req.FunctionName, req.ExecutionID),
+		Args:         w.loadAggArgs(req.FunctionName, req.ExecutionID, shardKey),
 		OutputSchema: partition.OutputSchema,
 		Auth:         callCtx.Auth,
 	}
 	if req.AttachOpaqueData != nil {
-		params.AttachOpaqueData = *req.AttachOpaqueData
+		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 	}
 	if len(req.FrameStarts) != len(req.FrameEnds) {
 		return AggregateWindowResponseWire{}, fmt.Errorf("aggregate_window: frame_starts/frame_ends length mismatch")
@@ -594,6 +601,7 @@ func (w *Worker) handleAggregateWindow(ctx context.Context, callCtx *vgirpc.Call
 }
 
 func (w *Worker) handleAggregateWindowBatch(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowBatchRequestWire) (AggregateWindowBatchResponseWire, error) {
+	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
 	fn, err := w.lookupAggregate(req.FunctionName)
 	if err != nil {
 		return AggregateWindowBatchResponseWire{}, err
@@ -602,17 +610,17 @@ func (w *Worker) handleAggregateWindowBatch(ctx context.Context, callCtx *vgirpc
 	if !ok {
 		return AggregateWindowBatchResponseWire{}, fmt.Errorf("aggregate_window_batch: %s does not implement AggregateWindowFunction", req.FunctionName)
 	}
-	partition, ws, err := w.loadCachedPartition(req.FunctionName, req.ExecutionID, req.PartitionID)
+	partition, ws, err := w.loadCachedPartition(req.FunctionName, req.ExecutionID, req.PartitionID, shardKey)
 	if err != nil {
 		return AggregateWindowBatchResponseWire{}, err
 	}
 	params := &AggregateProcessParams{
-		Args:         w.loadAggArgs(req.FunctionName, req.ExecutionID),
+		Args:         w.loadAggArgs(req.FunctionName, req.ExecutionID, shardKey),
 		OutputSchema: partition.OutputSchema,
 		Auth:         callCtx.Auth,
 	}
 	if req.AttachOpaqueData != nil {
-		params.AttachOpaqueData = *req.AttachOpaqueData
+		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 	}
 
 	if int(req.Count) != len(req.FramesPerRow) {
@@ -646,7 +654,8 @@ func (w *Worker) handleAggregateWindowBatch(ctx context.Context, callCtx *vgirpc
 }
 
 func (w *Worker) handleAggregateWindowDestructor(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowDestructorRequestWire) (AggregateWindowDestructorResponseWire, error) {
-	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID)
+	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID, shardKey)
 	if err := bucket.deleteWindowPartition(req.PartitionID); err != nil {
 		return AggregateWindowDestructorResponseWire{}, err
 	}

@@ -29,7 +29,10 @@ package cfdo
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +44,44 @@ import (
 
 	"github.com/Query-farm/vgi-go/vgi"
 )
+
+// Namespaces under the unified state_* table. scope_id is the execution_id
+// (or transaction_opaque_data for txn state); ns separates the legacy
+// FunctionStorage families that the DO server no longer has dedicated
+// endpoints for. Internal to this client — one DO per attach, never shared
+// across SDKs.
+var (
+	nsWorker     = []byte("worker")
+	nsScanWorker = []byte("scan_worker")
+	nsAgg        = []byte("agg")
+	nsAggConst   = []byte("agg_const")
+	nsWin        = []byte("win")
+	nsTxn        = []byte("txn")
+	nsLog        = []byte("log")
+)
+
+// newAttemptID returns a fresh 32-char lowercase-hex idempotency token, the
+// shape the DO server requires on every destructive endpoint.
+func newAttemptID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// int64Key encodes an int64 map/group/partition id as an 8-byte big-endian
+// state key (opaque to the server).
+func int64Key(v int64) []byte {
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], uint64(v))
+	return b[:]
+}
+
+func int64FromKey(b []byte) int64 {
+	if len(b) != 8 {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(b))
+}
 
 // Options configures a CF DO storage client.
 type Options struct {
@@ -63,16 +104,30 @@ type Options struct {
 	PostAttempts int
 }
 
-// Storage implements vgi.FunctionStorage against a Cloudflare Worker DO.
-// Aggregate state and window partitions are intentionally not supported on
-// this backend — the underlying DO Worker doesn't expose those endpoints,
-// matching the vgi-python CF DO client. Local SQLite remains the right
-// backend for aggregate-heavy workloads.
+// Storage implements vgi.FunctionStorage against a Cloudflare Worker DO. Every
+// legacy FunctionStorage family (worker/scan-worker/aggregate/window/txn state,
+// queue, append-log) maps onto the DO's unified state_* + queue_* endpoints,
+// each request carrying the per-attach shard_key (set via ForShard) and, for
+// destructive ops, a fresh attempt_id. Mirrors vgi-python's
+// FunctionStorageCfDo wire-for-wire.
 type Storage struct {
 	baseURL      string
 	token        string
 	client       *http.Client
 	postAttempts int
+	// shardKey routes to the Durable Object for one logical ATTACH
+	// (att-<hex uuid>); set per-execution by the framework via ForShard.
+	shardKey string
+}
+
+// ForShard returns a view of this backend pinned to one shard key, so
+// ExecutionStorage can route per logical ATTACH without the shard key being a
+// parameter on every FunctionStorage method. Implements vgi.ShardedBackend.
+// The returned view shares the HTTP client/config; only shardKey differs.
+func (s *Storage) ForShard(shardKey string) vgi.FunctionStorage {
+	cp := *s
+	cp.shardKey = shardKey
+	return &cp
 }
 
 // NewStorage constructs a CF DO storage client from explicit options.
@@ -136,10 +191,14 @@ func (s *Storage) Close() error {
 
 // post sends a JSON POST to endpoint and unmarshals the response into out.
 // Retries on transport errors and 5xx; raises typed errors on 4xx.
-func (s *Storage) post(endpoint string, body any, out any) error {
+func (s *Storage) post(endpoint string, body map[string]any, out any) error {
 	if s.client == nil {
 		return errors.New("cfdo: storage is closed")
 	}
+	// The Worker routes on shard_key (idFromName) and rejects requests without
+	// one — always splice it in. attempt_id, when needed, is set once by the
+	// caller before any retry so a replayed HTTP call carries the same id.
+	body["shard_key"] = s.shardKey
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("cfdo: encoding %s body: %w", endpoint, err)
@@ -187,17 +246,6 @@ func (s *Storage) post(endpoint string, body any, out any) error {
 				}
 			}
 			return fmt.Errorf("cfdo: %s authentication failed: %s", endpoint, msg)
-		}
-
-		// 404 + error: "unknown_invocation" → ErrUnknownInvocation.
-		if resp.StatusCode == http.StatusNotFound && jsonErr == nil {
-			if raw, ok := parsed["error"]; ok {
-				var s string
-				_ = json.Unmarshal(raw, &s)
-				if s == "unknown_invocation" {
-					return vgi.ErrUnknownInvocation
-				}
-			}
 		}
 
 		// 5xx or non-JSON: retryable.
@@ -254,95 +302,189 @@ func unb64(s string) ([]byte, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Worker state
+// Unified state_* / queue_* helpers (composite key over (scope_id, ns, key))
+//
+// Every legacy FunctionStorage family maps onto these. attempt_id is minted
+// per logical call (reused across HTTP retries inside post). shard_key is
+// spliced in by post.
 // ---------------------------------------------------------------------------
 
-func (s *Storage) WorkerPut(executionID []byte, workerID int64, state []byte) error {
-	return s.post("worker_put", map[string]any{
-		"execution_id": b64(executionID),
-		"worker_id":    workerID,
-		"state":        b64(state),
+type kvPair struct{ key, value []byte }
+
+func (s *Storage) statePutMany(scopeID, ns []byte, items []kvPair) error {
+	enc := make([]map[string]string, len(items))
+	for i, it := range items {
+		enc[i] = map[string]string{"key": b64(it.key), "value": b64(it.value)}
+	}
+	return s.post("state_put_many", map[string]any{
+		"scope_id":   b64(scopeID),
+		"ns":         b64(ns),
+		"items":      enc,
+		"attempt_id": newAttemptID(),
 	}, nil)
 }
 
-func (s *Storage) WorkerCollect(executionID []byte) ([][]byte, error) {
-	var resp struct {
-		States []string `json:"states"`
+// stateGetMany returns values parallel to keys (nil entry == miss).
+func (s *Storage) stateGetMany(scopeID, ns []byte, keys [][]byte) ([][]byte, error) {
+	if len(keys) == 0 {
+		return [][]byte{}, nil
 	}
-	if err := s.post("worker_collect", map[string]any{
-		"execution_id": b64(executionID),
+	enc := make([]string, len(keys))
+	for i, k := range keys {
+		enc[i] = b64(k)
+	}
+	var resp struct {
+		Rows []*struct {
+			Value string `json:"value"`
+		} `json:"rows"`
+	}
+	if err := s.post("state_get_many", map[string]any{
+		"scope_id": b64(scopeID),
+		"ns":       b64(ns),
+		"keys":     enc,
 	}, &resp); err != nil {
 		return nil, err
 	}
-	out := make([][]byte, 0, len(resp.States))
-	for _, s := range resp.States {
-		b, err := unb64(s)
-		if err != nil {
-			return nil, fmt.Errorf("cfdo: worker_collect decode state: %w", err)
+	if len(resp.Rows) != len(keys) {
+		return nil, fmt.Errorf("cfdo: state_get_many returned %d rows for %d keys", len(resp.Rows), len(keys))
+	}
+	out := make([][]byte, len(keys))
+	for i, r := range resp.Rows {
+		if r == nil {
+			continue
 		}
-		out = append(out, b)
+		v, err := unb64(r.Value)
+		if err != nil {
+			return nil, fmt.Errorf("cfdo: state_get_many decode value[%d]: %w", i, err)
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// statePaged drives state_scan / state_drain across pages, accumulating rows.
+// attemptID is "" for state_scan (non-destructive) and a single reused id for
+// state_drain (snapshot-then-page atomicity across pages).
+func (s *Storage) statePaged(endpoint string, scopeID, ns []byte, attemptID string) ([]kvPair, error) {
+	var out []kvPair
+	afterKey := ""
+	for {
+		body := map[string]any{"scope_id": b64(scopeID), "ns": b64(ns)}
+		if afterKey != "" {
+			body["after_key"] = afterKey
+		}
+		if attemptID != "" {
+			body["attempt_id"] = attemptID
+		}
+		var resp struct {
+			Rows []struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			} `json:"rows"`
+			NextAfter string `json:"next_after"`
+		}
+		if err := s.post(endpoint, body, &resp); err != nil {
+			return nil, err
+		}
+		for _, r := range resp.Rows {
+			k, err := unb64(r.Key)
+			if err != nil {
+				return nil, fmt.Errorf("cfdo: %s decode key: %w", endpoint, err)
+			}
+			v, err := unb64(r.Value)
+			if err != nil {
+				return nil, fmt.Errorf("cfdo: %s decode value: %w", endpoint, err)
+			}
+			out = append(out, kvPair{key: k, value: v})
+		}
+		if resp.NextAfter == "" {
+			break
+		}
+		afterKey = resp.NextAfter
+	}
+	return out, nil
+}
+
+// stateDelete removes keys from a namespace, or the whole namespace when keys
+// is nil. Returns the count deleted.
+func (s *Storage) stateDelete(scopeID, ns []byte, keys [][]byte) (int, error) {
+	body := map[string]any{
+		"scope_id":   b64(scopeID),
+		"ns":         b64(ns),
+		"attempt_id": newAttemptID(),
+	}
+	if keys != nil {
+		enc := make([]string, len(keys))
+		for i, k := range keys {
+			enc[i] = b64(k)
+		}
+		body["keys"] = enc
+	}
+	var resp struct {
+		Deleted int `json:"deleted"`
+	}
+	if err := s.post("state_delete", body, &resp); err != nil {
+		return 0, err
+	}
+	return resp.Deleted, nil
+}
+
+// executionClear wipes ALL state + log rows for one scope across every ns.
+func (s *Storage) executionClear(scopeID []byte) error {
+	return s.post("execution_clear", map[string]any{
+		"scope_id":   b64(scopeID),
+		"attempt_id": newAttemptID(),
+	}, nil)
+}
+
+// ---------------------------------------------------------------------------
+// Worker state
+// ---------------------------------------------------------------------------
+
+// Worker state → ns=worker, key = int64(worker_id).
+
+func (s *Storage) WorkerPut(executionID []byte, workerID int64, state []byte) error {
+	return s.statePutMany(executionID, nsWorker, []kvPair{{key: int64Key(workerID), value: state}})
+}
+
+func (s *Storage) WorkerCollect(executionID []byte) ([][]byte, error) {
+	rows, err := s.statePaged("state_drain", executionID, nsWorker, newAttemptID())
+	if err != nil {
+		return nil, err
+	}
+	out := make([][]byte, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.value)
 	}
 	return out, nil
 }
 
 func (s *Storage) WorkerScan(executionID []byte) ([]vgi.WorkerStateEntry, error) {
-	var resp struct {
-		Rows []struct {
-			WorkerID int64  `json:"worker_id"`
-			State    string `json:"state"`
-		} `json:"rows"`
-	}
-	if err := s.post("worker_scan", map[string]any{
-		"execution_id": b64(executionID),
-	}, &resp); err != nil {
+	rows, err := s.statePaged("state_scan", executionID, nsWorker, "")
+	if err != nil {
 		return nil, err
 	}
-	out := make([]vgi.WorkerStateEntry, 0, len(resp.Rows))
-	for _, r := range resp.Rows {
-		state, err := unb64(r.State)
-		if err != nil {
-			return nil, fmt.Errorf("cfdo: worker_scan decode state: %w", err)
-		}
-		out = append(out, vgi.WorkerStateEntry{WorkerID: r.WorkerID, State: state})
+	out := make([]vgi.WorkerStateEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, vgi.WorkerStateEntry{WorkerID: int64FromKey(r.key), State: r.value})
 	}
 	return out, nil
 }
 
-// ---------------------------------------------------------------------------
-// Scan-worker state
-// ---------------------------------------------------------------------------
+// Scan-worker state → ns=scan_worker, key = stream_id.
 
 func (s *Storage) ScanWorkerPut(executionID, streamID, state []byte) error {
-	return s.post("scan_worker_put", map[string]any{
-		"execution_id": b64(executionID),
-		"stream_id":    b64(streamID),
-		"state":        b64(state),
-	}, nil)
+	return s.statePutMany(executionID, nsScanWorker, []kvPair{{key: streamID, value: state}})
 }
 
 func (s *Storage) ScanWorkerScan(executionID []byte) ([]vgi.ScanWorkerStateEntry, error) {
-	var resp struct {
-		Rows []struct {
-			StreamID string `json:"stream_id"`
-			State    string `json:"state"`
-		} `json:"rows"`
-	}
-	if err := s.post("scan_worker_scan", map[string]any{
-		"execution_id": b64(executionID),
-	}, &resp); err != nil {
+	rows, err := s.statePaged("state_scan", executionID, nsScanWorker, "")
+	if err != nil {
 		return nil, err
 	}
-	out := make([]vgi.ScanWorkerStateEntry, 0, len(resp.Rows))
-	for _, r := range resp.Rows {
-		sid, err := unb64(r.StreamID)
-		if err != nil {
-			return nil, fmt.Errorf("cfdo: scan_worker_scan decode stream_id: %w", err)
-		}
-		state, err := unb64(r.State)
-		if err != nil {
-			return nil, fmt.Errorf("cfdo: scan_worker_scan decode state: %w", err)
-		}
-		out = append(out, vgi.ScanWorkerStateEntry{StreamID: sid, State: state})
+	out := make([]vgi.ScanWorkerStateEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, vgi.ScanWorkerStateEntry{StreamID: r.key, State: r.value})
 	}
 	return out, nil
 }
@@ -362,6 +504,7 @@ func (s *Storage) QueuePush(executionID []byte, items [][]byte) (int, error) {
 	if err := s.post("queue_push", map[string]any{
 		"execution_id": b64(executionID),
 		"items":        enc,
+		"attempt_id":   newAttemptID(),
 	}, &resp); err != nil {
 		return 0, err
 	}
@@ -374,6 +517,7 @@ func (s *Storage) QueuePop(executionID []byte) ([]byte, error) {
 	}
 	if err := s.post("queue_pop", map[string]any{
 		"execution_id": b64(executionID),
+		"attempt_id":   newAttemptID(),
 	}, &resp); err != nil {
 		return nil, err
 	}
@@ -389,6 +533,7 @@ func (s *Storage) QueueClear(executionID []byte) (int, error) {
 	}
 	if err := s.post("queue_clear", map[string]any{
 		"execution_id": b64(executionID),
+		"attempt_id":   newAttemptID(),
 	}, &resp); err != nil {
 		return 0, err
 	}
@@ -396,128 +541,167 @@ func (s *Storage) QueueClear(executionID []byte) (int, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Aggregate state and window partition (unsupported)
-//
-// The DO Worker doesn't expose these endpoints; aggregate-heavy workloads
-// should run with the local SQLite backend. Returning a clear error keeps
-// the failure mode obvious instead of silently corrupting state.
+// Aggregate state → ns=agg, key = int64(group_id)
 // ---------------------------------------------------------------------------
 
-var errAggregateUnsupported = errors.New(
-	"cfdo: aggregate functions are not supported with the Cloudflare DO storage backend; " +
-		"use the SQLite backend (VGI_WORKER_SHARED_STORAGE=sqlite) for aggregate-using workers",
-)
-
 func (s *Storage) AggregateStateGet(executionID []byte, groupIDs []int64) ([]vgi.AggregateStateEntry, error) {
-	return nil, errAggregateUnsupported
+	if len(groupIDs) == 0 {
+		return []vgi.AggregateStateEntry{}, nil
+	}
+	keys := make([][]byte, len(groupIDs))
+	for i, gid := range groupIDs {
+		keys[i] = int64Key(gid)
+	}
+	values, err := s.stateGetMany(executionID, nsAgg, keys)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]vgi.AggregateStateEntry, len(groupIDs))
+	for i, gid := range groupIDs {
+		out[i] = vgi.AggregateStateEntry{GroupID: gid, State: values[i]}
+	}
+	return out, nil
 }
 
 func (s *Storage) AggregateStatePut(executionID []byte, entries []vgi.AggregateStateEntry) error {
-	return errAggregateUnsupported
+	if len(entries) == 0 {
+		return nil
+	}
+	items := make([]kvPair, len(entries))
+	for i, e := range entries {
+		items[i] = kvPair{key: int64Key(e.GroupID), value: e.State}
+	}
+	return s.statePutMany(executionID, nsAgg, items)
 }
 
 func (s *Storage) AggregateStateClear(executionID []byte) error {
-	return errAggregateUnsupported
+	_, err := s.stateDelete(executionID, nsAgg, nil)
+	return err
 }
 
+// Aggregate const args → ns=agg_const, key = function_name.
+
 func (s *Storage) AggregateConstArgsPut(executionID []byte, functionName string, args []byte) error {
-	return errAggregateUnsupported
+	return s.statePutMany(executionID, nsAggConst, []kvPair{{key: []byte(functionName), value: args}})
 }
 
 func (s *Storage) AggregateConstArgsGet(executionID []byte, functionName string) ([]byte, error) {
-	return nil, errAggregateUnsupported
+	values, err := s.stateGetMany(executionID, nsAggConst, [][]byte{[]byte(functionName)})
+	if err != nil {
+		return nil, err
+	}
+	return values[0], nil
 }
 
+// Aggregate window partition → ns=win, key = int64(partition_id).
+
 func (s *Storage) AggregateWindowPartitionPut(executionID []byte, partitionID int64, data []byte) error {
-	return errAggregateUnsupported
+	return s.statePutMany(executionID, nsWin, []kvPair{{key: int64Key(partitionID), value: data}})
 }
 
 func (s *Storage) AggregateWindowPartitionGet(executionID []byte, partitionID int64) ([]byte, error) {
-	return nil, errAggregateUnsupported
+	values, err := s.stateGetMany(executionID, nsWin, [][]byte{int64Key(partitionID)})
+	if err != nil {
+		return nil, err
+	}
+	return values[0], nil
 }
 
 func (s *Storage) AggregateWindowPartitionDelete(executionID []byte, partitionID int64) error {
-	return errAggregateUnsupported
+	_, err := s.stateDelete(executionID, nsWin, [][]byte{int64Key(partitionID)})
+	return err
 }
 
 func (s *Storage) AggregateWindowPartitionClear(executionID []byte) error {
-	return errAggregateUnsupported
+	_, err := s.stateDelete(executionID, nsWin, nil)
+	return err
 }
 
 // ---------------------------------------------------------------------------
-// Transaction state
+// Transaction state → scope = transaction_opaque_data, ns=txn
 // ---------------------------------------------------------------------------
 
 func (s *Storage) TransactionStateGet(transactionOpaqueData []byte, keys [][]byte) ([][]byte, error) {
-	if len(keys) == 0 {
-		return [][]byte{}, nil
-	}
-	enc := make([]string, len(keys))
-	for i, k := range keys {
-		enc[i] = b64(k)
-	}
-	var resp struct {
-		Values []*string `json:"values"` // parallel to keys, null on miss
-	}
-	if err := s.post("transaction_state_get", map[string]any{
-		"transaction_opaque_data": b64(transactionOpaqueData),
-		"keys":           enc,
-	}, &resp); err != nil {
-		return nil, err
-	}
-	if len(resp.Values) != len(keys) {
-		return nil, fmt.Errorf(
-			"cfdo: transaction_state_get returned %d values for %d keys",
-			len(resp.Values), len(keys),
-		)
-	}
-	out := make([][]byte, len(keys))
-	for i, v := range resp.Values {
-		if v == nil {
-			continue
-		}
-		decoded, err := unb64(*v)
-		if err != nil {
-			return nil, fmt.Errorf("cfdo: transaction_state_get decode value[%d]: %w", i, err)
-		}
-		out[i] = decoded
-	}
-	return out, nil
+	return s.stateGetMany(transactionOpaqueData, nsTxn, keys)
 }
 
 func (s *Storage) TransactionStatePut(transactionOpaqueData []byte, items []vgi.TransactionStateItem) error {
 	if len(items) == 0 {
 		return nil
 	}
-	enc := make([]map[string]string, len(items))
+	pairs := make([]kvPair, len(items))
 	for i, it := range items {
-		enc[i] = map[string]string{
-			"key":   b64(it.Key),
-			"value": b64(it.Value),
-		}
+		pairs[i] = kvPair{key: it.Key, value: it.Value}
 	}
-	return s.post("transaction_state_put", map[string]any{
-		"transaction_opaque_data": b64(transactionOpaqueData),
-		"items":          enc,
-	}, nil)
+	return s.statePutMany(transactionOpaqueData, nsTxn, pairs)
 }
 
 func (s *Storage) TransactionStateClear(transactionOpaqueData []byte) error {
-	return s.post("transaction_state_clear", map[string]any{
-		"transaction_opaque_data": b64(transactionOpaqueData),
-	}, nil)
+	// Only ns=txn lives under a transaction scope, so a scope-wide clear is
+	// equivalent and matches vgi-python's TransactionBoundStorage.clear().
+	return s.executionClear(transactionOpaqueData)
 }
 
 // ---------------------------------------------------------------------------
-// Maintenance
+// State log (StateLogStorage) → ns=log; buffering functions stash batches here
 // ---------------------------------------------------------------------------
 
-// CleanupOldEntries is a no-op for this backend. The DO Worker handles its
-// own TTL sweep (storage is keyed by execution_id and reclaimed by Cloudflare
-// when the DO is idle long enough), so client-driven cleanup isn't needed.
-func (s *Storage) CleanupOldEntries(maxAge time.Duration) (int, error) {
-	return 0, nil
+func (s *Storage) StateAppend(executionID, key, value []byte) (int64, error) {
+	var resp struct {
+		Ordinal int64 `json:"ordinal"`
+	}
+	if err := s.post("state_append", map[string]any{
+		"scope_id":   b64(executionID),
+		"ns":         b64(nsLog),
+		"key":        b64(key),
+		"item":       b64(value),
+		"attempt_id": newAttemptID(),
+	}, &resp); err != nil {
+		return 0, err
+	}
+	return resp.Ordinal, nil
 }
 
-// Compile-time interface check.
-var _ vgi.FunctionStorage = (*Storage)(nil)
+func (s *Storage) StateLogScan(executionID, key []byte, afterID int64, limit int) ([]vgi.StateLogEntry, error) {
+	body := map[string]any{
+		"scope_id": b64(executionID),
+		"ns":       b64(nsLog),
+		"key":      b64(key),
+		"after_id": afterID,
+	}
+	if limit > 0 {
+		body["limit"] = limit
+	}
+	var resp struct {
+		Rows []struct {
+			ID    int64  `json:"id"`
+			Value string `json:"value"`
+		} `json:"rows"`
+	}
+	if err := s.post("state_log_scan", body, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]vgi.StateLogEntry, 0, len(resp.Rows))
+	for _, r := range resp.Rows {
+		v, err := unb64(r.Value)
+		if err != nil {
+			return nil, fmt.Errorf("cfdo: state_log_scan decode value: %w", err)
+		}
+		out = append(out, vgi.StateLogEntry{ID: r.ID, Value: v})
+	}
+	return out, nil
+}
+
+func (s *Storage) StateLogClear(executionID []byte) error {
+	// No log-only clear endpoint; execution_clear wipes state + log for the
+	// scope. StateLogClear is a teardown call (buffering destructor), so the
+	// broader sweep is fine.
+	return s.executionClear(executionID)
+}
+
+// Compile-time interface checks.
+var (
+	_ vgi.FunctionStorage = (*Storage)(nil)
+	_ vgi.StateLogStorage = (*Storage)(nil)
+	_ vgi.ShardedBackend  = (*Storage)(nil)
+)

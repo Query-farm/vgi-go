@@ -12,6 +12,9 @@
 //
 // Supported values:
 //
+//	memory                       → in-process SQLite at ":memory:"
+//	                                (process-local, no cross-process
+//	                                 coordination — single-process only)
 //	sqlite (default, or unset)   → local SQLite at the per-user state path
 //	cloudflare-do                → Cloudflare Worker + Durable Object
 //	                                (requires VGI_CF_DO_URL,
@@ -46,13 +49,17 @@ const EnvVar = "VGI_WORKER_SHARED_STORAGE"
 func FromEnv() (vgi.FunctionStorage, error) {
 	backend := strings.ToLower(strings.TrimSpace(os.Getenv(EnvVar)))
 	switch backend {
+	case "memory":
+		// In-process tier: ":memory:" is process-local with no cross-process
+		// coordination. Correct only for single-process deployments.
+		return vgi.NewSQLiteStorage(vgi.SQLiteStorageOptions{Path: ":memory:"})
 	case "", "sqlite":
 		return vgi.NewSQLiteStorage(vgi.SQLiteStorageOptions{})
 	case "cloudflare-do":
 		return cfdo.FromEnv()
 	default:
 		return nil, fmt.Errorf(
-			"resolve: unknown %s=%q (supported: sqlite, cloudflare-do)",
+			"resolve: unknown %s=%q (supported: memory, sqlite, cloudflare-do)",
 			EnvVar, backend,
 		)
 	}

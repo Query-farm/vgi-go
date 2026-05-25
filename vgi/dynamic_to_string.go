@@ -83,10 +83,15 @@ func (w *Worker) handleTableFunctionDynamicToString(ctx context.Context, callCtx
 		GlobalExecutionID: req.GlobalExecutionID,
 		Auth:              callCtx.Auth,
 	}
+	var shardKey string
 	if bindReq.AttachOpaqueData != nil {
-		params.AttachOpaqueData = *bindReq.AttachOpaqueData
+		// User hook sees the catalog's bytes (uuid stripped); storage shards on the uuid.
+		if catalogBytes, err := w.openAttach(*bindReq.AttachOpaqueData, callCtx); err == nil {
+			params.AttachOpaqueData = catalogBytes
+		}
+		shardKey, _ = w.shardKeyForAttach(*bindReq.AttachOpaqueData, callCtx)
 	}
-	if storage, err := w.getOrCreateStorage(ctx, req.GlobalExecutionID); err == nil {
+	if storage, err := w.getOrCreateStorage(ctx, req.GlobalExecutionID, shardKey); err == nil {
 		params.Storage = storage
 	}
 	keys, values, err := hook.DynamicToString(ctx, params)

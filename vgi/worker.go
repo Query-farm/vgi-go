@@ -811,7 +811,7 @@ func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 	// serial dispatch stream (stdio); HTTP disables the deferred step. The unix
 	// (launcher) transport serves concurrent connections, where the hook's
 	// per-dispatch state is not safe to share — skip the hook entirely and rely
-	// on the storage backend's TTL sweep (CleanupOldEntries).
+	// on the framework's explicit per-execution clears at end-of-query.
 	switch transport {
 	case transportStdio:
 		s.SetDispatchHook(&storageCleanupHook{worker: w, isHTTP: false})
@@ -961,13 +961,15 @@ func newExecutionID() []byte {
 // backend (initialized lazily on first call) so every execution in the
 // worker uses one backend — one SQLite DB shared across all executions and
 // across worker subprocesses spawned for parallel scans.
-func (w *Worker) getOrCreateStorage(ctx context.Context, executionID []byte) (*ExecutionStorage, error) {
+func (w *Worker) getOrCreateStorage(ctx context.Context, executionID []byte, shardKey string) (*ExecutionStorage, error) {
 	key := hex.EncodeToString(executionID)
 	if tracker, ok := ctx.Value(storageTrackerKey).(*storageTracker); ok {
 		tracker.track(key)
 	}
 	if s, ok := w.storages.Load(key); ok {
-		return s.(*ExecutionStorage), nil
+		es := s.(*ExecutionStorage)
+		es.SetShardKey(shardKey)
+		return es, nil
 	}
 	back, err := w.functionStorage()
 	if err != nil {
@@ -978,8 +980,11 @@ func (w *Worker) getOrCreateStorage(ctx context.Context, executionID []byte) (*E
 	if err := s.SetExecutionID(executionID); err != nil {
 		return nil, err
 	}
+	s.SetShardKey(shardKey)
 	actual, _ := w.storages.LoadOrStore(key, s)
-	return actual.(*ExecutionStorage), nil
+	es := actual.(*ExecutionStorage)
+	es.SetShardKey(shardKey)
+	return es, nil
 }
 
 // functionStorage returns the worker's shared FunctionStorage backend,
