@@ -206,20 +206,28 @@ func (w *Worker) openTransaction(envelope, attachEnvelope []byte, cc *vgirpc.Cal
 // opened with the *sealed* attach value as part of its AAD, so it stays bound
 // to its parent attach. A no-op when the worker has no signing key.
 func (w *Worker) unwrapReqOpaque(reqPtr any, cc *vgirpc.CallContext) error {
-	if len(w.httpSigningKey) == 0 {
-		return nil
-	}
 	v := reflect.ValueOf(reqPtr).Elem()
 	var sealedAttach []byte
 	if af := v.FieldByName("AttachOpaqueData"); af.IsValid() && af.Kind() == reflect.Slice {
 		sealedAttach = af.Bytes()
-		if len(sealedAttach) > 0 {
+		// Writable-catalog attach values ("writable:<name>") are routed by name
+		// and are neither UUID-minted nor sealed, so leave them untouched. Every
+		// other attach value is the framework envelope minted in catalog_attach
+		// (uuid(16) || catalog_bytes, then sealed); openAttach strips the UUID
+		// and opens the seal. openAttach strips the UUID even with no signing key
+		// (subprocess/unix), so handler bodies always see the catalog's own bytes
+		// regardless of transport — without this, subprocess handlers received
+		// the raw UUID-prefixed blob and mis-parsed it.
+		if len(sealedAttach) > 0 && w.writableByAttachOpaqueData(sealedAttach) == nil {
 			plain, err := w.openAttach(sealedAttach, cc)
 			if err != nil {
 				return err
 			}
 			af.SetBytes(plain)
 		}
+	}
+	if len(w.httpSigningKey) == 0 {
+		return nil
 	}
 	if tf := v.FieldByName("TransactionOpaqueData"); tf.IsValid() && tf.Kind() == reflect.Ptr && !tf.IsNil() {
 		plain, err := w.openTransaction(tf.Elem().Bytes(), sealedAttach, cc)

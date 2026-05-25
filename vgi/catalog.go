@@ -1119,9 +1119,11 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
 
-			// attach_opaque_data is set to []byte(catalog_name) in catalog_attach, so
-			// we can use it to enforce per-catalog function visibility (e.g.
-			// proj_repro_* only surfaces under the projection_repro attach).
+			// attach_opaque_data has already been unwrapped to the catalog's own
+			// plaintext by unwrapReqOpaque (the unaryCatalog wrapper strips the
+			// framework UUID and opens any seal), so it is []byte(catalog_name)
+			// here. Per-catalog function visibility (e.g. proj_repro_* only
+			// surfacing under the projection_repro attach) compares against it.
 			catalogName := string(req.AttachOpaqueData)
 
 			var items [][]byte

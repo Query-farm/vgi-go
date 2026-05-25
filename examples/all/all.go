@@ -72,6 +72,7 @@ func registerScalars(w *vgi.Worker) {
 func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewConstantColumnsFunction())
 	w.RegisterTable(table.NewFilterEchoFunction())
+	w.RegisterTable(table.NewDictFilterEchoFunction())
 	w.RegisterTable(table.NewFilterEchoPartitionedFunction())
 	w.RegisterTable(table.NewOrderEchoFunction())
 	w.RegisterTable(table.NewSampleEchoFunction())

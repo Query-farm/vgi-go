@@ -420,11 +420,75 @@ func (pf *PushdownFilters) Apply(ctx context.Context, batch arrow.RecordBatch) (
 	}
 	defer mask.Release()
 
+	// The Go arrow fork's array_take kernel has no dictionary-array support, so
+	// compute.FilterRecordBatch fails on any dictionary-encoded column (e.g.
+	// dict_filter_echo's VARCHAR-typed dictionary<int8,utf8>). When the batch
+	// carries a dictionary column, filter column-by-column instead: dictionary
+	// columns have their primitive index array filtered (which the kernel does
+	// support) and are rebuilt against the unchanged dictionary values, so the
+	// wire schema is preserved. pyarrow takes dictionaries natively, so this
+	// keeps the Go worker's auto-apply behavior on par with vgi-python.
+	if batchHasDictionary(batch) {
+		return filterRecordBatchDictAware(ctx, batch, mask)
+	}
+
 	filtered, err := compute.FilterRecordBatch(ctx, batch, mask, compute.DefaultFilterOptions())
 	if err != nil {
 		return nil, fmt.Errorf("filtering record batch: %w", err)
 	}
 	return filtered, nil
+}
+
+// batchHasDictionary reports whether any column of batch is dictionary-encoded.
+func batchHasDictionary(batch arrow.RecordBatch) bool {
+	for i := 0; i < int(batch.NumCols()); i++ {
+		if batch.Column(i).DataType().ID() == arrow.DICTIONARY {
+			return true
+		}
+	}
+	return false
+}
+
+// filterRecordBatchDictAware filters batch by mask column-by-column, handling
+// dictionary columns the Go arrow fork's array_take kernel cannot take.
+func filterRecordBatchDictAware(ctx context.Context, batch arrow.RecordBatch, mask arrow.Array) (arrow.RecordBatch, error) {
+	opts := *compute.DefaultFilterOptions()
+	cols := make([]arrow.Array, batch.NumCols())
+	for i := range cols {
+		c, err := filterColumn(ctx, batch.Column(i), mask, opts)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				cols[j].Release()
+			}
+			return nil, fmt.Errorf("filtering record batch: %w", err)
+		}
+		cols[i] = c
+	}
+	nrows := int64(0)
+	if len(cols) > 0 {
+		nrows = int64(cols[0].Len())
+	}
+	out := array.NewRecordBatch(batch.Schema(), cols, nrows)
+	for _, c := range cols {
+		c.Release()
+	}
+	return out, nil
+}
+
+// filterColumn filters a single column by mask. Dictionary columns filter their
+// primitive index array (supported by the take kernel) and rebuild with the
+// same dictionary values, preserving the dictionary encoding.
+func filterColumn(ctx context.Context, col, mask arrow.Array, opts compute.FilterOptions) (arrow.Array, error) {
+	d, ok := col.(*array.Dictionary)
+	if !ok {
+		return compute.FilterArray(ctx, col, mask, opts)
+	}
+	idx, err := compute.FilterArray(ctx, d.Indices(), mask, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer idx.Release()
+	return array.NewDictionaryArray(d.DataType(), idx, d.Dictionary()), nil
 }
 
 // FilteredColumns returns the set of column names that have filters applied.
