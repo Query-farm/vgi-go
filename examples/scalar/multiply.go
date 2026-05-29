@@ -9,6 +9,7 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // MultiplyFunction multiplies a value by a constant factor.
@@ -34,10 +35,33 @@ func (*MultiplyFunction) OnBindTyped(_ *multiplyArgs, _ *vgi.BindParams) (*vgi.B
 }
 
 func (*MultiplyFunction) ProcessTyped(_ context.Context, args *multiplyArgs, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
-	return vgi.MapColumn(params, batch, 0, array.NewInt64Builder,
-		func(_ arrow.Array, i int) int64 {
-			return args.Value.Value(i) * args.Factor
-		})
+	// Fast path: bypass vgi.MapColumn's per-row callback. Read the raw int64 slice
+	// directly from the input data buffer, multiply in a tight loop the Go compiler
+	// can auto-vectorise, then bulk-append. Null mask preserved via AppendValues'
+	// valid argument when any nulls are present.
+	n := int(batch.NumRows())
+	src := args.Value.Int64Values()
+	factor := args.Factor
+
+	out := make([]int64, n)
+	for i, v := range src {
+		out[i] = v * factor
+	}
+
+	bldr := array.NewInt64Builder(memory.NewGoAllocator())
+	defer bldr.Release()
+	if args.Value.NullN() > 0 {
+		valid := make([]bool, n)
+		for i := 0; i < n; i++ {
+			valid[i] = args.Value.IsValid(i)
+		}
+		bldr.AppendValues(out, valid)
+	} else {
+		bldr.AppendValues(out, nil)
+	}
+	arr := bldr.NewArray()
+	defer arr.Release()
+	return array.NewRecordBatch(params.OutputSchema, []arrow.Array{arr}, int64(n)), nil
 }
 
 // NewMultiply returns the registration-ready ScalarFunction.
