@@ -5,10 +5,12 @@ package scalar
 
 import (
 	"context"
+	"unsafe"
 
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // MultiplyFunction multiplies a value by a constant factor.
@@ -34,37 +36,61 @@ func (*MultiplyFunction) OnBindTyped(_ *multiplyArgs, _ *vgi.BindParams) (*vgi.B
 }
 
 func (*MultiplyFunction) ProcessTyped(_ context.Context, args *multiplyArgs, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
-	// Fast path: bypass vgi.MapColumn's per-row callback. Read the raw int64 slice
-	// directly from the input data buffer, multiply in a tight loop the Go compiler
-	// can auto-vectorise, then bulk-append. Null mask preserved via AppendValues'
-	// valid argument when any nulls are present.
+	// Fast path: write the multiply result directly into a pooled
+	// arrow.Buffer, skip Int64Builder entirely. The previous path was
+	//
+	//   out := make([]int64, n)        // 16 KB Go-heap allocation
+	//   for i, v := range src { ... }  // multiply into out
+	//   bldr.AppendValues(out, nil)    // alloc arrow.Buffer + memcpy out into it
+	//
+	// which paid a 16 KB Go-heap allocation AND a 16 KB memcpy per batch
+	// on top of the actual compute. Here we reserve a buffer from the
+	// pooled allocator and write through it directly via unsafe.Slice,
+	// matching the Java direct-ArrowBuf pattern. The validity bitmap is
+	// propagated by slicing the input's bitmap buffer (an aliased view —
+	// no copy — that the output array Retain()s).
 	n := int(batch.NumRows())
 	src := args.Value.Int64Values()
 	factor := args.Factor
 
-	out := make([]int64, n)
+	// Allocate the data buffer (n * 8 bytes) from the shared pool and
+	// view it as a []int64 so the multiply loop writes through the same
+	// memory that ends up in the output ArrayData.
+	dataBuf := memory.NewResizableBuffer(sharedPooledAllocator)
+	dataBuf.Resize(n * arrow.Int64SizeBytes)
+	dst := unsafe.Slice((*int64)(unsafe.Pointer(&dataBuf.Bytes()[0])), n)
 	for i, v := range src {
-		out[i] = v * factor
+		dst[i] = v * factor
 	}
 
-	// Use the pure-Go pooled allocator (see pooled_allocator.go) so the
-	// 16 KB per-batch Int64Builder buffer is recycled across batches
-	// rather than fed to Go's GC every call. With memory.NewGoAllocator
-	// the worker spent ~24% of CPU in gcDrain / scanObjectsSmall / madvise
-	// on this workload (measured via pprof).
-	bldr := array.NewInt64Builder(sharedPooledAllocator)
-	defer bldr.Release()
-	if args.Value.NullN() > 0 {
-		valid := make([]bool, n)
-		for i := 0; i < n; i++ {
-			valid[i] = args.Value.IsValid(i)
+	// Propagate the input validity bitmap by slicing it (Arrow's bitmap
+	// buffers are bit-aligned at byte 0, so a same-offset view is correct
+	// for any batch produced by vgi-rpc's IPC reader). We Retain() it
+	// because NewData will Release() on tear-down, balancing the input's
+	// own ownership.
+	var validityBuf *memory.Buffer
+	nullCount := args.Value.NullN()
+	if nullCount > 0 {
+		validityBuf = args.Value.Data().Buffers()[0]
+		if validityBuf != nil {
+			validityBuf.Retain()
 		}
-		bldr.AppendValues(out, valid)
-	} else {
-		bldr.AppendValues(out, nil)
 	}
-	arr := bldr.NewArray()
+
+	// Build the ArrayData -> Int64 -> RecordBatch chain. NewData retains
+	// each non-nil buffer once, so we drop our own refcounts after handing
+	// ownership over and let arr.Release() (deferred) free everything
+	// back to the pool when the framework releases the returned batch.
+	data := array.NewData(arrow.PrimitiveTypes.Int64, n,
+		[]*memory.Buffer{validityBuf, dataBuf}, nil, nullCount, 0)
+	dataBuf.Release()
+	if validityBuf != nil {
+		validityBuf.Release()
+	}
+	arr := array.NewInt64Data(data)
+	data.Release()
 	defer arr.Release()
+
 	return array.NewRecordBatch(params.OutputSchema, []arrow.Array{arr}, int64(n)), nil
 }
 
