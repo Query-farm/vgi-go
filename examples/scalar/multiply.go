@@ -9,7 +9,6 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // MultiplyFunction multiplies a value by a constant factor.
@@ -48,7 +47,12 @@ func (*MultiplyFunction) ProcessTyped(_ context.Context, args *multiplyArgs, par
 		out[i] = v * factor
 	}
 
-	bldr := array.NewInt64Builder(memory.NewGoAllocator())
+	// Use the pure-Go pooled allocator (see pooled_allocator.go) so the
+	// 16 KB per-batch Int64Builder buffer is recycled across batches
+	// rather than fed to Go's GC every call. With memory.NewGoAllocator
+	// the worker spent ~24% of CPU in gcDrain / scanObjectsSmall / madvise
+	// on this workload (measured via pprof).
+	bldr := array.NewInt64Builder(sharedPooledAllocator)
 	defer bldr.Release()
 	if args.Value.NullN() > 0 {
 		valid := make([]bool, n)
