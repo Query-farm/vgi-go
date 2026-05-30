@@ -95,10 +95,15 @@ func NewSQLiteStorage(opts SQLiteStorageOptions) (FunctionStorage, error) {
 	db.SetMaxOpenConns(1)
 	if path != ":memory:" {
 		// Per-connection pragmas, matching vgi-python / vgi-typescript / vgi-java.
+		// busy_timeout MUST be set before journal_mode=WAL: switching the journal
+		// mode briefly needs an exclusive lock, and when several fresh workers
+		// start concurrently (e.g. a pool=false late-materialization scan spawns a
+		// worker per acquire) one would otherwise fail immediately with "database
+		// is locked" instead of waiting.
 		for _, p := range []string{
+			"PRAGMA busy_timeout=30000",
 			"PRAGMA journal_mode=WAL",
 			"PRAGMA synchronous=NORMAL",
-			"PRAGMA busy_timeout=30000",
 			"PRAGMA temp_store=MEMORY",
 			"PRAGMA cache_size=-65536",
 		} {

@@ -73,6 +73,8 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewConstantColumnsFunction())
 	w.RegisterTable(table.NewFilterEchoFunction())
 	w.RegisterTable(table.NewDictFilterEchoFunction())
+	w.RegisterTable(table.NewValuePruneFunction())
+	w.RegisterTable(table.NewLateMaterializationFunction())
 	w.RegisterTable(table.NewFilterEchoPartitionedFunction())
 	w.RegisterTable(table.NewOrderEchoFunction())
 	w.RegisterTable(table.NewSampleEchoFunction())

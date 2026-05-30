@@ -18,11 +18,11 @@ import (
 
 // Local aliases so subtest code stays terse.
 type (
-	FunctionStorage       = vgi.FunctionStorage
-	WorkerStateEntry      = vgi.WorkerStateEntry
-	ScanWorkerStateEntry  = vgi.ScanWorkerStateEntry
-	AggregateStateEntry   = vgi.AggregateStateEntry
-	TransactionStateItem  = vgi.TransactionStateItem
+	FunctionStorage      = vgi.FunctionStorage
+	WorkerStateEntry     = vgi.WorkerStateEntry
+	ScanWorkerStateEntry = vgi.ScanWorkerStateEntry
+	AggregateStateEntry  = vgi.AggregateStateEntry
+	TransactionStateItem = vgi.TransactionStateItem
 )
 
 // RunFunctionStorageConformance runs the full FunctionStorage behavioral
@@ -34,15 +34,15 @@ type (
 //
 // Backends register their conformance entry point in <backend>_test.go via:
 //
-//   func TestSQLiteStorage_Conformance(t *testing.T) {
-//       storagetest.RunConformance(t, func(t *testing.T) vgi.FunctionStorage {
-//           s, err := vgi.NewSQLiteStorage(vgi.SQLiteStorageOptions{Path: ":memory:"})
-//           if err != nil {
-//               t.Fatal(err)
-//           }
-//           return s
-//       })
-//   }
+//	func TestSQLiteStorage_Conformance(t *testing.T) {
+//	    storagetest.RunConformance(t, func(t *testing.T) vgi.FunctionStorage {
+//	        s, err := vgi.NewSQLiteStorage(vgi.SQLiteStorageOptions{Path: ":memory:"})
+//	        if err != nil {
+//	            t.Fatal(err)
+//	        }
+//	        return s
+//	    })
+//	}
 //
 // When a new backend (Cloudflare DO, Azure SQL, ...) lands, plug it into
 // the same conformance suite to guarantee behavior parity.

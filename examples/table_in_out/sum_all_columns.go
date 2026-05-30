@@ -205,6 +205,18 @@ func sumInt64Column(col arrow.Array) int64 {
 				sum += int64(c.Value(i))
 			}
 		}
+	case *array.Uint16:
+		for i := 0; i < n; i++ {
+			if !c.IsNull(i) {
+				sum += int64(c.Value(i))
+			}
+		}
+	case *array.Uint8:
+		for i := 0; i < n; i++ {
+			if !c.IsNull(i) {
+				sum += int64(c.Value(i))
+			}
+		}
 	}
 	return sum
 }
@@ -223,6 +235,12 @@ func sumFloat64Column(col arrow.Array) float64 {
 		for i := 0; i < n; i++ {
 			if !c.IsNull(i) {
 				sum += float64(c.Value(i))
+			}
+		}
+	case *array.Float16:
+		for i := 0; i < n; i++ {
+			if !c.IsNull(i) {
+				sum += float64(c.Value(i).Float32())
 			}
 		}
 	case *array.Int64:

@@ -68,6 +68,9 @@ type constantColumnsState struct {
 
 const constantColumnsBatchSize = 2048
 
+// constantColumnsAllocator is the shared allocator for repeated-scalar columns.
+var constantColumnsAllocator = memory.NewGoAllocator()
+
 func (f *ConstantColumnsFunction) NewState(params *vgi.ProcessParams) (*constantColumnsState, error) {
 	var args constantColumnsArgs
 	if err := vgi.BindArgs(params.Args, &args); err != nil {
@@ -88,13 +91,19 @@ func (f *ConstantColumnsFunction) Process(ctx context.Context, params *vgi.Proce
 		size = state.Remaining
 	}
 
-	mem := memory.NewGoAllocator()
 	numCols := params.OutputSchema.NumFields()
 	cols := make([]arrow.Array, numCols)
 
 	for c := 0; c < numCols; c++ {
 		valueCol := params.Args.Positional[c+1] // skip count
-		cols[c] = repeatScalar(mem, valueCol, int(size))
+		col, err := repeatScalar(constantColumnsAllocator, valueCol, int(size))
+		if err != nil {
+			for _, made := range cols[:c] {
+				made.Release()
+			}
+			return err
+		}
+		cols[c] = col
 	}
 
 	batch := array.NewRecordBatch(params.OutputSchema, cols, size)
@@ -111,24 +120,30 @@ func NewConstantColumnsFunction() vgi.TableFunction {
 	return vgi.AsTableFunction[constantColumnsState](&ConstantColumnsFunction{})
 }
 
-// repeatScalar creates an array by repeating the scalar value at index 0 of src.
-func repeatScalar(mem memory.Allocator, src arrow.Array, n int) arrow.Array {
-	single := array.NewSlice(src, 0, 1)
-	defer single.Release()
-
-	arrs := make([]arrow.Array, n)
-	for i := range arrs {
-		arrs[i] = single
+// repeatScalar builds an n-row array by repeating the value at index 0 of src.
+// It grows the result by repeated doubling — O(log n) concatenations instead of
+// concatenating n single-element slices — while still handling every Arrow type
+// array.Concatenate supports (including DuckDB extension types such as HUGEINT).
+// Errors are propagated so a failure surfaces to DuckDB rather than being masked
+// as NULL data.
+func repeatScalar(mem memory.Allocator, src arrow.Array, n int) (arrow.Array, error) {
+	if n <= 0 {
+		return array.NewSlice(src, 0, 0), nil
 	}
-
-	result, err := array.Concatenate(arrs, mem)
-	if err != nil {
-		b := array.NewBuilder(mem, src.DataType())
-		defer b.Release()
-		for i := 0; i < n; i++ {
-			b.AppendNull()
+	acc := array.NewSlice(src, 0, 1) // single element, sharing src's buffers
+	for acc.Len() < n {
+		add := acc.Len()
+		if want := n - acc.Len(); add > want {
+			add = want
 		}
-		return b.NewArray()
+		tail := array.NewSlice(acc, 0, int64(add))
+		next, err := array.Concatenate([]arrow.Array{acc, tail}, mem)
+		tail.Release()
+		acc.Release()
+		if err != nil {
+			return nil, err
+		}
+		acc = next
 	}
-	return result
+	return acc, nil
 }

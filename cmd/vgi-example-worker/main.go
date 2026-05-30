@@ -383,6 +383,33 @@ func main() {
 		}, nil),
 	})
 
+	// Late-materialization tables (rowid + scrambled ord), all backed by the
+	// late_materialization scan function which advertises LateMaterialization.
+	// See late_materialization.test.
+	lateMatColumns := func() *arrow.Schema {
+		return arrow.NewSchema([]arrow.Field{
+			{Name: "row_id", Type: arrow.PrimitiveTypes.Int64, Metadata: rowIDMeta},
+			{Name: "ord", Type: arrow.PrimitiveTypes.Int64},
+			{Name: "payload", Type: arrow.BinaryTypes.String},
+			{Name: "pushed", Type: arrow.BinaryTypes.String},
+		}, nil)
+	}
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "late_mat",
+		Comment: "Late-materialization table (1000 rows, unique rowid)",
+		Columns: lateMatColumns(),
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "late_mat_dup",
+		Comment: "Late-materialization table with deliberately non-unique rowid (contract violation)",
+		Columns: lateMatColumns(),
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "late_mat_nulls",
+		Comment: "Late-materialization table with NULLs in the ord column",
+		Columns: lateMatColumns(),
+	})
+
 	// Constraint example tables
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:       "departments",
@@ -456,9 +483,11 @@ func main() {
 
 	// Views
 	w.RegisterCatalogView("main", vgi.CatalogView{
-		Name:       "first_ten",
-		Definition: "SELECT * FROM sequence(10)",
-		Comment:    "First 10 integers",
+		Name:           "first_ten",
+		Definition:     "SELECT * FROM sequence(10)",
+		Comment:        "First 10 integers",
+		ColumnComments: map[string]string{"n": "Sequence index 0..9"},
+		Tags:           map[string]string{"layer": "demo", "origin": "sequence"},
 	})
 	w.RegisterCatalogView("main", vgi.CatalogView{
 		Name:       "even_numbers",
@@ -466,8 +495,10 @@ func main() {
 		Comment:    "Even numbers from 0 to 98",
 	})
 	w.RegisterCatalogView("data", vgi.CatalogView{
-		Name:       "small_numbers",
-		Definition: "SELECT * FROM numbers WHERE value < 10",
+		Name:           "small_numbers",
+		Definition:     "SELECT * FROM numbers WHERE value < 10",
+		Comment:        "Numbers less than 10",
+		ColumnComments: map[string]string{"value": "Single-digit value 0..9"},
 	})
 
 	// Macros
@@ -538,6 +569,14 @@ func main() {
 		"rowid_last":   {"layout": "last", "row_id_type": "int64"},
 		"rowid_string": {"layout": "first", "row_id_type": "string"},
 		"rowid_struct": {"layout": "first", "row_id_type": "struct"},
+	}
+	// Named arguments to late_materialization for each late-mat table.
+	lateMatScanArgs := map[string]map[string]vgi.ScanArg{
+		"late_mat":     nil,
+		"late_mat_dup": {"dup_row_id": {Value: true, Type: arrow.FixedWidthTypes.Boolean}},
+		"late_mat_nulls": {
+			"null_ord_stride": {Value: int64(7), Type: arrow.PrimitiveTypes.Int64},
+		},
 	}
 	w.SetScanFunctionGetHandler(func(schemaName, tableName string, atUnit, atValue *string) (*vgi.ScanFunctionResult, error) {
 		// Handle versioned_data time travel
@@ -625,6 +664,21 @@ func main() {
 				},
 			}, nil
 		}
+		// Late-materialization tables → late_materialization scan function.
+		// 1000 rows is large enough that LIMIT k << count makes the rewrite a
+		// real win and that LIMIT 200 exceeds dynamic_or_filter_threshold (50).
+		if schemaName == "data" {
+			if named, ok := lateMatScanArgs[tableName]; ok {
+				return &vgi.ScanFunctionResult{
+					FunctionName: "late_materialization",
+					PositionalArguments: []vgi.ScanArg{
+						{Value: int64(1000), Type: arrow.PrimitiveTypes.Int64},
+					},
+					NamedArguments: named,
+				}, nil
+			}
+		}
+
 		if schemaName == "data" {
 			if opts, ok := rowIDTables[tableName]; ok {
 				return &vgi.ScanFunctionResult{

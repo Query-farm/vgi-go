@@ -16,6 +16,7 @@ var defaultAllocator = memory.NewGoAllocator()
 type ArrayBuilder[T any] interface {
 	Append(T)
 	AppendNull()
+	Reserve(int)
 	NewArray() arrow.Array
 	Release()
 }
@@ -35,6 +36,7 @@ func MapColumn[T any, B ArrayBuilder[T]](
 
 	builder := newBuilder(mem)
 	defer builder.Release()
+	builder.Reserve(n)
 
 	for i := 0; i < n; i++ {
 		if col.IsNull(i) {
@@ -66,6 +68,7 @@ func MapColumnCustomNulls[T any, B ArrayBuilder[T]](
 
 	builder := newBuilder(mem)
 	defer builder.Release()
+	builder.Reserve(n)
 
 	for i := 0; i < n; i++ {
 		builder.Append(transform(col, i))
@@ -96,6 +99,7 @@ func MapColumns[T any, B ArrayBuilder[T]](
 
 	builder := newBuilder(mem)
 	defer builder.Release()
+	builder.Reserve(n)
 
 	for i := 0; i < n; i++ {
 		isNull := false
@@ -147,6 +151,7 @@ func GenerateColumn[T any, B ArrayBuilder[T]](
 
 	builder := newBuilder(mem)
 	defer builder.Release()
+	builder.Reserve(n)
 
 	for i := 0; i < n; i++ {
 		builder.Append(generateFn(i))

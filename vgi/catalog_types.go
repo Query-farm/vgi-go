@@ -38,6 +38,7 @@ type FunctionInfo struct {
 	ProjectionPushdown         *bool
 	FilterPushdown             *bool
 	SamplingPushdown           *bool
+	LateMaterialization        *bool
 	SupportedExpressionFilters []string
 	OrderPreservation          OrderPreservation // "" = null
 	MaxWorkers                 int32
@@ -225,6 +226,15 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		spBuilder.AppendNull()
 	}
 
+	// late_materialization
+	lmBuilder := array.NewBooleanBuilder(mem)
+	defer lmBuilder.Release()
+	if info.LateMaterialization != nil {
+		lmBuilder.Append(*info.LateMaterialization)
+	} else {
+		lmBuilder.AppendNull()
+	}
+
 	// supported_expression_filters
 	sefBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
 	defer sefBuilder.Release()
@@ -355,6 +365,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		ppBuilder.NewArray(),
 		fpBuilder.NewArray(),
 		spBuilder.NewArray(),
+		lmBuilder.NewArray(),
 		sefBuilder.NewArray(),
 		opBuilder.NewArray(),
 		mwBuilder.NewArray(),

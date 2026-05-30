@@ -110,11 +110,19 @@ func (pf *PushdownFilters) GetColumnInValues(name string) arrow.Array {
 // GetColumnValues returns discrete values a column could have based on
 // equality or IN filters. For EQ, wraps the value in a 1-element array.
 // Returns nil if no discrete values can be determined.
+//
+// Descends one level into AndFilter children (via collectColumnFilters),
+// consistent with GetColumnBounds: DuckDB pushes `col = v` / `col IN (...)`
+// conjoined with derived range bounds as a single AndFilter (e.g. a semi-join
+// emits `col IN (...) AND col >= min AND col <= max`). Without the descent the
+// discrete-value fast path silently misses those and pruning callers fall back
+// to scanning every partition.
+//
+// An OrFilter resolves to the UNION of its branches, but only when every branch
+// pins this column to discrete values; if any branch is a range/IS NULL or
+// constrains a different column the set is not enumerable and we return nil.
 func (pf *PushdownFilters) GetColumnValues(name string) arrow.Array {
-	for _, f := range pf.Filters {
-		if f.ColumnName() != name {
-			continue
-		}
+	for _, f := range pf.collectColumnFilters(name) {
 		switch ft := f.(type) {
 		case *ConstantFilter:
 			if ft.Op == OpEQ {
@@ -122,9 +130,70 @@ func (pf *PushdownFilters) GetColumnValues(name string) arrow.Array {
 			}
 		case *InFilter:
 			return ft.Values
+		case *OrFilter:
+			if union := orDiscreteValues(ft, name); union != nil {
+				return union
+			}
 		}
 	}
 	return nil
+}
+
+// orDiscreteValues returns the deduplicated union of discrete values for the
+// named column across all OR branches, or nil if any branch leaves the column
+// unbounded (a range/IS NULL branch, or a branch constraining a different
+// column). Unlike the AND case, returning one branch's values would be an
+// unsafe subset — a pruning caller would skip the other branches' rows.
+// Descends one level only, consistent with collectColumnFilters.
+func orDiscreteValues(or *OrFilter, name string) arrow.Array {
+	var scalars []scalar.Scalar
+	for _, child := range or.Children {
+		if child.ColumnName() != name {
+			return nil
+		}
+		switch ct := child.(type) {
+		case *ConstantFilter:
+			if ct.Op != OpEQ {
+				return nil
+			}
+			scalars = append(scalars, ct.Value)
+		case *InFilter:
+			for i := 0; i < ct.Values.Len(); i++ {
+				s, err := scalar.GetScalar(ct.Values, i)
+				if err != nil {
+					return nil
+				}
+				scalars = append(scalars, s)
+			}
+		default:
+			return nil
+		}
+	}
+	if len(scalars) == 0 {
+		return nil
+	}
+
+	// Deduplicate by Go value, preserving first-seen order for stable output.
+	seen := make(map[interface{}]struct{}, len(scalars))
+	deduped := make([]scalar.Scalar, 0, len(scalars))
+	for _, s := range scalars {
+		key := scalarToGo(s)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		deduped = append(deduped, s)
+	}
+
+	mem := memory.NewGoAllocator()
+	b := array.NewBuilder(mem, deduped[0].DataType())
+	defer b.Release()
+	for _, s := range deduped {
+		if err := scalar.Append(b, s); err != nil {
+			b.AppendNull()
+		}
+	}
+	return b.NewArray()
 }
 
 // Repr returns a Python-style repr of the filter set, matching the vgi-python

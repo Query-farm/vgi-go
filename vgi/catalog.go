@@ -502,6 +502,10 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			v := true
 			fi.SamplingPushdown = &v
 		}
+		if meta.LateMaterialization {
+			v := true
+			fi.LateMaterialization = &v
+		}
 		if len(meta.SupportedExpressionFilters) > 0 {
 			fi.SupportedExpressionFilters = meta.SupportedExpressionFilters
 		}
@@ -1092,11 +1096,12 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			var items [][]byte
 			for _, cv := range si.views {
 				info := &ViewInfo{
-					Name:       cv.Name,
-					SchemaName: req.Name,
-					Comment:    cv.Comment,
-					Tags:       cv.Tags,
-					Definition: cv.Definition,
+					Name:           cv.Name,
+					SchemaName:     req.Name,
+					Comment:        cv.Comment,
+					Tags:           cv.Tags,
+					Definition:     cv.Definition,
+					ColumnComments: cv.ColumnComments,
 				}
 				data, err := SerializeViewInfo(info)
 				if err != nil {

@@ -207,6 +207,11 @@ type FunctionMetadata struct {
 	FilterPushdown bool
 	// SamplingPushdown indicates support for TABLESAMPLE SYSTEM pushdown.
 	SamplingPushdown bool
+	// LateMaterialization advertises that the function participates in DuckDB's
+	// late-materialization rewrite. DuckDB only honours this when the function
+	// also exposes a rowid virtual column and supports projection + filter
+	// pushdown; the rowid must be unique, deterministic, and snapshot-stable.
+	LateMaterialization bool
 	// SupportedExpressionFilters lists DuckDB expression names that the
 	// function can absorb into its scan (e.g. "&&", "list_contains",
 	// "starts_with"). Without this, DuckDB inserts a separate FILTER node.

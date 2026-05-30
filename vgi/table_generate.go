@@ -147,6 +147,7 @@ func GenerateBatchMap(bs *BatchState, out *vgirpc.OutputCollector, schema *arrow
 func BuildInt64Array(n int64, fn func(i int64) int64) arrow.Array {
 	builder := array.NewInt64Builder(defaultAllocator)
 	defer builder.Release()
+	builder.Reserve(int(n))
 	for i := int64(0); i < n; i++ {
 		builder.Append(fn(i))
 	}
@@ -157,6 +158,7 @@ func BuildInt64Array(n int64, fn func(i int64) int64) arrow.Array {
 func BuildFloat64Array(n int64, fn func(i int64) float64) arrow.Array {
 	builder := array.NewFloat64Builder(defaultAllocator)
 	defer builder.Release()
+	builder.Reserve(int(n))
 	for i := int64(0); i < n; i++ {
 		builder.Append(fn(i))
 	}
@@ -167,6 +169,7 @@ func BuildFloat64Array(n int64, fn func(i int64) float64) arrow.Array {
 func BuildStringArray(n int64, fn func(i int64) string) arrow.Array {
 	builder := array.NewStringBuilder(defaultAllocator)
 	defer builder.Release()
+	builder.Reserve(int(n))
 	for i := int64(0); i < n; i++ {
 		builder.Append(fn(i))
 	}
@@ -177,6 +180,7 @@ func BuildStringArray(n int64, fn func(i int64) string) arrow.Array {
 func BuildBooleanArray(n int64, fn func(i int64) bool) arrow.Array {
 	builder := array.NewBooleanBuilder(defaultAllocator)
 	defer builder.Release()
+	builder.Reserve(int(n))
 	for i := int64(0); i < n; i++ {
 		builder.Append(fn(i))
 	}
@@ -187,6 +191,7 @@ func BuildBooleanArray(n int64, fn func(i int64) bool) arrow.Array {
 func BuildBinaryArray(n int64, fn func(i int64) []byte) arrow.Array {
 	builder := array.NewBinaryBuilder(defaultAllocator, arrow.BinaryTypes.Binary)
 	defer builder.Release()
+	builder.Reserve(int(n))
 	for i := int64(0); i < n; i++ {
 		builder.Append(fn(i))
 	}
@@ -197,6 +202,7 @@ func BuildBinaryArray(n int64, fn func(i int64) []byte) arrow.Array {
 func BuildInt32Array(n int64, fn func(i int64) int32) arrow.Array {
 	builder := array.NewInt32Builder(defaultAllocator)
 	defer builder.Release()
+	builder.Reserve(int(n))
 	for i := int64(0); i < n; i++ {
 		builder.Append(fn(i))
 	}
@@ -208,6 +214,7 @@ func BuildInt32Array(n int64, fn func(i int64) int32) arrow.Array {
 func BuildAllNullArray(dt arrow.DataType, n int64) arrow.Array {
 	builder := array.NewBuilder(defaultAllocator, dt)
 	defer builder.Release()
+	builder.Reserve(int(n))
 	for i := int64(0); i < n; i++ {
 		builder.AppendNull()
 	}
@@ -219,6 +226,7 @@ func BuildAllNullArray(dt arrow.DataType, n int64) arrow.Array {
 func BuildArray[T any, B ArrayBuilder[T]](n int64, newBuilder func(memory.Allocator) B, fn func(i int64) T) arrow.Array {
 	builder := newBuilder(defaultAllocator)
 	defer builder.Release()
+	builder.Reserve(int(n))
 	for i := int64(0); i < n; i++ {
 		builder.Append(fn(i))
 	}

@@ -35,7 +35,7 @@ const (
 	defaultDataVersion           = "3.0.0"
 	defaultImplementationVersion = "11.0.0"
 	stickyCookieName             = "vgi_sticky"
-	attachOpaqueDataSeparator            = 0x00
+	attachOpaqueDataSeparator    = 0x00
 )
 
 var (
@@ -130,7 +130,7 @@ func main() {
 			return &vgi.AttachDecision{
 				ResolvedDataVersion:           resolvedData,
 				ResolvedImplementationVersion: resolvedImpl,
-				AttachOpaqueData:                      attachOpaqueData,
+				AttachOpaqueData:              attachOpaqueData,
 			}, nil
 		}),
 		vgi.WithSchemaContentsHandler(func(attachOpaqueData []byte, schemaName string) ([]vgi.SerializedSchemaItem, bool) {

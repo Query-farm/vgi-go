@@ -25,15 +25,20 @@ type CatalogView struct {
 	// Tags are arbitrary key/value annotations attached to this view;
 	// surfaced through ViewInfo.tags.
 	Tags map[string]string
+	// ColumnComments maps output column names to per-column comments. The
+	// C++ extension aligns these by name against the columns DuckDB binds
+	// from the view definition and surfaces them via duckdb_columns().comment.
+	ColumnComments map[string]string
 }
 
 // ViewInfo describes a view in the catalog for wire serialization.
 type ViewInfo struct {
-	Name       string
-	SchemaName string
-	Comment    string
-	Tags       map[string]string
-	Definition string
+	Name           string
+	SchemaName     string
+	Comment        string
+	Tags           map[string]string
+	Definition     string
+	ColumnComments map[string]string
 }
 
 var viewInfoSchema = generated.ViewInfoSchema
@@ -79,12 +84,26 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 	defer defBuilder.Release()
 	defBuilder.Append(info.Definition)
 
+	// column_comments
+	colCommentsBuilder := array.NewMapBuilder(mem, arrow.BinaryTypes.String, arrow.BinaryTypes.String, false)
+	defer colCommentsBuilder.Release()
+	colCommentsBuilder.Append(true)
+	if len(info.ColumnComments) > 0 {
+		kb := colCommentsBuilder.KeyBuilder().(*array.StringBuilder)
+		vb := colCommentsBuilder.ItemBuilder().(*array.StringBuilder)
+		for k, v := range info.ColumnComments {
+			kb.Append(k)
+			vb.Append(v)
+		}
+	}
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
 		nameBuilder.NewArray(),
 		schemaNameBuilder.NewArray(),
 		defBuilder.NewArray(),
+		colCommentsBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

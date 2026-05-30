@@ -3,7 +3,6 @@
 
 package vgi
 
-
 // ---------------------------------------------------------------------------
 // FunctionStorage: pluggable shared storage for VGI distributed execution
 //
