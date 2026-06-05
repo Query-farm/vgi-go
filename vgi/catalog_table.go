@@ -75,6 +75,14 @@ type CatalogTable struct {
 	// duckdb_tables().tags. Useful for category/coverage/example_queries
 	// metadata.
 	Tags map[string]string
+	// RequiredFieldFilterPaths lists dotted-path column references that MUST
+	// appear in a WHERE expression for any scan of this table. Top-level names
+	// ("country") or struct subfields ("bbox.xmin", "nested.outer.inner").
+	// Empty (default) means no enforcement — the zero-cost fast path. The VGI
+	// DuckDB extension's optimizer pass enforces this at bind time and throws
+	// BinderException listing any unsatisfied paths; satisfaction is
+	// prefix-based (a filter on a parent path satisfies its child paths).
+	RequiredFieldFilterPaths []string
 	// InlineBind, when true and the table's columns are statically known,
 	// inlines the bind result onto TableInfo.bind_result so the C++ extension
 	// skips the per-scan bind RPC. Safe only for tables whose output schema is

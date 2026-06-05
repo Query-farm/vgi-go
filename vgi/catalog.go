@@ -1734,6 +1734,7 @@ func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]b
 		SupportsColumnStatistics: len(ct.Statistics) > 0,
 		CardinalityEstimate:      ct.CardinalityEstimate,
 		CardinalityMax:           ct.CardinalityMax,
+		RequiredFieldFilterPaths: ct.RequiredFieldFilterPaths,
 	}
 
 	// Inline the scan function for function-backed tables so the C++ extension

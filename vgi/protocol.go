@@ -33,6 +33,12 @@ type BindRequestWire struct {
 	AttachOpaqueData        *[]byte `vgirpc:"attach_opaque_data" arrow:"attach_opaque_data"`
 	TransactionOpaqueData   *[]byte `vgirpc:"transaction_opaque_data" arrow:"transaction_opaque_data"`
 	ResolvedSecretsProvided bool    `vgirpc:"resolved_secrets_provided" arrow:"resolved_secrets_provided"`
+	// AtUnit/AtValue carry the AT (TIMESTAMP|VERSION ...) time-travel clause for
+	// this scan, threaded onto the bind request embedded in each InitRequest so
+	// function-backed tables can read it at init (the on_bind RPC itself runs
+	// once at attach with no AT). Both nil when the scan has no AT clause.
+	AtUnit  *string `vgirpc:"at_unit" arrow:"at_unit"`
+	AtValue *string `vgirpc:"at_value" arrow:"at_value"`
 }
 
 // bindRequestWireSchema is the Arrow struct schema for a bind_call. Field
@@ -47,6 +53,8 @@ var bindRequestWireSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "attach_opaque_data", Type: arrow.BinaryTypes.Binary, Nullable: true},
 	{Name: "transaction_opaque_data", Type: arrow.BinaryTypes.Binary, Nullable: true},
 	{Name: "resolved_secrets_provided", Type: &arrow.BooleanType{}},
+	{Name: "at_unit", Type: arrow.BinaryTypes.String, Nullable: true},
+	{Name: "at_value", Type: arrow.BinaryTypes.String, Nullable: true},
 }, nil)
 
 // ArrowSchema makes BindRequestWire an ArrowSerializable. The framework then
@@ -503,6 +511,8 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		JoinKeys:        initParams.JoinKeys,
 		OrderByHint:     initParams.OrderByHint,
 		TableSampleHint: initParams.TableSampleHint,
+		AtUnit:          bindParams.AtUnit,
+		AtValue:         bindParams.AtValue,
 	}
 
 	// Build InitRecipe for HTTP state serialization
@@ -950,6 +960,8 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 	}
 
 	params.ResolvedSecretsProvided = req.ResolvedSecretsProvided
+	params.AtUnit = req.AtUnit
+	params.AtValue = req.AtValue
 
 	return params, nil
 }
@@ -1016,6 +1028,16 @@ func (w *Worker) deserializeBindRequest(data []byte) (*BindRequestWire, error) {
 		case "resolved_secrets_provided":
 			if c, ok := col.(*array.Boolean); ok {
 				req.ResolvedSecretsProvided = c.Value(0)
+			}
+		case "at_unit":
+			if c, ok := col.(*array.String); ok {
+				v := c.Value(0)
+				req.AtUnit = &v
+			}
+		case "at_value":
+			if c, ok := col.(*array.String); ok {
+				v := c.Value(0)
+				req.AtValue = &v
 			}
 		}
 	}

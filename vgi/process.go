@@ -33,6 +33,12 @@ type ProcessParams struct {
 	// JoinKeys maps keys_column name -> Arrow array carrying the join keys
 	// referenced by FilterJoinKeys entries in PushdownFilters.
 	JoinKeys map[string]arrow.Array
+	// AtUnit/AtValue carry the AT (TIMESTAMP|VERSION ...) time-travel clause for
+	// this scan, threaded onto the bind request embedded in init. Both nil when
+	// the scan has no AT clause. Function-backed time-travel tables resolve the
+	// version from these at NewState.
+	AtUnit  *string
+	AtValue *string
 	// CurrentPushdownFilters is the filter state for the *current* Produce
 	// tick. It starts at the init-time pushdown filters and is replaced
 	// whenever DuckDB's dynamic filter tightens (DynamicFilter pushdown).

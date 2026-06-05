@@ -202,6 +202,8 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		Secrets:        bindParams.Secrets,
 		ExecutionID:    recipe.ExecutionID,
 		InitOpaqueData: recipe.InitOpaqueData,
+		AtUnit:         bindParams.AtUnit,
+		AtValue:        bindParams.AtValue,
 	}
 
 	// Restore pushdown filters

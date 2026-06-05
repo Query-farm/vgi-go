@@ -29,6 +29,13 @@ type BindParams struct {
 	// ResolvedSecretsProvided is true on the second phase of a two-phase bind,
 	// indicating that scoped secrets have been resolved and are in Secrets.
 	ResolvedSecretsProvided bool
+	// AtUnit/AtValue carry the AT (TIMESTAMP|VERSION ...) time-travel clause for
+	// this scan, threaded onto the bind request embedded in init. Both nil when
+	// the scan has no AT clause. For function-backed tables this is the only
+	// place the per-scan AT is visible (the actual on_bind RPC runs once at
+	// attach with no AT), so read it at NewState via ProcessParams.AtUnit/AtValue.
+	AtUnit  *string
+	AtValue *string
 	// Auth is the authentication context for the current request.
 	// Always non-nil; unauthenticated requests receive vgirpc.Anonymous().
 	Auth *vgirpc.AuthContext

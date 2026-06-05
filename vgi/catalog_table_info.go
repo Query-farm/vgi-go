@@ -57,6 +57,15 @@ type TableInfo struct {
 	// response. When non-nil, the C++ extension threads it straight into
 	// bind_data and skips the per-scan bind RPC.
 	BindResult []byte
+
+	// RequiredFieldFilterPaths lists dotted-path column references that MUST
+	// appear in a WHERE expression for any scan of this table (top-level names
+	// like "country" or struct subfields like "bbox.xmin"). Empty (default)
+	// means no enforcement. The C++ extension's optimizer pass consults this
+	// list at bind time and throws BinderException listing any unsatisfied
+	// paths. Satisfaction is prefix-based — a filter on a parent path satisfies
+	// every required child path.
+	RequiredFieldFilterPaths []string
 }
 
 var tableInfoSchema = generated.TableInfoSchema
@@ -232,6 +241,17 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		cardMaxBuilder.AppendNull()
 	}
 
+	// required_field_filter_paths (non-null list of string)
+	rffpBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer rffpBuilder.Release()
+	rffpBuilder.Append(true)
+	if len(info.RequiredFieldFilterPaths) > 0 {
+		vb := rffpBuilder.ValueBuilder().(*array.StringBuilder)
+		for _, p := range info.RequiredFieldFilterPaths {
+			vb.Append(p)
+		}
+	}
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
@@ -256,6 +276,7 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		cardMaxBuilder.NewArray(),
 		columnStatsArr,
 		bindResultArr,
+		rffpBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

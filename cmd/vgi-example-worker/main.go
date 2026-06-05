@@ -468,6 +468,113 @@ func main() {
 		},
 		StatisticsCacheMaxAgeSeconds: &statsTTL3600,
 	})
+	// required_field_filter_paths fixtures — back the
+	// required_field_filter_paths_*.test sqllogictest matrix. The C++ optimizer
+	// extension enforces the declared paths at bind time.
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:                     "rff_simple",
+		Comment:                  "rff_simple — requires a filter referencing column 'a'.",
+		Columns:                  table.RffSimpleSchema,
+		RequiredFieldFilterPaths: []string{"a"},
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:                     "rff_struct",
+		Comment:                  "rff_struct — requires filters on both struct subfields s.a and s.b.",
+		Columns:                  table.RffStructSchema,
+		RequiredFieldFilterPaths: []string{"s.a", "s.b"},
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:                     "rff_nested",
+		Comment:                  "rff_nested — requires a filter on the 3-deep nested path wrapper.mid.leaf.",
+		Columns:                  table.RffNestedSchema,
+		RequiredFieldFilterPaths: []string{"wrapper.mid.leaf"},
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:                     "rff_multi",
+		Comment:                  "rff_multi — mixed top-level + struct subfield requirements.",
+		Columns:                  table.RffMultiSchema,
+		RequiredFieldFilterPaths: []string{"top", "s.a"},
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "rff_none",
+		Comment: "rff_none — control table with no required_field_filter_paths (opt-out fast path).",
+		Columns: table.RffNoneSchema,
+	})
+	// rff_rowid — row_id virtual column + required bbox.* filters. The rowid
+	// table_filter is keyed by a sentinel >> column count, which the optimizer
+	// must skip. See required_field_filter_paths_rowid.test.
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:                     "rff_rowid",
+		Comment:                  "rff_rowid — row_id virtual column + required bbox.* filters.",
+		Columns:                  table.RffRowidSchema,
+		RequiredFieldFilterPaths: []string{"bbox.xmin", "bbox.xmax", "bbox.ymin", "bbox.ymax"},
+	})
+	// rff_parquet / rff_hive / rff_hive_mixed — native read_parquet delegation
+	// with bbox.* required filters (mirrors Overture transportation.segment).
+	// See required_field_filter_paths_native.test.
+	rffBboxType := arrow.StructOf(
+		arrow.Field{Name: "xmin", Type: arrow.PrimitiveTypes.Float32},
+		arrow.Field{Name: "ymin", Type: arrow.PrimitiveTypes.Float32},
+		arrow.Field{Name: "xmax", Type: arrow.PrimitiveTypes.Float32},
+		arrow.Field{Name: "ymax", Type: arrow.PrimitiveTypes.Float32},
+	)
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "rff_parquet",
+		Comment: "rff_parquet — native read_parquet delegation with bbox.* required filters.",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "bbox", Type: rffBboxType},
+			{Name: "other", Type: arrow.PrimitiveTypes.Int64},
+		}, nil),
+		RequiredFieldFilterPaths: []string{"bbox.xmin", "bbox.xmax", "bbox.ymin", "bbox.ymax"},
+	})
+	rffHiveColumns := arrow.NewSchema([]arrow.Field{
+		{Name: "id", Type: arrow.BinaryTypes.String},
+		{Name: "bbox", Type: rffBboxType},
+		{Name: "name", Type: arrow.BinaryTypes.String},
+		{Name: "num", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "theme", Type: arrow.BinaryTypes.String},
+		{Name: "type", Type: arrow.BinaryTypes.String},
+	}, nil)
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:                     "rff_hive",
+		Comment:                  "rff_hive — native read_parquet over Hive glob with bbox.* required filters.",
+		Columns:                  rffHiveColumns,
+		RequiredFieldFilterPaths: []string{"bbox.xmin", "bbox.xmax", "bbox.ymin", "bbox.ymax"},
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:                     "rff_hive_mixed",
+		Comment:                  "rff_hive_mixed — native read_parquet, top-level 'id' + bbox.* required filters.",
+		Columns:                  rffHiveColumns,
+		RequiredFieldFilterPaths: []string{"id", "bbox.xmin", "bbox.xmax", "bbox.ymin", "bbox.ymax"},
+	})
+	// filter_echo_table — catalog table echoing pushed-down filters, backs
+	// filter_pushdown_through_view.test.
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:    "filter_echo_table",
+		Comment: "Catalog table echoing pushed-down filters (filter-pushdown-through-view tests).",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "n", Type: arrow.PrimitiveTypes.Int64},
+			{Name: "s", Type: arrow.BinaryTypes.String},
+			{Name: "pushed_filters", Type: arrow.BinaryTypes.String},
+		}, nil),
+	})
+	// Time travel + filter pushdown together (time_travel_pushdown.test).
+	// tt_pushdown_fn is function-backed (reads AT at init via the bind request
+	// threaded onto init); tt_pushdown_cols is columns-based (AT → version arg
+	// via the scan function handler).
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:               "tt_pushdown_fn",
+		Comment:            "Function-backed: prunes by filter AND time-travels (AT read at init).",
+		Function:           table.NewTimeTravelPushdownFunction(),
+		SupportsTimeTravel: true,
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:               "tt_pushdown_cols",
+		Comment:            "Columns-based: prunes by filter AND time-travels (AT → version arg).",
+		Columns:            table.TtPushdownOutputSchema,
+		SupportsTimeTravel: true,
+	})
+
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:               "versioned_constraints",
 		Columns:            table.VersionedConstraintsSchemas[3],
@@ -607,6 +714,44 @@ func main() {
 			}, nil
 		}
 
+		// Columns-based time-travel + pushdown: resolve AT → version and pass it
+		// as a scan-function argument (the native columns-based AT mechanism).
+		if schemaName == "data" && tableName == "tt_pushdown_cols" {
+			version, err := table.ResolveTtVersion(atUnit, atValue)
+			if err != nil {
+				return nil, err
+			}
+			return &vgi.ScanFunctionResult{
+				FunctionName: "tt_pushdown_cols_scan",
+				PositionalArguments: []vgi.ScanArg{
+					{Value: version, Type: arrow.PrimitiveTypes.Int64},
+				},
+			}, nil
+		}
+
+		// rff_parquet — single-branch native read_parquet delegation.
+		if schemaName == "data" && tableName == "rff_parquet" {
+			return &vgi.ScanFunctionResult{
+				FunctionName: "read_parquet",
+				PositionalArguments: []vgi.ScanArg{
+					{Value: "/tmp/rff_seg.parquet", Type: arrow.BinaryTypes.String},
+				},
+			}, nil
+		}
+
+		// rff_hive / rff_hive_mixed — native read_parquet over a Hive glob.
+		if schemaName == "data" && (tableName == "rff_hive" || tableName == "rff_hive_mixed") {
+			return &vgi.ScanFunctionResult{
+				FunctionName: "read_parquet",
+				PositionalArguments: []vgi.ScanArg{
+					{Value: "/tmp/rff_hive/*/*/*.parquet", Type: arrow.BinaryTypes.String},
+				},
+				NamedArguments: map[string]vgi.ScanArg{
+					"hive_partitioning": {Value: true, Type: arrow.FixedWidthTypes.Boolean},
+				},
+			}, nil
+		}
+
 		// Reject AT clause on tables that don't support time travel
 		if atUnit != nil && *atUnit != "" {
 			return nil, fmt.Errorf("Table '%s.%s' does not support time travel queries", schemaName, tableName)
@@ -623,6 +768,20 @@ func main() {
 				return &vgi.ScanFunctionResult{FunctionName: "products_scan"}, nil
 			case "projects":
 				return &vgi.ScanFunctionResult{FunctionName: "projects_scan"}, nil
+			case "rff_simple":
+				return &vgi.ScanFunctionResult{FunctionName: "rff_simple_scan"}, nil
+			case "rff_struct":
+				return &vgi.ScanFunctionResult{FunctionName: "rff_struct_scan"}, nil
+			case "rff_nested":
+				return &vgi.ScanFunctionResult{FunctionName: "rff_nested_scan"}, nil
+			case "rff_multi":
+				return &vgi.ScanFunctionResult{FunctionName: "rff_multi_scan"}, nil
+			case "rff_none":
+				return &vgi.ScanFunctionResult{FunctionName: "rff_none_scan"}, nil
+			case "rff_rowid":
+				return &vgi.ScanFunctionResult{FunctionName: "rff_rowid_scan"}, nil
+			case "filter_echo_table":
+				return &vgi.ScanFunctionResult{FunctionName: "filter_echo_table_scan"}, nil
 			}
 		}
 
