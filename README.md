@@ -29,6 +29,10 @@ replace github.com/apache/arrow-go/v18 => github.com/Query-farm/arrow-go/v18 v18
 
 stdio and HTTP need no fork.
 
+> Known limitation: dictionary/enum-typed columns are not yet supported over the
+> shm transport (an IPC dictionary-framing mismatch); they work over stdio and
+> HTTP. All other types — including nested structs and lists — work over shm.
+
 ## Quickstart
 
 A minimum-viable worker — a scalar that adds two integers:
