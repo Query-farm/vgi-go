@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 // Package versioned_tables implements the shared version-spec resolver and
 // scan functions used by the vgi-example-versioned-tables-worker binary.

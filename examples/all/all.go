@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 // Package all provides RegisterAll, which registers every example function
 // (scalars, tables, table-in-outs, table-bufferings, aggregates) onto a

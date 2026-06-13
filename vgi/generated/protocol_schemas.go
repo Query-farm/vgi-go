@@ -7,8 +7,7 @@
 //   uv run --project ~/Development/vgi-python vgi-gen-go-schemas \
 //     > ~/Development/vgi-go/vgi/generated/protocol_schemas.go
 
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package generated
 

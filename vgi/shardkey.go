@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
@@ -7,7 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
 
 // deriveShardKey returns the Cloudflare-DO routing key for an attach: the
@@ -48,4 +47,20 @@ func (w *Worker) shardKeyForAttachPtr(sealed *[]byte, cc *vgirpc.CallContext) (s
 		return "", nil
 	}
 	return w.shardKeyForAttach(*sealed, cc)
+}
+
+// attachScopeForPtr resolves the per-ATTACH plaintext scope (catalog bytes with
+// the framework UUID stripped) from a sealed wire attach value, using the live
+// call context so it is correct on both subprocess (pass-through) and HTTP
+// (AEAD) transports. Returns fallback when the value is absent or can't be
+// opened (e.g. cold-load best-effort scope on the rehydrate path).
+func (w *Worker) attachScopeForPtr(sealed *[]byte, cc *vgirpc.CallContext, fallback []byte) []byte {
+	if sealed == nil || len(*sealed) == 0 {
+		return fallback
+	}
+	plain, err := w.openAttach(*sealed, cc)
+	if err != nil || plain == nil {
+		return fallback
+	}
+	return plain
 }

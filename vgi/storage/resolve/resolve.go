@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 // Package resolve picks a FunctionStorage backend at startup based on the
 // VGI_WORKER_SHARED_STORAGE environment variable, mirroring vgi-python's

@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package main
 
@@ -11,8 +10,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Query-farm/vgi-rpc/vgirpc"
-	"github.com/Query-farm/vgi-rpc/vgirpc/jwtauth"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth"
 )
 
 // resolveAuthenticate builds an AuthenticateFunc from environment variables.

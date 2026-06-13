@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 // Package cfdo implements vgi.FunctionStorage backed by a Cloudflare Worker +
 // Durable Object. The DO runs SQLite internally, providing the same semantics

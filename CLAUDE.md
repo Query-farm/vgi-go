@@ -66,8 +66,7 @@ w := vgi.NewWorker(vgi.WithLogHandler(h))
 
 - All source files begin with the copyright header:
   ```
-  // © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-  // SPDX-License-Identifier: Apache-2.0
+  // Copyright 2025, 2026 Query Farm LLC - https://query.farm
   ```
 - Function implementations follow the interface pattern: `Name()`, `Metadata()`, `ArgumentSpecs()`, `OnBind()`, `Process()`
 - New functions must be registered in `cmd/vgi-example-worker/main.go`

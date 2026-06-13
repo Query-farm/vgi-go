@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
@@ -87,6 +86,38 @@ type StateLogStorage interface {
 	StateLogScan(executionID, key []byte, afterID int64, limit int) ([]StateLogEntry, error)
 	// StateLogClear removes all log rows for an execution_id.
 	StateLogClear(executionID []byte) error
+}
+
+// AttachStateKV is one (key, value) pair returned by an attach-state scan,
+// ordered by key.
+type AttachStateKV struct {
+	Key   []byte
+	Value []byte
+}
+
+// AttachStateStorage is an optional capability: a scoped, namespaced, ordered
+// key/value store that persists for the life of the shared backend rather than
+// a single execution — i.e. across queries (and, for the SQLite backend, across
+// worker processes). It is keyed by (scope, ns, key); Scan returns the entries
+// in a (scope, ns) ordered by key. Attach-scoped fixtures such as the
+// `accumulate` example use it to keep per-ATTACH row collections alive between
+// the fresh worker processes a subprocess-transport query spawns. Mirrors the
+// subset of vgi-python's attach-scoped BoundStorage those fixtures rely on.
+//
+// Implemented by the SQLite backend (over the same function_state table that
+// backs worker/transaction state); backends that don't implement it cause
+// AttachStore() to return an error at runtime.
+type AttachStateStorage interface {
+	// AttachStatePut stores or replaces value under (scope, ns, key).
+	AttachStatePut(scope, ns, key, value []byte) error
+	// AttachStateGet returns the value under (scope, ns, key), or (nil, nil) if absent.
+	AttachStateGet(scope, ns, key []byte) ([]byte, error)
+	// AttachStateScan returns every (key, value) in (scope, ns), ordered by key.
+	AttachStateScan(scope, ns []byte) ([]AttachStateKV, error)
+	// AttachStateDeleteKey removes one key. No-op if absent.
+	AttachStateDeleteKey(scope, ns, key []byte) error
+	// AttachStateDeleteNS removes every key in (scope, ns).
+	AttachStateDeleteNS(scope, ns []byte) error
 }
 
 // FunctionStorage is the cross-process shared-state interface backing

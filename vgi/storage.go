@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
@@ -101,6 +100,71 @@ func (s *ExecutionStorage) resolve() (FunctionStorage, []byte, error) {
 		}
 	}
 	return back, exec, nil
+}
+
+// ---------------------------------------------------------------------------
+// Attach state (bound to an ATTACH scope; persists across queries)
+// ---------------------------------------------------------------------------
+
+// errAttachStateUnsupported is returned when the configured backend doesn't
+// implement AttachStateStorage.
+var errAttachStateUnsupported = errors.New("storage: backend does not support attach state (required by attach-scoped functions)")
+
+// AttachStore is a namespaced, ordered key/value view bound to one ATTACH
+// scope. Unlike ExecutionStorage's execution-scoped state, it persists for the
+// life of the shared backend, so it survives the fresh worker process a
+// subprocess-transport query spawns. Used by attach-scoped fixtures such as the
+// accumulate example.
+type AttachStore struct {
+	back  AttachStateStorage
+	scope []byte
+}
+
+// newAttachStore binds an AttachStateStorage-capable backend to one scope.
+func newAttachStore(back FunctionStorage, scope []byte) (*AttachStore, error) {
+	if back == nil {
+		return nil, errors.New("storage: backend not set (Worker should call SetBackend)")
+	}
+	as, ok := back.(AttachStateStorage)
+	if !ok {
+		return nil, errAttachStateUnsupported
+	}
+	return &AttachStore{back: as, scope: scope}, nil
+}
+
+// Put stores or replaces value under (ns, key) in this attach scope.
+func (a *AttachStore) Put(ns, key, value []byte) error {
+	return a.back.AttachStatePut(a.scope, ns, key, value)
+}
+
+// Get returns the value under (ns, key), or (nil, nil) if absent.
+func (a *AttachStore) Get(ns, key []byte) ([]byte, error) {
+	return a.back.AttachStateGet(a.scope, ns, key)
+}
+
+// Scan returns every (key, value) under ns, ordered by key.
+func (a *AttachStore) Scan(ns []byte) ([]AttachStateKV, error) {
+	return a.back.AttachStateScan(a.scope, ns)
+}
+
+// DeleteKey removes one key under ns. No-op if absent.
+func (a *AttachStore) DeleteKey(ns, key []byte) error {
+	return a.back.AttachStateDeleteKey(a.scope, ns, key)
+}
+
+// DeleteNS removes every key under ns.
+func (a *AttachStore) DeleteNS(ns []byte) error {
+	return a.back.AttachStateDeleteNS(a.scope, ns)
+}
+
+// AttachStore returns an attach-scoped key/value store bound to scope, using
+// this execution's underlying backend. The scope is typically
+// ProcessParams.AttachScope. Errors if the backend lacks AttachStateStorage.
+func (s *ExecutionStorage) AttachStore(scope []byte) (*AttachStore, error) {
+	s.mu.Lock()
+	back := s.back
+	s.mu.Unlock()
+	return newAttachStore(back, scope)
 }
 
 // ---------------------------------------------------------------------------

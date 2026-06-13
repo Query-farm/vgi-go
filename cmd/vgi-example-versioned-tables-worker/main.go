@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 // Example VGI worker whose exposed tables vary per requested data version.
 // Mirrors vgi-python's vgi-example-versioned-tables-worker so the shared
@@ -25,7 +24,7 @@ import (
 
 	ex "github.com/Query-farm/vgi-go/examples/versioned_tables"
 	"github.com/Query-farm/vgi-go/vgi"
-	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 )
 

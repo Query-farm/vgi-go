@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
@@ -53,4 +52,12 @@ type TableBufferingFunctionWithCardinality interface {
 // RegisterTableBuffering registers a table-buffering function.
 func (w *Worker) RegisterTableBuffering(f TableBufferingFunction) {
 	w.tableBufferings[f.Name()] = append(w.tableBufferings[f.Name()], f)
+}
+
+// RegisterTableBufferingForCatalog registers a table-buffering function scoped
+// to a single catalog (visible only under that ATTACH). See
+// RegisterTableForCatalog for the rationale.
+func (w *Worker) RegisterTableBufferingForCatalog(catalogName string, f TableBufferingFunction) {
+	w.tableBufferings[f.Name()] = append(w.tableBufferings[f.Name()], f)
+	w.catalogFunctionScope[f.Name()] = catalogName
 }

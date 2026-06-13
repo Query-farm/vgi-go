@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
@@ -8,7 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -513,6 +512,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		TableSampleHint: initParams.TableSampleHint,
 		AtUnit:          bindParams.AtUnit,
 		AtValue:         bindParams.AtValue,
+		AttachScope:     bindParams.AttachOpaqueData,
 	}
 
 	// Build InitRecipe for HTTP state serialization

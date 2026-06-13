@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 // Package attach_options implements the reference attach-options example
 // worker: it declares one ATTACH option of every supported Arrow/DuckDB
@@ -18,7 +17,7 @@ import (
 	"time"
 
 	"github.com/Query-farm/vgi-go/vgi"
-	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/decimal128"

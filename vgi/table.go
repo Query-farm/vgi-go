@@ -1,12 +1,11 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
 import (
 	"context"
 
-	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
 
 // TableFunction is the interface for table VGI functions.

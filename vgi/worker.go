@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
@@ -18,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
@@ -310,7 +309,12 @@ type Worker struct {
 	// function is restricted to a single catalog (e.g. proj_repro_* only
 	// appears under the ``projection_repro`` catalog, not ``example``).
 	// Functions not present in the map are visible to every catalog.
-	catalogFunctionScope          map[string]string
+	catalogFunctionScope map[string]string
+	// catalogAliasInfos carries per-alias discovery metadata (data version,
+	// etc.) for aliases that should advertise themselves distinctly in
+	// catalog_catalogs and mint a random per-ATTACH scope at attach (so two
+	// ATTACHes of the same alias are isolated). Keyed by catalog name.
+	catalogAliasInfos             map[string]CatalogInfo
 	storages                      sync.Map // map[hex execution ID string]*ExecutionStorage
 	fsOnce                        sync.Once
 	fs                            FunctionStorage
@@ -366,6 +370,34 @@ func WithCatalogAliases(names ...string) WorkerOption {
 		for _, n := range names {
 			w.catalogAliases[n] = struct{}{}
 		}
+	}
+}
+
+// WithCatalogAliasInfo registers a catalog alias that advertises itself
+// distinctly in catalog discovery and is isolated per ATTACH. Unlike a plain
+// WithCatalogAliases entry (which shares the primary catalog's identity and a
+// stable name-based attach scope), an alias registered here:
+//
+//   - appears as its own row in vgi_catalogs() carrying info.DataVersionSpec; and
+//   - mints a random per-ATTACH scope at attach time (info.Name + NUL + random),
+//     so two ATTACHes of the same alias never share attach-scoped state.
+//
+// info.Name should equal name. Functions meant to surface only under this alias
+// must be registered with Register*ForCatalog(name, ...). Used by the accumulate
+// fixture, whose per-ATTACH row collections must be isolated.
+func WithCatalogAliasInfo(name string, info CatalogInfo) WorkerOption {
+	return func(w *Worker) {
+		if w.catalogAliases == nil {
+			w.catalogAliases = make(map[string]struct{})
+		}
+		if w.catalogAliasInfos == nil {
+			w.catalogAliasInfos = make(map[string]CatalogInfo)
+		}
+		if info.Name == "" {
+			info.Name = name
+		}
+		w.catalogAliases[name] = struct{}{}
+		w.catalogAliasInfos[name] = info
 	}
 }
 
@@ -637,6 +669,7 @@ func NewWorker(opts ...WorkerOption) *Worker {
 		extraCatalogs:        make(map[string]*WritableCatalog),
 		catalogAliases:       make(map[string]struct{}),
 		catalogFunctionScope: make(map[string]string),
+		catalogAliasInfos:    make(map[string]CatalogInfo),
 		catalogTables:        make(map[string][]CatalogTable),
 		catalogViews:         make(map[string][]CatalogView),
 		catalogMacros:        make(map[string][]CatalogMacro),

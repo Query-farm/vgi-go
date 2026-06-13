@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
@@ -9,7 +8,7 @@ import (
 	"encoding/gob"
 	"fmt"
 
-	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
@@ -111,6 +110,7 @@ func (w *Worker) handleTableBufferingProcess(ctx context.Context, cc *vgirpc.Cal
 		return TableBufferingProcessResponseWire{}, err
 	}
 	params.Auth = cc.Auth
+	params.AttachScope = w.attachScopeForPtr(req.AttachOpaqueData, cc, params.AttachScope)
 	params.clientLog = func(level vgirpc.LogLevel, msg string) { cc.ClientLog(level, msg) }
 	if req.BatchIndex != nil {
 		params.BatchIndex = req.BatchIndex
@@ -137,6 +137,7 @@ func (w *Worker) handleTableBufferingCombine(ctx context.Context, cc *vgirpc.Cal
 		return TableBufferingCombineResponseWire{}, err
 	}
 	params.Auth = cc.Auth
+	params.AttachScope = w.attachScopeForPtr(req.AttachOpaqueData, cc, params.AttachScope)
 	params.clientLog = func(level vgirpc.LogLevel, msg string) { cc.ClientLog(level, msg) }
 	finalizeIDs, err := fn.Combine(ctx, params, req.StateIDs)
 	if err != nil {

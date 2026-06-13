@@ -1,10 +1,9 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
 import (
-	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
@@ -53,6 +52,15 @@ func (p *BindParams) TransactionStorage() *TransactionStorage {
 		return nil
 	}
 	return &TransactionStorage{back: p.txBackend, txID: p.TransactionOpaqueData}
+}
+
+// AttachStore returns an attach-scoped key/value store bound to this bind's
+// AttachOpaqueData (the per-ATTACH plaintext). It persists across queries, so
+// OnBind can read/pin per-collection state that Process/Combine will later see
+// through ProcessParams.AttachScope. Errors if the backend lacks
+// AttachStateStorage or the bind has no attach context.
+func (p *BindParams) AttachStore() (*AttachStore, error) {
+	return newAttachStore(p.txBackend, p.AttachOpaqueData)
 }
 
 // TransactionStorage caches values per (transaction_opaque_data, key) via the

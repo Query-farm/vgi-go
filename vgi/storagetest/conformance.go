@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 // Package storagetest provides a behavioral conformance suite for any
 // implementation of vgi.FunctionStorage. Each backend (SQLite, Cloudflare

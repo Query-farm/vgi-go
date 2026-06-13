@@ -1,9 +1,8 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
-import "github.com/Query-farm/vgi-rpc/vgirpc"
+import "github.com/Query-farm/vgi-rpc-go/vgirpc"
 
 func init() {
 	vgirpc.RegisterStateType(&ScalarExchangeState{})

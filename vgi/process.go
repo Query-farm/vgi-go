@@ -1,10 +1,9 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
 import (
-	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
@@ -26,6 +25,11 @@ type ProcessParams struct {
 	Secrets map[string]map[string]interface{}
 	// ExecutionID is the execution identifier.
 	ExecutionID []byte
+	// AttachScope is the per-ATTACH plaintext (the catalog's attach_opaque_data
+	// with the framework UUID stripped). Stable across the queries of one ATTACH
+	// session; used to scope persistent state via Storage.AttachStore(scope).
+	// Nil when the call has no attach context.
+	AttachScope []byte
 	// InitOpaqueData is the opaque data from the init response.
 	InitOpaqueData []byte
 	// PushdownFilters is the pushdown filter batch (nil if none).

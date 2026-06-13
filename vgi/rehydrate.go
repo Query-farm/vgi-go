@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
@@ -158,6 +157,19 @@ func (w *Worker) rehydrateFinalize(s *FinalizeProducerState) error {
 	return nil
 }
 
+// coldAttachScope derives the per-ATTACH plaintext scope on the cold-load path,
+// where parseBindRequest ran with no call context and so left the attach value
+// raw (the framework uuid(16) || plaintext, pass-through on subprocess). Strip
+// the UUID prefix to match what OnBind saw. On HTTP, where the raw value is a
+// sealed envelope this can't unwrap, the buffering RPC handlers re-derive the
+// scope from the live request instead; this is the subprocess best-effort.
+func coldAttachScope(raw []byte) []byte {
+	if len(raw) >= attachUUIDLen {
+		return raw[attachUUIDLen:]
+	}
+	return raw
+}
+
 // rebuildProcessParams reconstructs ProcessParams from an InitRecipe.
 // It also returns the resolved function (via overload resolution) to avoid
 // a redundant second resolution by the caller.
@@ -204,6 +216,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		InitOpaqueData: recipe.InitOpaqueData,
 		AtUnit:         bindParams.AtUnit,
 		AtValue:        bindParams.AtValue,
+		AttachScope:    coldAttachScope(bindParams.AttachOpaqueData),
 	}
 
 	// Restore pushdown filters

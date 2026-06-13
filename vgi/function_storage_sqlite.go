@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
@@ -593,6 +592,43 @@ func (s *sqliteStorage) StateLogScan(executionID, key []byte, afterID int64, lim
 func (s *sqliteStorage) StateLogClear(executionID []byte) error {
 	_, err := s.db.Exec(`DELETE FROM function_state_log WHERE scope_id = ? AND ns = ?`, executionID, nsLog)
 	return err
+}
+
+// ---------------------------------------------------------------------------
+// Attach state  (scope=attach_opaque_data, caller-chosen ns; persistent)
+//
+// Reuses the function_state K/V table. The scope is the per-ATTACH plaintext
+// (random per attach), so it never collides with execution_id / transaction
+// scopes. Ordered scans fall out of the table's (scope_id, ns, key) primary
+// key. accumulate-style collections use this for cross-query persistence.
+// ---------------------------------------------------------------------------
+
+func (s *sqliteStorage) AttachStatePut(scope, ns, key, value []byte) error {
+	return s.statePut(scope, ns, key, value)
+}
+
+func (s *sqliteStorage) AttachStateGet(scope, ns, key []byte) ([]byte, error) {
+	return s.stateGetOne(scope, ns, key)
+}
+
+func (s *sqliteStorage) AttachStateScan(scope, ns []byte) ([]AttachStateKV, error) {
+	rows, err := s.stateScan(scope, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AttachStateKV, len(rows))
+	for i, kv := range rows {
+		out[i] = AttachStateKV{Key: kv[0], Value: kv[1]}
+	}
+	return out, nil
+}
+
+func (s *sqliteStorage) AttachStateDeleteKey(scope, ns, key []byte) error {
+	return s.stateDeleteKey(scope, ns, key)
+}
+
+func (s *sqliteStorage) AttachStateDeleteNS(scope, ns []byte) error {
+	return s.stateDeleteNS(scope, ns)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 // Example VGI worker that exercises ATTACH-time data_version_spec and
 // implementation_version validation. Mirrors the reference
@@ -16,7 +15,7 @@ import (
 	"log"
 
 	"github.com/Query-farm/vgi-go/vgi"
-	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
 
 const (

@@ -2,15 +2,16 @@ module github.com/Query-farm/vgi-go
 
 go 1.25.0
 
-replace github.com/apache/arrow-go/v18 => github.com/rustyconover/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4
-
-replace github.com/Query-farm/vgi-rpc => ../vgi-rpc-go
-
-replace github.com/Query-farm/vgi-rpc/vgirpc/jwtauth => ../vgi-rpc-go/vgirpc/jwtauth
+// The Arrow fork adds RecordBatch custom-metadata support required by the SHM
+// zero-copy transport (the shm pointer-batch metadata). Required only for the
+// shared-memory side channel; stdio and HTTP transports work on upstream Arrow.
+// NOTE: replace directives do not propagate to importers — consumers who enable
+// SHM must add this same replace to their own go.mod.
+replace github.com/apache/arrow-go/v18 => github.com/Query-farm/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4
 
 require (
-	github.com/Query-farm/vgi-rpc v0.0.0
-	github.com/Query-farm/vgi-rpc/vgirpc/jwtauth v0.0.0-00010101000000-000000000000
+	github.com/Query-farm/vgi-rpc-go v0.9.0
+	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.9.0
 	github.com/apache/arrow-go/v18 v18.5.2
 	github.com/duckdb/duckdb-go/v2 v2.10502.0
 	github.com/google/uuid v1.6.0

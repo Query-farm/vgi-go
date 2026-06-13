@@ -13,7 +13,21 @@ in an external worker process over Arrow IPC.
 go get github.com/Query-farm/vgi-go/vgi
 ```
 
-Requires Go 1.25+.
+Requires Go 1.25+. The default stdio and HTTP transports run on upstream
+`github.com/apache/arrow-go/v18`.
+
+### Shared-memory transport (optional)
+
+The zero-copy shared-memory side channel (`VGI_RPC_SHM_SIZE_BYTES`) requires the
+Query.Farm Arrow fork, which adds RecordBatch custom-metadata support used by the
+shm pointer-batch protocol. Because Go `replace` directives do not propagate to
+importers, a project that enables SHM must add the replace to its **own** `go.mod`:
+
+```
+replace github.com/apache/arrow-go/v18 => github.com/Query-farm/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4
+```
+
+stdio and HTTP need no fork.
 
 ## Quickstart
 
@@ -124,8 +138,8 @@ Panics inside user functions during `bind`, `init`, `cardinality`, and
 The `cmd/vgi-example-worker` binary registers every example function via
 `examples/all.RegisterAll(w)`. Browse:
 
-- `examples/scalar/` — 30+ scalar examples (typed + classic)
-- `examples/table/` — 50+ table generators (partitioned, paged, etc.)
+- `examples/scalar/` — 20+ scalar examples (typed + classic)
+- `examples/table/` — 40+ table generators (partitioned, paged, etc.)
 - `examples/table_in_out/` — transform / buffering / aggregation patterns
 - `examples/aggregate/` — cumulative aggregates
 - `examples/schema_reconcile/`, `examples/versioned_tables/` — catalog + write paths
@@ -165,4 +179,14 @@ cmd/vgi-example-attach-options-worker/
 
 ## License
 
-Apache-2.0. © 2025-2026 Query.Farm LLC.
+Copyright 2025, 2026 Query Farm LLC.
+
+Licensed under the **Query Farm Source-Available License, Version 1.0** — see
+[`LICENSE`](./LICENSE) for the full terms. In brief, you may use, modify, and
+redistribute the software freely for non-production use, and for production use
+except where it would constitute a Competing Offering or a Commercial
+Marketplace as defined in the license. Each version converts to the Apache
+License, Version 2.0 on the tenth anniversary of its public release.
+
+For uses not permitted under this license, contact
+[hello@query.farm](mailto:hello@query.farm) for a commercial license.

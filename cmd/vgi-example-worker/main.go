@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package main
 
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Query-farm/vgi-go/examples/accumulate"
 	"github.com/Query-farm/vgi-go/examples/all"
 	"github.com/Query-farm/vgi-go/examples/schema_reconcile"
 	"github.com/Query-farm/vgi-go/examples/table"
@@ -74,6 +74,10 @@ func main() {
 		// Cross-language reproducer catalogs share this binary; ATTACH
 		// against any of these names succeeds (functions are catalog-agnostic).
 		vgi.WithCatalogAliases("projection_repro", "schema_reconcile"),
+		// The accumulate fixture catalog is discoverable (data version 2.0.0)
+		// and isolated per ATTACH (random scope); its functions are registered
+		// catalog-scoped below so they don't leak into the example catalog.
+		vgi.WithCatalogAliasInfo(accumulate.CatalogName, accumulate.CatalogAliasInfo()),
 		// schema_reconcile fixture: tables/scan-fn/insert-fn/update-fn/delete-fn
 		// resolution lives outside the static catalog because the tables are
 		// served by handlers (not declared via RegisterCatalogTable). The four
@@ -140,6 +144,10 @@ func main() {
 	// types, and settings remain wired below — they're fixture-specific.
 	all.RegisterAll(w)
 
+	// Register the accumulate fixture (catalog-scoped, so it is invisible under
+	// the example catalog and preserves its function inventory).
+	accumulate.Register(w)
+
 	// Writable catalog (in-memory, per-process state). Gated off by default so
 	// the example worker's function inventory matches the reference vgi-python
 	// worker; set VGI_WORKER_ENABLE_WRITABLE=1 to exercise the writable tests.
@@ -190,7 +198,7 @@ func main() {
 		w.RegisterCatalogTable("data", vgi.CatalogTable{
 			Name:    "multi_branch_empty",
 			Columns: nCol,
-			Comment: "Multi-branch: worker returns empty branches list — used by multi_branch_empty_branches.test",
+			Comment: "Multi-branch: empty branches list — used by multi_branch_empty_branches.test",
 		})
 		w.RegisterCatalogTable("data", vgi.CatalogTable{
 			Name:    "multi_branch_two_writable",

@@ -1,18 +1,30 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 package vgi
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
-	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/google/uuid"
 )
+
+// catalogNameOf returns the catalog name carried in an unwrapped attach
+// plaintext: the bytes before the first NUL separator, or the whole value when
+// there is none. Alias-info catalogs (WithCatalogAliasInfo) mint
+// "<name>\x00<random>" so each ATTACH is unique; plain catalogs/aliases use the
+// bare name. Catalog-scoped function visibility compares against this name.
+func catalogNameOf(attachOpaqueData []byte) string {
+	if i := bytes.IndexByte(attachOpaqueData, 0); i >= 0 {
+		return string(attachOpaqueData[:i])
+	}
+	return string(attachOpaqueData)
+}
 
 // SerializedItems is a list of Arrow-IPC-encoded items sent over the wire.
 type SerializedItems = [][]byte
@@ -757,7 +769,20 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			if err != nil {
 				return CatalogsResponseWire{}, err
 			}
-			return CatalogsResponseWire{Items: SerializedItems{data}}, nil
+			items := SerializedItems{data}
+			// Advertise each alias registered with its own discovery metadata
+			// (WithCatalogAliasInfo) as a distinct catalog row, carrying its own
+			// data version. Plain WithCatalogAliases entries are intentionally
+			// not advertised — they share the primary catalog's identity.
+			for _, aliasInfo := range w.catalogAliasInfos {
+				ai := aliasInfo
+				aData, aErr := SerializeCatalogInfo(&ai)
+				if aErr != nil {
+					return CatalogsResponseWire{}, aErr
+				}
+				items = append(items, aData)
+			}
+			return CatalogsResponseWire{Items: items}, nil
 		})
 
 	// catalog_attach
@@ -886,6 +911,30 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 					}
 				}
 			}
+			// Aliases registered with discovery metadata (WithCatalogAliasInfo)
+			// get a random per-ATTACH scope so two ATTACHes of the same alias are
+			// isolated. The plaintext is "<name>\x00<random>" — the name prefix
+			// keeps catalog-scoped function visibility working (catalogNameOf
+			// splits on the NUL) while the random suffix makes each attach unique.
+			// The client persists and resends it, so it survives a worker restart.
+			if aliasInfo, ok := w.catalogAliasInfos[req.Name]; ok {
+				scope := make([]byte, 0, len(req.Name)+1+attachUUIDLen)
+				scope = append(scope, req.Name...)
+				scope = append(scope, 0)
+				u := uuid.New()
+				scope = append(scope, u[:]...)
+				attachOpaqueData = scope
+				attachOpaqueDataRequired = true
+				if w.catalog != nil {
+					w.catalog.attachOpaqueData = attachOpaqueData
+				}
+				if aliasInfo.DataVersionSpec != nil {
+					resolvedData = aliasInfo.DataVersionSpec
+				}
+				if aliasInfo.ImplementationVersion != nil {
+					resolvedImpl = aliasInfo.ImplementationVersion
+				}
+			}
 			result := CatalogAttachResultWire{
 				AttachOpaqueData:              attachOpaqueData,
 				SupportsTransactions:          w.supportsTransactions,
@@ -990,8 +1039,16 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			if w.catalog == nil {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
+			// Alias-info catalogs (e.g. accumulate) are distinct logical catalogs
+			// that share the binary but not the primary catalog's tables: expose
+			// only the "main" schema where their catalog-scoped functions live,
+			// not the primary's "data"/dynamic schemas.
+			_, aliasOnly := w.catalogAliasInfos[catalogNameOf(req.AttachOpaqueData)]
 			var items [][]byte
-			for _, si := range w.catalog.schemas {
+			for name, si := range w.catalog.schemas {
+				if aliasOnly && name != "main" {
+					continue
+				}
 				data, err := SerializeSchemaInfo(si.info)
 				if err != nil {
 					return ItemsResponseWire{}, err
@@ -1012,6 +1069,9 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				return ItemsResponseWire{Items: items}, nil
 			}
 			if w.catalog == nil {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
+			}
+			if _, aliasOnly := w.catalogAliasInfos[catalogNameOf(req.AttachOpaqueData)]; aliasOnly && req.Name != "main" {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
 			si, ok := w.catalog.schemas[req.Name]
@@ -1126,10 +1186,13 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 
 			// attach_opaque_data has already been unwrapped to the catalog's own
 			// plaintext by unwrapReqOpaque (the unaryCatalog wrapper strips the
-			// framework UUID and opens any seal), so it is []byte(catalog_name)
-			// here. Per-catalog function visibility (e.g. proj_repro_* only
-			// surfacing under the projection_repro attach) compares against it.
-			catalogName := string(req.AttachOpaqueData)
+			// framework UUID and opens any seal). For a plain catalog/alias it is
+			// []byte(catalog_name); for an alias-info catalog it is
+			// "<catalog_name>\x00<random>", so take the name up to the first NUL.
+			// Per-catalog function visibility (e.g. proj_repro_* only surfacing
+			// under projection_repro, accumulate_* only under accumulate) compares
+			// against it.
+			catalogName := catalogNameOf(req.AttachOpaqueData)
 
 			var items [][]byte
 			for i := range si.functions {

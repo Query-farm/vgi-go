@@ -1,5 +1,4 @@
-// © Copyright 2025-2026, Query.Farm LLC - https://query.farm
-// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
 // Example VGI worker exercising ATTACH-time options end-to-end. Mirrors
 // vgi-python's vgi-example-attach-options-worker so the shared integration
@@ -14,7 +13,7 @@ import (
 
 	"github.com/Query-farm/vgi-go/examples/attach_options"
 	"github.com/Query-farm/vgi-go/vgi"
-	"github.com/Query-farm/vgi-rpc/vgirpc"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
 
 func main() {
