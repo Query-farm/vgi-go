@@ -10,8 +10,8 @@ go 1.25.0
 replace github.com/apache/arrow-go/v18 => github.com/Query-farm/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4
 
 require (
-	github.com/Query-farm/vgi-rpc-go v0.9.2
-	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.9.0
+	github.com/Query-farm/vgi-rpc-go v0.9.3
+	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.9.3
 	github.com/apache/arrow-go/v18 v18.5.2
 	github.com/duckdb/duckdb-go/v2 v2.10502.0
 	github.com/google/uuid v1.6.0
