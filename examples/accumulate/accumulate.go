@@ -457,8 +457,7 @@ func (*AccumulateReadFunction) Process(ctx context.Context, params *vgi.ProcessP
 		return err
 	}
 	if len(rows) == 0 {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	b, err := vgi.DeserializeRecordBatch(rows[0].Value)
 	if err != nil {
@@ -524,8 +523,7 @@ func (*AccumulateClearFunction) NewState(params *vgi.ProcessParams) (*accClearSt
 
 func (*AccumulateClearFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *accClearState, out *vgirpc.OutputCollector) error {
 	if state.Done {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	name, err := params.Args.GetScalarString(0)
 	if err != nil {
