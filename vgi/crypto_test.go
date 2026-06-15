@@ -108,7 +108,8 @@ func TestWorkerHelpersPassThroughWithoutSigningKey(t *testing.T) {
 }
 
 func TestWorkerHelpersSealWithSigningKey(t *testing.T) {
-	w := &Worker{httpSigningKey: []byte("a-32-byte-or-any-length-signkey!")}
+	// sealOpaqueData mirrors WithHttpSigningKey: an explicit key opts into sealing.
+	w := &Worker{httpSigningKey: []byte("a-32-byte-or-any-length-signkey!"), sealOpaqueData: true}
 	alice := &vgirpc.CallContext{Auth: authCtx("test", "alice")}
 	bob := &vgirpc.CallContext{Auth: authCtx("test", "bob")}
 

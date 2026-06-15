@@ -344,7 +344,15 @@ type Worker struct {
 	logFormat                     LogFormat    // empty means text
 	logLoggers                    []string     // empty means all known loggers
 	logConfigured                 bool         // true once any logging WorkerOption fires
-	httpSigningKey                []byte       // optional explicit HMAC key for HTTP state tokens
+	httpSigningKey                []byte       // HMAC key for HTTP state tokens (explicit via WithHttpSigningKey, else ephemeral per-process)
+	// sealOpaqueData gates AEAD sealing of catalog opaque-data envelopes. It is
+	// enabled only when an explicit signing key is configured (WithHttpSigningKey),
+	// matching vgi-python: an anonymous worker with an ephemeral, per-process key
+	// (generated only so the HTTP state-token machinery has one) does not seal —
+	// sealing binds opaque-data to a principal, and there is none without auth, so
+	// it would only add a cross-implementation incompatibility (the published
+	// extension round-trips plaintext opaque-data, not the longer sealed envelope).
+	sealOpaqueData bool
 }
 
 // WorkerOption configures a Worker.
@@ -628,6 +636,10 @@ func WithLoggers(names ...string) WorkerOption {
 func WithHttpSigningKey(key []byte) WorkerOption {
 	return func(w *Worker) {
 		w.httpSigningKey = key
+		// An explicit key opts the worker into sealing catalog opaque-data
+		// (identity-binding); the ephemeral key generated when none is
+		// configured is for state tokens only and does not enable sealing.
+		w.sealOpaqueData = len(key) > 0
 	}
 }
 
@@ -929,7 +941,15 @@ func (w *Worker) RunHttp(addr string) error {
 		return fmt.Errorf("http signing key: %w", err)
 	}
 	hs.SetRehydrateFunc(w.rehydrateState)
-	hs.SetProducerBatchLimit(100)
+	// One Arrow batch per producer-stream HTTP response (matching vgi-python's
+	// default — see vgi_rpc serve's max_stream_response_bytes, which defaults to
+	// one-batch-per-response). A higher count lets a single connection greedily
+	// drain a shared multi-worker work queue (Storage.QueuePop) within one
+	// response before sibling scan connections ever pull, collapsing parallel
+	// scans onto one connection — which breaks batch_index / partitioned_sequence
+	// / order_preservation multi-worker assertions. Multi-batch packing is a
+	// byte-budgeted opt-in upstream, not a fixed count.
+	hs.SetProducerBatchLimit(1)
 	// Honor framework-level HTTP env config. SetPrefix rebuilds the route
 	// table, so apply it before the OAuth setup (which derives redirect/proxy
 	// URLs and routes from the prefix).

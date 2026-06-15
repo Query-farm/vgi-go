@@ -721,13 +721,25 @@ func parseFilter(spec filterSpec, getValue func(int) (scalar.Scalar, error), get
 		}, nil
 
 	case FilterAnd:
-		children := make([]Filter, len(spec.Children))
+		// A child may degrade to nil (e.g. a join_keys conjunct with no keys
+		// batch — common on an HTTP continuation tick, where the dynamic join
+		// keys arrive per-request rather than in the recipe). Dropping such a
+		// conjunct is sound: the worker returns a superset and DuckDB re-applies
+		// the dropped predicate client-side. Keeping a nil child here would
+		// nil-panic in AndFilter.Evaluate.
+		children := make([]Filter, 0, len(spec.Children))
 		for i, childSpec := range spec.Children {
 			child, err := parseFilter(childSpec, getValue, getJoinKey)
 			if err != nil {
 				return nil, fmt.Errorf("parsing AND child %d: %w", i, err)
 			}
-			children[i] = child
+			if child == nil {
+				continue
+			}
+			children = append(children, child)
+		}
+		if len(children) == 0 {
+			return nil, nil // every conjunct degraded — apply the whole AND client-side
 		}
 		return &AndFilter{
 			columnName:  spec.ColumnName,
@@ -736,11 +748,17 @@ func parseFilter(spec filterSpec, getValue func(int) (scalar.Scalar, error), get
 		}, nil
 
 	case FilterOr:
+		// Unlike AND, dropping a disjunct would make the OR under-match. If any
+		// branch can't be applied worker-side, degrade the whole OR to nil so
+		// the caller falls back to client-side filtering.
 		children := make([]Filter, len(spec.Children))
 		for i, childSpec := range spec.Children {
 			child, err := parseFilter(childSpec, getValue, getJoinKey)
 			if err != nil {
 				return nil, fmt.Errorf("parsing OR child %d: %w", i, err)
+			}
+			if child == nil {
+				return nil, nil
 			}
 			children[i] = child
 		}
@@ -757,6 +775,9 @@ func parseFilter(spec filterSpec, getValue func(int) (scalar.Scalar, error), get
 		childFilter, err := parseFilter(*spec.ChildFilter, getValue, getJoinKey)
 		if err != nil {
 			return nil, fmt.Errorf("parsing struct child filter: %w", err)
+		}
+		if childFilter == nil {
+			return nil, nil // inner filter degraded — apply client-side
 		}
 		return &StructFilter{
 			columnName:  spec.ColumnName,

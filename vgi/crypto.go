@@ -148,7 +148,7 @@ func openBytes(token, key, aad []byte, version byte) ([]byte, error) {
 // sealAttach seals a plaintext attach value into an envelope bound to the
 // caller's identity.
 func (w *Worker) sealAttach(plaintext []byte, cc *vgirpc.CallContext) ([]byte, error) {
-	if len(w.httpSigningKey) == 0 {
+	if len(w.httpSigningKey) == 0 || !w.sealOpaqueData {
 		return plaintext, nil
 	}
 	return sealBytes(plaintext, w.httpSigningKey, attachAAD(cc.Auth), attachEnvelopeVersion)
@@ -159,7 +159,7 @@ func (w *Worker) sealAttach(plaintext []byte, cc *vgirpc.CallContext) ([]byte, e
 // on the leading UUID, so the function-execution paths use this to derive the
 // shard key. Pass-through when there is no signing key.
 func (w *Worker) openAttachFull(envelope []byte, cc *vgirpc.CallContext) ([]byte, error) {
-	if len(w.httpSigningKey) == 0 {
+	if len(w.httpSigningKey) == 0 || !w.sealOpaqueData {
 		return envelope, nil
 	}
 	return openBytes(envelope, w.httpSigningKey, attachAAD(cc.Auth), attachEnvelopeVersion)
@@ -183,7 +183,7 @@ func (w *Worker) openAttach(envelope []byte, cc *vgirpc.CallContext) ([]byte, er
 // sealTransaction seals a plaintext transaction value into an envelope bound
 // to the caller's identity and the parent attach envelope it was minted under.
 func (w *Worker) sealTransaction(plaintext, attachEnvelope []byte, cc *vgirpc.CallContext) ([]byte, error) {
-	if len(w.httpSigningKey) == 0 {
+	if len(w.httpSigningKey) == 0 || !w.sealOpaqueData {
 		return plaintext, nil
 	}
 	return sealBytes(plaintext, w.httpSigningKey, transactionAAD(cc.Auth, attachEnvelope), transactionEnvelopeVersion)
@@ -193,7 +193,7 @@ func (w *Worker) sealTransaction(plaintext, attachEnvelope []byte, cc *vgirpc.Ca
 // the (sealed) attach_opaque_data the same call carried — it must match the
 // attach the transaction was minted under, or the open fails.
 func (w *Worker) openTransaction(envelope, attachEnvelope []byte, cc *vgirpc.CallContext) ([]byte, error) {
-	if len(w.httpSigningKey) == 0 {
+	if len(w.httpSigningKey) == 0 || !w.sealOpaqueData {
 		return envelope, nil
 	}
 	return openBytes(envelope, w.httpSigningKey, transactionAAD(cc.Auth, attachEnvelope), transactionEnvelopeVersion)
