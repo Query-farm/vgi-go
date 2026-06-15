@@ -13,13 +13,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout vgi-rpc-go
-        uses: actions/checkout@v4
-        with:
-          repository: Query-farm/vgi-rpc-go
-          path: ../vgi-rpc-go
-          token: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
@@ -52,21 +45,24 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # vgi-go and the VGI extension are checked out as siblings UNDER the
+    # workspace (actions/checkout cannot write to ../ outside it). The Makefile
+    # expects the extension at ../vgi, which holds: from $WORKSPACE/vgi-go,
+    # ../vgi resolves to $WORKSPACE/vgi.
+    defaults:
+      run:
+        working-directory: vgi-go
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Checkout vgi-rpc-go
+      - name: Checkout vgi-go
         uses: actions/checkout@v4
         with:
-          repository: Query-farm/vgi-rpc-go
-          path: ../vgi-rpc-go
-          token: ${{ secrets.GITHUB_TOKEN }}
+          path: vgi-go
 
       - name: Checkout VGI extension
         uses: actions/checkout@v4
         with:
           repository: Query-farm/vgi
-          path: ../vgi
+          path: vgi
           submodules: recursive
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -81,22 +77,22 @@ jobs:
 
       - name: Get VGI extension cache key
         id: vgi-ext
+        working-directory: ${{ github.workspace }}/vgi
         run: |
-          VGI_DIR="${{ github.workspace }}/../vgi"
-          echo "sha=$(git -C "$VGI_DIR" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "duckdb-sha=$(git -C "$VGI_DIR/duckdb" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "duckdb-sha=$(git -C duckdb rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Cache DuckDB extension build
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/../vgi/build
+          path: ${{ github.workspace }}/vgi/build
           key: duckdb-ext-${{ runner.os }}-${{ steps.vgi-ext.outputs.sha }}-${{ steps.vgi-ext.outputs.duckdb-sha }}
           restore-keys: |
             duckdb-ext-${{ runner.os }}-${{ steps.vgi-ext.outputs.sha }}-
             duckdb-ext-${{ runner.os }}-
 
       - name: Build VGI extension
-        working-directory: ${{ github.workspace }}/../vgi
+        working-directory: ${{ github.workspace }}/vgi
         run: GEN=ninja make release
 
       - name: Build Go worker
