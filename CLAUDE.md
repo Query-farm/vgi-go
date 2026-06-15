@@ -41,8 +41,10 @@ The worker supports two transport modes:
 
 ## Dependencies
 
-- `github.com/Query-farm/vgi-rpc` — VGI RPC framework (local replace: `../vgi-rpc-go`)
-- `github.com/apache/arrow-go/v18` — Arrow IPC (uses fork: `github.com/rustyconover/arrow-go/v18`)
+- `github.com/Query-farm/vgi-rpc-go` — VGI RPC framework (published module, Apache-2.0)
+- `github.com/apache/arrow-go/v18` — Arrow IPC. stdio and HTTP run on upstream;
+  the shared-memory (shm) transport requires the `github.com/Query-farm/arrow-go/v18`
+  fork via a `replace` directive (see README's shared-memory section).
 
 ## Logging
 
