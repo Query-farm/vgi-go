@@ -72,13 +72,22 @@ func main() {
 }
 ```
 
-Build it, then attach from DuckDB:
+Build it (`go build -o my-worker .`), then install the VGI extension, attach the
+worker, and call the function from DuckDB:
 
 ```sql
+INSTALL vgi FROM community;
 LOAD vgi;
-ATTACH 'demo:./my-worker' AS demo;
+
+-- Attach the worker as a catalog. The first argument is the worker's catalog
+-- name (WithCatalogName above); LOCATION is the command DuckDB runs to launch it.
+ATTACH 'demo' AS demo (TYPE vgi, LOCATION './my-worker');
+
 SELECT demo.add_ints(2, 3); -- => 5
 ```
+
+`LOCATION` also accepts `http://…`/`https://…` for an HTTP worker, or a
+`launch:` command for the AF_UNIX transport.
 
 ## Function shapes
 
