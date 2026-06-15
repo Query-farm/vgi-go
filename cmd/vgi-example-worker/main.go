@@ -46,6 +46,10 @@ func main() {
 		log.Fatalf("logging flags: %v", err)
 	}
 
+	// Snapshot coverage periodically during integration coverage runs (no-op
+	// otherwise); the harness kills this long-lived worker without a clean exit.
+	startCoverageFlusher()
+
 	if *unixPath != "" && *httpMode {
 		log.Fatal("--unix and --http are mutually exclusive")
 	}

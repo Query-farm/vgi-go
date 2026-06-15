@@ -84,19 +84,59 @@ mkdir -p "$STAGE/test/sql/integration"
 # parallel-init tests observe the worker's real max_workers (mirrors the Makefile).
 export VGI_SYNC_INIT_GLOBAL=1
 
-# Background workers (http servers) are tracked and killed on exit.
-BG_PIDS=()
-cleanup() { for p in "${BG_PIDS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done; }
+# Coverage: when COVERAGE=1 the workers were built with `make build COVER=1`
+# (go build -cover -covermode=atomic). Exporting GOCOVERDIR makes every worker
+# process this run spawns — the main worker, the versioned HTTP workers, and the
+# per-scan multi-worker connections — write its coverage pods there. Subprocess
+# workers flush on their clean exit (stdin EOF); the long-lived HTTP worker is
+# torn down abruptly by the harness, so it snapshots counters on an interval
+# instead (see cmd/vgi-example-worker/coverage.go — hence -covermode=atomic).
+# Pods are uniquely named, so many workers share one dir; `go tool covdata`
+# merges them. A report is emitted after the suite (see end of file).
+if [ "${COVERAGE:-0}" = "1" ]; then
+  GOCOVERDIR="${GOCOVERDIR:-$(mktemp -d)}"
+  mkdir -p "$GOCOVERDIR"
+  export GOCOVERDIR
+  echo "Coverage on — pods -> $GOCOVERDIR"
+fi
+
+# Background workers (http servers) are tracked in a file and SIGTERMed on exit.
+# A file (not a shell array) keeps the teardown robust regardless of how
+# boot_http_worker is invoked, and SIGTERM (not SIGKILL) lets each worker shut
+# down gracefully — which writes a final coverage pod on a COVER=1 build.
+BG_PIDS_FILE="$(mktemp)"
+cleanup() {
+  [ -f "$BG_PIDS_FILE" ] || return 0
+  while read -r p; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done < "$BG_PIDS_FILE"
+}
 trap cleanup EXIT
 
-# boot_http_worker <binary> — start it as an HTTP server on an ephemeral port
-# and echo the port it reports (PORT:<n>, the worker's readiness contract).
+# boot_http_worker <binary> — start it as an HTTP server on an ephemeral port and
+# set BOOTED_PORT to the port it reports (PORT:<n>, the worker's readiness
+# contract). Sets a global rather than echoing because the caller must NOT wrap
+# it in $(...): a command-substitution subshell reparents the backgrounded worker
+# out of the main shell, so it can't be `wait`ed on and dies abnormally on script
+# teardown — which skips the coverage-pod flush of a `-cover` build.
+BOOTED_PORT=""
 boot_http_worker() {
   local exe="$1" log pid port=""
+  BOOTED_PORT=""
   log="$(mktemp)"
-  "$exe" --http >"$log" 2>&1 &
+  # Start the worker in its OWN session/process group. The standalone runner's
+  # worker-pool teardown signals its whole process group on exit; an HTTP worker
+  # sharing that group would be killed there (uncleanly, before its -cover pods
+  # flush). A new session lets it survive until we SIGTERM it ourselves below,
+  # where graceful shutdown flushes coverage. setsid execs in place (so $! is the
+  # worker); perl is the macOS fallback (no setsid); plain exec is last resort.
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$exe" --http >"$log" 2>&1 &
+  elif command -v perl >/dev/null 2>&1; then
+    perl -e 'use POSIX qw(setsid); setsid(); exec @ARGV' "$exe" --http >"$log" 2>&1 &
+  else
+    "$exe" --http >"$log" 2>&1 &
+  fi
   pid=$!
-  BG_PIDS+=("$pid")
+  echo "$pid" >> "$BG_PIDS_FILE"
   for _ in $(seq 1 60); do
     kill -0 "$pid" 2>/dev/null || { echo "::error::http worker '$exe' exited" >&2; cat "$log" >&2; return 1; }
     port="$(sed -n 's/.*PORT:\([0-9]*\).*/\1/p' "$log" | head -1)"
@@ -104,7 +144,7 @@ boot_http_worker() {
     sleep 0.5
   done
   [ -n "$port" ] || { echo "::error::http worker '$exe' never reported a port" >&2; cat "$log" >&2; return 1; }
-  echo "$port"
+  BOOTED_PORT="$port"
 }
 
 # The plain (non-pooled) worker for the crash / pool-recovery tests.
@@ -120,9 +160,9 @@ case "$TRANSPORT" in
     export VGI_ATTACH_OPTIONS_WORKER="$ATTACH_OPTIONS"
     # Serve the versioned catalogs over HTTP too: attach/versioned_tables_*_http
     # and versioning_http attach an http:// worker regardless of the main transport.
-    vth_port="$(boot_http_worker "$VERSIONED_TABLES")"
+    boot_http_worker "$VERSIONED_TABLES"; vth_port="$BOOTED_PORT"
     export VGI_VERSIONED_TABLES_HTTP_WORKER="http://localhost:${vth_port}"
-    vh_port="$(boot_http_worker "$VERSIONED")"
+    boot_http_worker "$VERSIONED"; vh_port="$BOOTED_PORT"
     export VGI_VERSIONED_HTTP_WORKER="http://localhost:${vh_port}"
     SUITE_GLOB="test/sql/integration/*"
     ;;
@@ -145,7 +185,7 @@ case "$TRANSPORT" in
     # — they are covered over http on the stdio lane, which boots those workers.
     # (Running three concurrent http workers under the full-suite load destabilises
     # the secondary workers; the single-worker http lane is reliable.)
-    port="$(boot_http_worker "$WORKER")"
+    boot_http_worker "$WORKER"; port="$BOOTED_PORT"
     export VGI_TEST_WORKER="http://localhost:${port}"
     SUITE_GLOB="test/sql/integration/*"
     ;;
@@ -186,4 +226,30 @@ rm -f "$STAGE/test/_warm.test"
 # summary). Out-of-scope tests were dropped at staging, so the glob never
 # matches them; any failed assertion exits non-zero and fails the job.
 echo "Running suite ($SUITE_GLOB, transport=$TRANSPORT) ..."
-"$HAYBARN_UNITTEST" "$SUITE_GLOB"
+suite_rc=0
+"$HAYBARN_UNITTEST" "$SUITE_GLOB" || suite_rc=$?
+
+# Coverage report. Fire the EXIT trap now (kill the background HTTP workers) so
+# they flush their pods before we read GOCOVERDIR, then summarise. Done even on
+# failure — coverage of a failing run is still useful — but the suite's exit
+# code is preserved.
+if [ "${COVERAGE:-0}" = "1" ]; then
+  # SIGTERM the HTTP workers and wait for them to exit — graceful shutdown flushes
+  # their coverage pods. They're direct children of this shell (boot_http_worker
+  # is not wrapped in $(...)), so `wait` blocks until each has finished writing.
+  trap - EXIT
+  while read -r p; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done < "$BG_PIDS_FILE"
+  while read -r p; do [ -n "$p" ] && wait "$p" 2>/dev/null || true; done < "$BG_PIDS_FILE"
+  echo "=== coverage (transport=$TRANSPORT, pods in $GOCOVERDIR) ==="
+  if ls "$GOCOVERDIR"/covcounters.* >/dev/null 2>&1; then
+    go tool covdata percent -i="$GOCOVERDIR" || echo "::warning::covdata percent failed"
+    if [ -n "${COVERAGE_OUT:-}" ]; then
+      go tool covdata textfmt -i="$GOCOVERDIR" -o "$COVERAGE_OUT" \
+        && echo "wrote profile: $COVERAGE_OUT" || echo "::warning::covdata textfmt failed"
+    fi
+  else
+    echo "::warning::no coverage pods in $GOCOVERDIR (were workers built with 'make build COVER=1'?)"
+  fi
+fi
+
+exit "$suite_rc"

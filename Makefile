@@ -73,12 +73,27 @@ HTTP_XFAIL_TESTS :=
 
 .PHONY: build clean fmt vet lint test test-unit test-single test-shm test-http test-all new-worker
 
+# COVER=1 builds coverage-instrumented worker binaries (`go build -cover`).
+# The integration suite runs the workers as separate processes, so `go test`
+# can't measure them — instead the instrumented binaries write coverage pods to
+# $GOCOVERDIR on clean exit (which the workers do: graceful SIGTERM shutdown /
+# stdin EOF / idle timeout). -coverpkg covers the whole module, so the report
+# reflects how much of the vgi/ SDK real protocol traffic exercises, not just
+# the example functions. See ci/run-integration.sh (COVERAGE=1).
+GO_BUILD_FLAGS :=
+ifeq ($(COVER),1)
+# -covermode=atomic (not the -cover default of `set`) so the worker can snapshot
+# live counters mid-run via runtime/coverage.WriteCountersDir — the harness kills
+# the long-lived HTTP worker before a clean exit (see cmd/.../coverage.go).
+GO_BUILD_FLAGS := -cover -covermode=atomic -coverpkg=./...
+endif
+
 # Compile the example worker binaries.
 build:
-	go build -o $(BINARY) $(CMD)
-	go build -o $(VERSIONED_BINARY) $(VERSIONED_CMD)
-	go build -o $(VERSIONED_TABLES_BINARY) $(VERSIONED_TABLES_CMD)
-	go build -o $(ATTACH_OPTIONS_BINARY) $(ATTACH_OPTIONS_CMD)
+	go build $(GO_BUILD_FLAGS) -o $(BINARY) $(CMD)
+	go build $(GO_BUILD_FLAGS) -o $(VERSIONED_BINARY) $(VERSIONED_CMD)
+	go build $(GO_BUILD_FLAGS) -o $(VERSIONED_TABLES_BINARY) $(VERSIONED_TABLES_CMD)
+	go build $(GO_BUILD_FLAGS) -o $(ATTACH_OPTIONS_BINARY) $(ATTACH_OPTIONS_CMD)
 
 # Remove built binaries.
 clean:

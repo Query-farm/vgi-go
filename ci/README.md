@@ -82,6 +82,32 @@ Download `haybarn-unittest` for your platform from the pinned Haybarn release
 (`gh release download "$HAYBARN_RELEASE" --repo Query-farm-haybarn/haybarn
 --pattern 'haybarn_unittest-*.zip'`).
 
+## Worker coverage
+
+The suite runs the workers as separate processes, so `go test -cover` can't see
+them. Instead the workers are built as **coverage binaries** (`make build
+COVER=1` → `go build -cover -covermode=atomic -coverpkg=./...`) and
+`run-integration.sh`, when `COVERAGE=1`, points `GOCOVERDIR` at a pod directory
+that every worker process inherits. This measures how much of the **`vgi/` SDK**
+real DuckDB protocol traffic exercises — including the HTTP-only paths (state
+continuation in `vgi/state_serialize.go`, opaque-data sealing in
+`vgi/crypto.go`, rehydration) that unit tests don't reach.
+
+```bash
+make build COVER=1
+VGI_SRC=~/vgi HAYBARN_UNITTEST=/path/to/haybarn-unittest TRANSPORT=http \
+  COVERAGE=1 GOCOVERDIR=$(mktemp -d) COVERAGE_OUT=cover.txt \
+  ci/run-integration.sh
+# COVERAGE_OUT is a legacy profile: `go tool cover -html=cover.txt`
+```
+
+Subprocess workers flush coverage on their clean exit (stdin EOF). The long-lived
+HTTP worker is torn down abruptly by the harness, so it snapshots counters on an
+interval (`cmd/vgi-example-worker/coverage.go`) — which needs `-covermode=atomic`
+(live-readable counters), hence that build flag. The workflow runs all four lanes
+with coverage, uploads each lane's pods as an artifact, and the `coverage` job
+merges them (`go tool covdata merge`) into one report (also a Step Summary).
+
 ## Version pins (and their coupling)
 
 Two pins live in the workflow's `env:` block:
