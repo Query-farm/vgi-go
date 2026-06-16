@@ -32,6 +32,8 @@ VERSIONED_TABLES_BINARY := vgi-example-versioned-tables-worker-go
 VERSIONED_TABLES_CMD    := ./cmd/vgi-example-versioned-tables-worker
 ATTACH_OPTIONS_BINARY   := vgi-example-attach-options-worker-go
 ATTACH_OPTIONS_CMD      := ./cmd/vgi-example-attach-options-worker
+SIMPLE_WRITABLE_BINARY  := vgi-example-simple-writable-worker-go
+SIMPLE_WRITABLE_CMD     := ./cmd/vgi-example-simple-writable-worker
 
 # Path to the sibling DuckDB VGI extension repo (contains tests).
 VGI_EXT_DIR  := ../vgi
@@ -59,6 +61,7 @@ WORKER_PATH                  := $(CURDIR)/$(BINARY)
 VERSIONED_WORKER_PATH        := $(CURDIR)/$(VERSIONED_BINARY)
 VERSIONED_TABLES_WORKER_PATH := $(CURDIR)/$(VERSIONED_TABLES_BINARY)
 ATTACH_OPTIONS_WORKER_PATH   := $(CURDIR)/$(ATTACH_OPTIONS_BINARY)
+SIMPLE_WRITABLE_WORKER_PATH  := $(CURDIR)/$(SIMPLE_WRITABLE_BINARY)
 
 # Test directory inside the extension repo.
 TEST_DIR     := $(VGI_EXT_DIR)/test/sql
@@ -94,6 +97,7 @@ build:
 	go build $(GO_BUILD_FLAGS) -o $(VERSIONED_BINARY) $(VERSIONED_CMD)
 	go build $(GO_BUILD_FLAGS) -o $(VERSIONED_TABLES_BINARY) $(VERSIONED_TABLES_CMD)
 	go build $(GO_BUILD_FLAGS) -o $(ATTACH_OPTIONS_BINARY) $(ATTACH_OPTIONS_CMD)
+	go build $(GO_BUILD_FLAGS) -o $(SIMPLE_WRITABLE_BINARY) $(SIMPLE_WRITABLE_CMD)
 
 # Remove built binaries.
 clean:
@@ -160,6 +164,7 @@ test: build
 	    VGI_VERSIONED_WORKER=$(VERSIONED_WORKER_PATH) \
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
+	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
 	    $(UNITTEST) "test/*" "~test/sql/integration/writable/*"
 
 # Run a single integration test file.
@@ -172,6 +177,7 @@ test-single: build
 	    VGI_VERSIONED_WORKER=$(VERSIONED_WORKER_PATH) \
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
+	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
 	    $(UNITTEST) "$(TEST)"
 
 # Run the full integration test suite with the shared-memory side-channel
@@ -190,6 +196,7 @@ test-shm: build
 	    VGI_VERSIONED_WORKER=$(VERSIONED_WORKER_PATH) \
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
+	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
 	    $(UNITTEST) "test/*" "~test/sql/integration/writable/*"
 
 # Run the full integration test suite over HTTP transport.

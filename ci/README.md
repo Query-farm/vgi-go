@@ -61,12 +61,20 @@ runs them as a matrix), mirroring the `make test` / `test-shm` / `test-launcher`
   per two rows; covered by `stdio`) and `dynamic_filter.test` (Top-N +
   dynamic-filter continuation terminates early in that C++ build).
 
-Out of scope and excluded from every lane: `writable/` and `simple_writable/`
-(opt-in writable catalog), and `nested_type_combinations.test` (segfaults the
-prebuilt standalone runner — a property of that C++ build, not the worker, which
-passes it against a locally-built unittest). The HTTP-attach / bearer-auth /
-dynamic-code / schema-reconcile tests skip via their `require-env` gates (we
-don't set those workers), exactly as in the reference harness.
+The `simple_writable/*.test` write-path tests (INSERT/UPDATE/DELETE/RETURNING)
+run on the subprocess lanes: `VGI_SIMPLE_WRITABLE_WORKER` points at a dedicated
+Go fixture worker (`cmd/vgi-example-simple-writable-worker`, the
+`examples/simple_writable` catalog), so the same cross-language tests now
+exercise the Go write-function plumbing. They self-skip on the http lane
+(skip-on-error `'HTTP'`).
+
+Out of scope and excluded from every lane: `writable/` (the opt-in *generic*
+writable catalog, `VGI_WORKER_ENABLE_WRITABLE` — no cross-language fixture), and
+`nested_type_combinations.test` (segfaults the prebuilt standalone runner — a
+property of that C++ build, not the worker, which passes it against a
+locally-built unittest). The HTTP-attach / bearer-auth / dynamic-code /
+schema-reconcile tests skip via their `require-env` gates (we don't set those
+workers), exactly as in the reference harness.
 
 ## Run it locally
 

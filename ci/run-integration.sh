@@ -37,7 +37,8 @@ WORKER="$BIN_DIR/vgi-example-worker-go"
 VERSIONED="$BIN_DIR/vgi-example-versioned-worker-go"
 VERSIONED_TABLES="$BIN_DIR/vgi-example-versioned-tables-worker-go"
 ATTACH_OPTIONS="$BIN_DIR/vgi-example-attach-options-worker-go"
-for b in "$WORKER" "$VERSIONED" "$VERSIONED_TABLES" "$ATTACH_OPTIONS"; do
+SIMPLE_WRITABLE="$BIN_DIR/vgi-example-simple-writable-worker-go"
+for b in "$WORKER" "$VERSIONED" "$VERSIONED_TABLES" "$ATTACH_OPTIONS" "$SIMPLE_WRITABLE"; do
   [ -x "$b" ] || { echo "::error::missing worker binary $b (run: make build)"; exit 1; }
 done
 
@@ -64,12 +65,16 @@ echo "Staging preprocessed tests into $STAGE (transport=$TRANSPORT) ..."
 mkdir -p "$STAGE/test/sql/integration"
 ( cd "$INTEGRATION"
   # Out of scope:
-  #   writable/, simple_writable/ — opt-in writable catalog (VGI_WORKER_ENABLE_WRITABLE).
+  #   writable/ — opt-in generic writable catalog (VGI_WORKER_ENABLE_WRITABLE),
+  #     not modelled by a cross-language fixture.
   #   nested_type_combinations.test — segfaults the prebuilt standalone runner
   #     (a property of that C++ build, not the worker — the worker passes it
   #     against a locally-built unittest).
+  # simple_writable/ IS staged: VGI_SIMPLE_WRITABLE_WORKER (below) points at the
+  # Go fixture worker, so the 5 cross-language write tests run here too. They
+  # self-skip on the http lane (skip-on-error 'HTTP').
   find . -name '*.test' \
-       -not -path './writable/*' -not -path './simple_writable/*' \
+       -not -path './writable/*' \
        -not -name 'nested_type_combinations.test' \
        "${EXTRA_SKIP[@]}" | while read -r f; do
     mkdir -p "$STAGE/test/sql/integration/$(dirname "$f")"
@@ -150,6 +155,11 @@ boot_http_worker() {
 # The plain (non-pooled) worker for the crash / pool-recovery tests.
 export VGI_TEST_DEDICATED_WORKER="$WORKER"
 
+# The simple_writable fixture worker (binary path → stdio subprocess) un-skips
+# the cross-language simple_writable/*.test write-path tests. Set on every lane;
+# they self-skip over http.
+export VGI_SIMPLE_WRITABLE_WORKER="$SIMPLE_WRITABLE"
+
 case "$TRANSPORT" in
   stdio|shm)
     # Subprocess transport (the primary lane). shm is identical plus the POSIX
@@ -225,9 +235,23 @@ rm -f "$STAGE/test/_warm.test"
 # (a progress line per file + the final "All tests passed (.. N assertions ..)"
 # summary). Out-of-scope tests were dropped at staging, so the glob never
 # matches them; any failed assertion exits non-zero and fails the job.
+#
+# simple_writable runs in its OWN invocation (a fresh DuckDB process / worker
+# pool). Its table-in-out write workers otherwise leave warm pooled connections
+# that perturb the immediately-following crash-recovery test
+# (table_in_out/table_buffering_pool_recovery), changing how a re-crash surfaces
+# (Broken-pipe-on-write vs the expected stream-EOF). A separate process gives
+# the crash test a clean pool. The launcher lane runs only launcher/* (no
+# simple_writable); the http lane's writes self-skip.
 echo "Running suite ($SUITE_GLOB, transport=$TRANSPORT) ..."
 suite_rc=0
-"$HAYBARN_UNITTEST" "$SUITE_GLOB" || suite_rc=$?
+if [ "$TRANSPORT" = "launch" ]; then
+  "$HAYBARN_UNITTEST" "$SUITE_GLOB" || suite_rc=$?
+else
+  "$HAYBARN_UNITTEST" "$SUITE_GLOB" "~test/sql/integration/simple_writable/*" || suite_rc=$?
+  echo "Running simple_writable (isolated process) ..."
+  "$HAYBARN_UNITTEST" "test/sql/integration/simple_writable/*" || suite_rc=$?
+fi
 
 # Coverage report. Fire the EXIT trap now (kill the background HTTP workers) so
 # they flush their pods before we read GOCOVERDIR, then summarise. Done even on
