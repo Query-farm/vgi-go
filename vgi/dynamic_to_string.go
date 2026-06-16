@@ -18,6 +18,7 @@ import (
 // InsertionOrderPreservingMap. Order is preserved over the wire via parallel
 // keys/values lists.
 type DynamicToStringHook interface {
+	// DynamicToString returns key/value diagnostics surfaced under EXPLAIN ANALYZE for the current scan.
 	DynamicToString(ctx context.Context, params *DynamicToStringParams) (keys []string, values []string, err error)
 }
 

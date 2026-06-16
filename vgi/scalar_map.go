@@ -13,10 +13,15 @@ var defaultAllocator = memory.NewGoAllocator()
 
 // ArrayBuilder is a constraint for Arrow typed builders used by the Map* functions.
 type ArrayBuilder[T any] interface {
+	// Append adds a non-null value of type T to the end of the array being built.
 	Append(T)
+	// AppendNull adds a null entry to the end of the array being built.
 	AppendNull()
+	// Reserve pre-allocates capacity for at least n additional elements.
 	Reserve(int)
+	// NewArray finalizes the builder and returns the constructed Arrow array.
 	NewArray() arrow.Array
+	// Release frees the buffers held by the builder.
 	Release()
 }
 

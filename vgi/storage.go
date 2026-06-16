@@ -31,6 +31,7 @@ var errStorageNotInitialized = errors.New("storage: execution ID not set")
 // sharding (SQLite) don't implement it. Lets ExecutionStorage attach the shard
 // key without threading it through all ~22 FunctionStorage methods.
 type ShardedBackend interface {
+	// ForShard returns a FunctionStorage view of the backend pinned to shardKey.
 	ForShard(shardKey string) FunctionStorage
 }
 

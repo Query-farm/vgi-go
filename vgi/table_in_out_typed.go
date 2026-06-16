@@ -19,13 +19,20 @@ import (
 // Implementations may also satisfy OnIniter (custom OnInit). This is detected
 // automatically by AsTableInOutFunction.
 type TypedTableInOutFunc[S any] interface {
+	// Name returns the function name used to invoke it in SQL.
 	Name() string
+	// Metadata returns descriptive metadata for the function.
 	Metadata() FunctionMetadata
+	// ArgumentSpecs returns the function's argument specifications.
 	ArgumentSpecs() []ArgSpec
+	// OnBind resolves the output schema and bind state from the bind parameters.
 	OnBind(params *BindParams) (*BindResponse, error)
+	// NewState creates a fresh, typed per-scan state value.
 	NewState(params *ProcessParams) (*S, error)
+	// Process transforms one input batch into output rows, emitting them via out.
 	Process(ctx context.Context, params *ProcessParams, state *S,
 		batch arrow.RecordBatch, out *vgirpc.OutputCollector) error
+	// Finalize returns any trailing batches to emit after the last input batch.
 	Finalize(ctx context.Context, params *ProcessParams, state *S) ([]arrow.RecordBatch, error)
 }
 

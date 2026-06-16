@@ -16,6 +16,7 @@ type CatalogReadOnlyError struct {
 	Operation string
 }
 
+// Error implements the error interface.
 func (e *CatalogReadOnlyError) Error() string {
 	return fmt.Sprintf("Catalog is read-only: %s not supported", e.Operation)
 }
@@ -26,6 +27,7 @@ type UnknownFunctionError struct {
 	FunctionType string
 }
 
+// Error implements the error interface.
 func (e *UnknownFunctionError) Error() string {
 	return fmt.Sprintf("Unknown function: '%s' (type: %s)", e.Name, e.FunctionType)
 }
@@ -41,6 +43,7 @@ type TypeBoundError struct {
 	PredicateNames []string
 }
 
+// Error implements the error interface.
 func (e *TypeBoundError) Error() string {
 	name := e.ArgName
 	if name == "" {
@@ -63,6 +66,7 @@ type ArgumentError struct {
 	Detail   string
 }
 
+// Error implements the error interface.
 func (e *ArgumentError) Error() string {
 	switch {
 	case e.ArgName != "" && e.Position >= 0:
@@ -93,6 +97,7 @@ type SchemaFieldMismatch struct {
 	Reason    string         // optional — overrides the default phrasing
 }
 
+// Error implements the error interface.
 func (e *SchemaValidationError) Error() string {
 	var b strings.Builder
 	b.WriteString("schema validation failed")
@@ -131,6 +136,7 @@ type WorkerPanicError struct {
 	Stack        []byte
 }
 
+// Error implements the error interface.
 func (e *WorkerPanicError) Error() string {
 	name := e.FunctionName
 	if name == "" {

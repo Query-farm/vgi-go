@@ -22,11 +22,17 @@ import (
 // CardinalityEstimator (cardinality estimation). These are detected
 // automatically by AsTableFunction.
 type TypedTableFunc[S any] interface {
+	// Name returns the function name used to invoke it in SQL.
 	Name() string
+	// Metadata returns descriptive metadata for the function.
 	Metadata() FunctionMetadata
+	// ArgumentSpecs returns the function's argument specifications.
 	ArgumentSpecs() []ArgSpec
+	// OnBind resolves the output schema and bind state from the bind parameters.
 	OnBind(params *BindParams) (*BindResponse, error)
+	// NewState creates a fresh, typed per-scan state value.
 	NewState(params *ProcessParams) (*S, error)
+	// Process generates output rows for one scan step, emitting them via out.
 	Process(ctx context.Context, params *ProcessParams, state *S, out *vgirpc.OutputCollector) error
 }
 
@@ -34,12 +40,14 @@ type TypedTableFunc[S any] interface {
 // need custom OnInit behavior (e.g., multi-worker partitioning with work queues).
 // If not implemented, the adapter defaults to DefaultInit() (MaxWorkers: 1).
 type OnIniter interface {
+	// OnInit performs global initialization (e.g. worker count, partitioning).
 	OnInit(params *InitParams) (*GlobalInitResponse, error)
 }
 
 // CardinalityEstimator is an optional interface for TypedTableFunc
 // implementations that can estimate their output row count for query optimization.
 type CardinalityEstimator interface {
+	// Cardinality estimates the function's output row count for the optimizer.
 	Cardinality(params *BindParams) (*TableCardinality, error)
 }
 
@@ -47,6 +55,7 @@ type CardinalityEstimator interface {
 // implementations that can report per-column output statistics to the
 // optimizer (min/max, null-ness, distinct count, string length).
 type StatisticsProvider interface {
+	// Statistics reports per-column output statistics to the optimizer.
 	Statistics(params *BindParams) ([]ColumnStatistics, error)
 }
 

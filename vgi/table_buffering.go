@@ -46,6 +46,7 @@ type TableBufferingFunction interface {
 // cardinality estimate (e.g. a reducer that always emits one row).
 type TableBufferingFunctionWithCardinality interface {
 	TableBufferingFunction
+	// Cardinality estimates the function's output row count for the optimizer.
 	Cardinality(params *BindParams) (*TableCardinality, error)
 }
 
