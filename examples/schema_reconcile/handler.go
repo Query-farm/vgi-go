@@ -116,11 +116,6 @@ func (s tableSpec) tableSchema() *arrow.Schema {
 	return arrow.NewSchema(fields, nil)
 }
 
-// deleteSchema is the rowid-only schema the DELETE handler validates.
-func (s tableSpec) deleteSchema() *arrow.Schema {
-	return arrow.NewSchema([]arrow.Field{s.rowidField}, nil)
-}
-
 // countSchema is the result schema for INSERT/UPDATE/DELETE handlers —
 // they return one row carrying the affected-row count.
 var countSchema = arrow.NewSchema([]arrow.Field{

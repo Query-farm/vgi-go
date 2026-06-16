@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-
-	"github.com/apache/arrow-go/v18/arrow"
 )
 
 // writableStore is a SQLite-backed persistence layer that mirrors the
@@ -516,7 +514,3 @@ func (s *writableStore) rowsDelete(catalog, schemaName, tableName string, rowIDs
 	}
 	return count, tx.Commit()
 }
-
-// applySchemaToValues coerces the value types where they don't match the
-// declared Arrow type — currently a no-op since rowsToBatch handles conversion.
-func _ignore(_ *arrow.Schema) {}

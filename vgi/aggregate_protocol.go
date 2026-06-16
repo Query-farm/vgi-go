@@ -599,6 +599,13 @@ func (w *Worker) handleAggregateWindow(ctx context.Context, callCtx *vgirpc.Call
 	return AggregateWindowResponseWire{ResultBatch: out}, nil
 }
 
+// handleAggregateWindowBatch serves the batched window RPC (one call per
+// Evaluate() instead of one per output row). UNREACHABLE under the current
+// build: the C++ extension wires SetWindowBatchCallback only under
+// #ifdef DUCKDB_HAS_AGGREGATE_WINDOW_BATCH, which is never defined because the
+// pinned DuckDB lacks aggregate_window_batch_t. Until DuckDB ships that API
+// and the extension enables it, only the per-row handleAggregateWindow runs.
+// Kept symmetric with the per-row path so it works the moment it lands.
 func (w *Worker) handleAggregateWindowBatch(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowBatchRequestWire) (AggregateWindowBatchResponseWire, error) {
 	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
 	fn, err := w.lookupAggregate(req.FunctionName)

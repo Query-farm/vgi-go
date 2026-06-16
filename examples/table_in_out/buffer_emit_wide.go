@@ -64,7 +64,3 @@ func (f *BufferEmitWideFunction) Finalize(ctx context.Context, params *vgi.Proce
 	n := vgi.BuildInt64Array(rows, func(i int64) int64 { return i })
 	return []arrow.RecordBatch{array.NewRecordBatch(bufferEmitWideSchema, []arrow.Array{n}, rows)}, nil
 }
-
-func NewBufferEmitWideFunction() vgi.TableBufferingFunction {
-	return &BufferEmitWideFunction{}
-}

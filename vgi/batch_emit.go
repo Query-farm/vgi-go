@@ -31,17 +31,6 @@ func PartitionField(name string, typ arrow.DataType, nullable bool) arrow.Field 
 	return arrow.Field{Name: name, Type: typ, Nullable: nullable, Metadata: md}
 }
 
-// isPartitionField reports whether a field carries the partition-column marker.
-func isPartitionField(f arrow.Field) bool {
-	if !f.HasMetadata() {
-		return false
-	}
-	if i := f.Metadata.FindKey(partitionColumnKey); i >= 0 {
-		return f.Metadata.Values()[i] == "true"
-	}
-	return false
-}
-
 // EmitBatchIndex emits a batch tagged with vgi_batch_index. Use it from a
 // table function that declares SupportsBatchIndex. The C++ extension enforces
 // monotonicity and the per-pipeline cap.

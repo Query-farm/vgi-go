@@ -59,9 +59,6 @@ func stubFinalize(gids []int64, states map[int64]interface{}, p *vgi.AggregatePr
 	return array.NewRecordBatch(p.OutputSchema, []arrow.Array{col}, int64(len(gids))), nil
 }
 
-// gobRegisterStub is a no-op kept for documentation; stubState is registered
-// in aggregate.go's init alongside the real state types.
-func gobRegisterStub() {}
 
 // The following functions are registered to satisfy the vgi extension's
 // duckdb_functions() inventory test (function_registration.test). Their
@@ -149,42 +146,4 @@ func (DynamicMLAggFunction) Combine(s, t interface{}, p *vgi.AggregateProcessPar
 }
 func (DynamicMLAggFunction) Finalize(gids []int64, states map[int64]interface{}, p *vgi.AggregateProcessParams) (arrow.RecordBatch, error) {
 	return stubFinalize(gids, states, p)
-}
-
-// ---------------------------------------------------------------------------
-// qf_llm_distill — placeholder LLM aggregate (returns concatenated samples).
-// ---------------------------------------------------------------------------
-
-type LLMDistillFunction struct{ ListAggFunction }
-
-func (LLMDistillFunction) Name() string { return "qf_llm_distill" }
-
-func (LLMDistillFunction) Metadata() vgi.FunctionMetadata {
-	return vgi.FunctionMetadata{
-		Description:       "Placeholder LLM distillation (vgi-python integration)",
-		Stability:         vgi.StabilityConsistent,
-		NullHandling:      vgi.NullHandlingDefault,
-		ReturnType:        arrow.BinaryTypes.String,
-		OrderDependent:    "NOT_ORDER_DEPENDENT",
-		DistinctDependent: "NOT_DISTINCT_DEPENDENT",
-	}
-}
-
-// ---------------------------------------------------------------------------
-// qf_llm_summarize — placeholder LLM aggregate.
-// ---------------------------------------------------------------------------
-
-type LLMSummarizeFunction struct{ ListAggFunction }
-
-func (LLMSummarizeFunction) Name() string { return "qf_llm_summarize" }
-
-func (LLMSummarizeFunction) Metadata() vgi.FunctionMetadata {
-	return vgi.FunctionMetadata{
-		Description:       "Placeholder LLM summarization (vgi-python integration)",
-		Stability:         vgi.StabilityConsistent,
-		NullHandling:      vgi.NullHandlingDefault,
-		ReturnType:        arrow.BinaryTypes.String,
-		OrderDependent:    "NOT_ORDER_DEPENDENT",
-		DistinctDependent: "NOT_DISTINCT_DEPENDENT",
-	}
 }

@@ -164,6 +164,17 @@ func BuildFloat64Array(n int64, fn func(i int64) float64) arrow.Array {
 	return builder.NewArray()
 }
 
+// BuildUint64Array creates a uint64 array by calling fn for each row index.
+func BuildUint64Array(n int64, fn func(i int64) uint64) arrow.Array {
+	builder := array.NewUint64Builder(defaultAllocator)
+	defer builder.Release()
+	builder.Reserve(int(n))
+	for i := int64(0); i < n; i++ {
+		builder.Append(fn(i))
+	}
+	return builder.NewArray()
+}
+
 // BuildStringArray creates a string array by calling fn for each row index.
 func BuildStringArray(n int64, fn func(i int64) string) arrow.Array {
 	builder := array.NewStringBuilder(defaultAllocator)

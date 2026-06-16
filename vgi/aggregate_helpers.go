@@ -7,39 +7,11 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
-	"os"
-	"sync"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
-
-var (
-	debugLogOnce sync.Once
-	debugLogF    *os.File
-	debugLogMu   sync.Mutex
-)
-
-func debugLog(format string, args ...interface{}) {
-	debugLogOnce.Do(func() {
-		path := os.Getenv("VGI_GO_AGG_DEBUG_LOG")
-		if path == "" {
-			return
-		}
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			return
-		}
-		debugLogF = f
-	})
-	if debugLogF == nil {
-		return
-	}
-	debugLogMu.Lock()
-	defer debugLogMu.Unlock()
-	fmt.Fprintf(debugLogF, "[pid=%d] "+format+"\n", append([]interface{}{os.Getpid()}, args...)...)
-}
 
 // ============================================================================
 // Window partition payload encode/decode (gob; never leaves the worker).

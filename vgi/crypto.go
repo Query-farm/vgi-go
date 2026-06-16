@@ -180,15 +180,6 @@ func (w *Worker) openAttach(envelope []byte, cc *vgirpc.CallContext) ([]byte, er
 	return full[attachUUIDLen:], nil
 }
 
-// sealTransaction seals a plaintext transaction value into an envelope bound
-// to the caller's identity and the parent attach envelope it was minted under.
-func (w *Worker) sealTransaction(plaintext, attachEnvelope []byte, cc *vgirpc.CallContext) ([]byte, error) {
-	if len(w.httpSigningKey) == 0 || !w.sealOpaqueData {
-		return plaintext, nil
-	}
-	return sealBytes(plaintext, w.httpSigningKey, transactionAAD(cc.Auth, attachEnvelope), transactionEnvelopeVersion)
-}
-
 // openTransaction opens a transaction_opaque_data envelope. attachEnvelope is
 // the (sealed) attach_opaque_data the same call carried — it must match the
 // attach the transaction was minted under, or the open fails.

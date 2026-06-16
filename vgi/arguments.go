@@ -419,20 +419,3 @@ func (a *Arguments) Release() {
 		a.Batch.Release()
 	}
 }
-
-// SerializeArguments serializes arguments to Arrow IPC bytes.
-func SerializeArguments(schema *arrow.Schema, values []arrow.Array) ([]byte, error) {
-	var buf bytes.Buffer
-	w := ipc.NewWriter(&buf, ipc.WithSchema(schema))
-	if len(values) > 0 {
-		batch := array.NewRecordBatch(schema, values, 1)
-		defer batch.Release()
-		if err := w.Write(batch); err != nil {
-			return nil, err
-		}
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}

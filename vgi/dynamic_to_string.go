@@ -7,8 +7,6 @@ import (
 	"fmt"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
-	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
 )
 
 // DynamicToStringHook is the optional interface a TableFunction may implement
@@ -111,71 +109,4 @@ func (w *Worker) lookupTable(name string) (TableFunction, error) {
 		return nil, fmt.Errorf("table function %q not registered", name)
 	}
 	return fns[0], nil
-}
-
-// DeserializeBindRequest extracts a BindRequestWire from the IPC bytes the
-// C++ extension caches as bind_call. The bytes are an Arrow IPC stream
-// containing a single-row record batch with the BindRequestWire columns.
-func DeserializeBindRequest(data []byte) (*BindRequestWire, error) {
-	batch, err := DeserializeRecordBatch(data)
-	if err != nil {
-		return nil, err
-	}
-	defer batch.Release()
-	if batch.NumRows() == 0 {
-		return &BindRequestWire{}, nil
-	}
-	out := &BindRequestWire{}
-	for i := 0; i < int(batch.NumCols()); i++ {
-		name := batch.ColumnName(i)
-		col := batch.Column(i)
-		if col.Len() == 0 {
-			continue
-		}
-		switch name {
-		case "function_name":
-			if s, ok := scalarStringHelper(col); ok {
-				out.FunctionName = s
-			}
-		case "function_type":
-			if s, ok := scalarStringHelper(col); ok {
-				out.FunctionType = s
-			}
-		case "attach_opaque_data":
-			if !col.IsNull(0) {
-				if b, ok := scalarBytesHelper(col); ok {
-					v := b
-					out.AttachOpaqueData = &v
-				}
-			}
-		case "transaction_opaque_data":
-			if !col.IsNull(0) {
-				if b, ok := scalarBytesHelper(col); ok {
-					v := b
-					out.TransactionOpaqueData = &v
-				}
-			}
-		}
-	}
-	return out, nil
-}
-
-func scalarStringHelper(col arrow.Array) (string, bool) {
-	switch a := col.(type) {
-	case *array.String:
-		return a.Value(0), true
-	case *array.LargeString:
-		return a.Value(0), true
-	}
-	return "", false
-}
-
-func scalarBytesHelper(col arrow.Array) ([]byte, bool) {
-	switch a := col.(type) {
-	case *array.Binary:
-		return a.Value(0), true
-	case *array.LargeBinary:
-		return a.Value(0), true
-	}
-	return nil, false
 }

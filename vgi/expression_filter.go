@@ -199,30 +199,6 @@ func renderConstantRef(n *exprNode, values []scalarValueRef) (string, error) {
 	return "", fmt.Errorf("unsupported constant type %T", v.value)
 }
 
-func wkbWrapperForColumn(columnName string, schema *arrow.Schema) string {
-	if schema == nil {
-		return ""
-	}
-	for i := 0; i < schema.NumFields(); i++ {
-		f := schema.Field(i)
-		if f.Name != columnName {
-			continue
-		}
-		if !f.HasMetadata() {
-			return ""
-		}
-		md := f.Metadata
-		for k := 0; k < md.Len(); k++ {
-			if md.Keys()[k] == "ARROW:extension:name" {
-				if wrap, ok := wkbHexSQLWrapper[md.Values()[k]]; ok {
-					return wrap
-				}
-			}
-		}
-	}
-	return ""
-}
-
 // Alternative JSON shape for binary constants: vgi-python may send them as
 // base-64 or hex under different keys. UnmarshalJSON below normalises.
 

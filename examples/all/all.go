@@ -81,6 +81,7 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewColorsScanFunction())
 	w.RegisterTable(table.NewExpressionFilterTestFunction())
 	w.RegisterTable(table.NewDoubleSequenceFunction())
+	w.RegisterTable(table.NewTypedProbeFunction())
 	w.RegisterTable(table.NewDynamicFilterEchoFunction())
 	w.RegisterTable(table.NewGeneratorExceptionFunction())
 	w.RegisterTable(table.NewLoggingGeneratorFunction())

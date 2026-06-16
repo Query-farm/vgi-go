@@ -10,7 +10,6 @@ import (
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // ---------------------------------------------------------------------------
@@ -493,6 +492,14 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	if !fnMeta.ProjectionPushdown && initParams.ProjectionIDs != nil {
 		// Function doesn't support projection — let it emit all columns,
 		// framework will project down before sending to DuckDB.
+		//
+		// UNREACHABLE under the current C++ extension: it only ships
+		// projection_ids when the worker declared projection_pushdown=true
+		// (vgi_table_function_impl.cpp ~1137); for !ProjectionPushdown
+		// functions DuckDB's own operator does the projection, so
+		// ProjectionIDs arrives nil here and this branch is never taken.
+		// Kept as defensive/forward-looking code; projectBatch is dead in
+		// practice until the extension pushes projection_ids unconditionally.
 		processOutputSchema = outputSchema
 		autoProjectIDs = initParams.ProjectionIDs
 	}
@@ -966,85 +973,6 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 	return params, nil
 }
 
-// deserializeBindRequest deserializes a BindRequestWire from IPC bytes.
-func (w *Worker) deserializeBindRequest(data []byte) (*BindRequestWire, error) {
-	batch, err := DeserializeRecordBatch(data)
-	if err != nil {
-		return nil, err
-	}
-	defer batch.Release()
-
-	req := &BindRequestWire{}
-
-	for i := 0; i < int(batch.NumCols()); i++ {
-		col := batch.Column(i)
-		name := batch.ColumnName(i)
-		if col.IsNull(0) {
-			continue
-		}
-		switch name {
-		case "function_name":
-			if c, ok := col.(*array.String); ok {
-				req.FunctionName = c.Value(0)
-			}
-		case "arguments":
-			if c, ok := col.(*array.Binary); ok {
-				req.Arguments = c.Value(0)
-			}
-		case "function_type":
-			switch c := col.(type) {
-			case *array.Dictionary:
-				dict := c.Dictionary().(*array.String)
-				v := dict.Value(c.GetValueIndex(0))
-				req.FunctionType = v
-			case *array.String:
-				req.FunctionType = c.Value(0)
-			}
-		case "input_schema":
-			if c, ok := col.(*array.Binary); ok {
-				v := c.Value(0)
-				req.InputSchema = &v
-			}
-		case "settings":
-			if c, ok := col.(*array.Binary); ok {
-				v := c.Value(0)
-				req.Settings = &v
-			}
-		case "secrets":
-			if c, ok := col.(*array.Binary); ok {
-				v := c.Value(0)
-				req.Secrets = &v
-			}
-		case "attach_opaque_data":
-			if c, ok := col.(*array.Binary); ok {
-				v := c.Value(0)
-				req.AttachOpaqueData = &v
-			}
-		case "transaction_opaque_data":
-			if c, ok := col.(*array.Binary); ok {
-				v := c.Value(0)
-				req.TransactionOpaqueData = &v
-			}
-		case "resolved_secrets_provided":
-			if c, ok := col.(*array.Boolean); ok {
-				req.ResolvedSecretsProvided = c.Value(0)
-			}
-		case "at_unit":
-			if c, ok := col.(*array.String); ok {
-				v := c.Value(0)
-				req.AtUnit = &v
-			}
-		case "at_value":
-			if c, ok := col.(*array.String); ok {
-				v := c.Value(0)
-				req.AtValue = &v
-			}
-		}
-	}
-
-	return req, nil
-}
-
 // normalizeFunctionType converts DuckDB function type strings to our canonical values.
 func normalizeFunctionType(ft FunctionType) FunctionType {
 	switch ft {
@@ -1058,49 +986,6 @@ func normalizeFunctionType(ft FunctionType) FunctionType {
 		return FunctionTypeTableBuffering
 	default:
 		return ft
-	}
-}
-
-// resolveFunction looks up a function by name and type.
-// When multiple overloads exist, returns the first one (used for rehydration
-// where the bind call will re-resolve with proper overloading).
-func (w *Worker) resolveFunction(name string, ft FunctionType) (interface{}, error) {
-	ft = normalizeFunctionType(ft)
-	// Search in all registries
-	switch ft {
-	case FunctionTypeScalar:
-		if fns, ok := w.scalars[name]; ok && len(fns) > 0 {
-			return fns[0], nil
-		}
-	case FunctionTypeTable:
-		if fns, ok := w.tables[name]; ok && len(fns) > 0 {
-			return fns[0], nil
-		}
-		// Table-in-out functions are also registered as "table" type
-		if fns, ok := w.tableInOuts[name]; ok && len(fns) > 0 {
-			return fns[0], nil
-		}
-	case FunctionTypeAggregate:
-		// Table-in-out functions can be called as aggregate
-		if fns, ok := w.tableInOuts[name]; ok && len(fns) > 0 {
-			return fns[0], nil
-		}
-	}
-
-	// Try all registries
-	if fns, ok := w.scalars[name]; ok && len(fns) > 0 {
-		return fns[0], nil
-	}
-	if fns, ok := w.tables[name]; ok && len(fns) > 0 {
-		return fns[0], nil
-	}
-	if fns, ok := w.tableInOuts[name]; ok && len(fns) > 0 {
-		return fns[0], nil
-	}
-
-	return nil, &vgirpc.RpcError{
-		Type:    "ValueError",
-		Message: fmt.Sprintf("Unknown function: '%s'", name),
 	}
 }
 
@@ -1145,39 +1030,4 @@ func (r *GlobalInitResponseWire) ArrowSchema() *arrow.Schema {
 		{Name: "opaque_data", Type: arrow.BinaryTypes.Binary, Nullable: true},
 	}
 	return arrow.NewSchema(fields, nil)
-}
-
-// BuildGlobalInitBatch creates a 1-row RecordBatch from a GlobalInitResponseWire.
-func BuildGlobalInitBatch(resp *GlobalInitResponseWire) arrow.RecordBatch {
-	mem := memory.NewGoAllocator()
-	schema := resp.ArrowSchema()
-
-	execIDBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
-	defer execIDBuilder.Release()
-	execIDBuilder.Append(resp.ExecutionID)
-
-	maxWorkersBuilder := array.NewInt64Builder(mem)
-	defer maxWorkersBuilder.Release()
-	maxWorkersBuilder.Append(resp.MaxWorkers)
-
-	opaqueBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
-	defer opaqueBuilder.Release()
-	if resp.OpaqueData != nil {
-		opaqueBuilder.Append(*resp.OpaqueData)
-	} else {
-		opaqueBuilder.AppendNull()
-	}
-
-	cols := []arrow.Array{
-		execIDBuilder.NewArray(),
-		maxWorkersBuilder.NewArray(),
-		opaqueBuilder.NewArray(),
-	}
-	defer func() {
-		for _, c := range cols {
-			c.Release()
-		}
-	}()
-
-	return array.NewRecordBatch(schema, cols, 1)
 }
