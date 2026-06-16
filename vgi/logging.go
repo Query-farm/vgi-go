@@ -17,7 +17,9 @@ import (
 type LogFormat string
 
 const (
+	// LogFormatText selects the human-readable text log format.
 	LogFormatText LogFormat = "text"
+	// LogFormatJSON selects the structured JSON log format.
 	LogFormatJSON LogFormat = "json"
 )
 
@@ -100,6 +102,8 @@ type loggerFilterHandler struct {
 	loggerName string // captured via WithAttrs (slog.With("logger", X))
 }
 
+// Enabled reports whether the underlying handler is enabled for the level;
+// per-logger filtering happens later, in Handle.
 func (h *loggerFilterHandler) Enabled(ctx context.Context, lvl slog.Level) bool {
 	return h.base.Enabled(ctx, lvl)
 }
@@ -113,6 +117,8 @@ func (h *loggerFilterHandler) allow(name string) bool {
 	return false
 }
 
+// Handle drops the record when its logger name is not in the enabled set,
+// otherwise forwards it to the base handler.
 func (h *loggerFilterHandler) Handle(ctx context.Context, r slog.Record) error {
 	if h.enabled == nil {
 		return h.base.Handle(ctx, r)
@@ -136,6 +142,8 @@ func (h *loggerFilterHandler) Handle(ctx context.Context, r slog.Record) error {
 	return h.base.Handle(ctx, r)
 }
 
+// WithAttrs returns a copy capturing any "logger" attribute so the name is
+// known when filtering records.
 func (h *loggerFilterHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	name := h.loggerName
 	for _, a := range attrs {
@@ -146,6 +154,8 @@ func (h *loggerFilterHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &loggerFilterHandler{base: h.base.WithAttrs(attrs), enabled: h.enabled, loggerName: name}
 }
 
+// WithGroup returns a copy with the group applied to the base handler,
+// preserving the captured logger name and enabled set.
 func (h *loggerFilterHandler) WithGroup(name string) slog.Handler {
 	return &loggerFilterHandler{base: h.base.WithGroup(name), enabled: h.enabled, loggerName: h.loggerName}
 }
@@ -308,6 +318,8 @@ func (s *stringSliceFlag) String() string {
 	return strings.Join(s.values, ",")
 }
 
+// Set appends the comma-separated values in v, ignoring blank entries, to
+// implement flag.Value for repeatable string flags.
 func (s *stringSliceFlag) Set(v string) error {
 	for _, part := range strings.Split(v, ",") {
 		if part = strings.TrimSpace(part); part != "" {

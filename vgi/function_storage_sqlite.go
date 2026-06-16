@@ -310,10 +310,14 @@ func (s *sqliteStorage) stateDeleteKey(scope, ns, key []byte) error {
 // Worker state  (ns=worker, key=int64(worker_id))
 // ---------------------------------------------------------------------------
 
+// WorkerPut stores a worker's state under the execution's worker namespace,
+// keyed by worker ID.
 func (s *sqliteStorage) WorkerPut(executionID []byte, workerID int64, state []byte) error {
 	return s.statePut(executionID, nsWorker, int64Key(workerID), state)
 }
 
+// WorkerCollect drains and returns all worker states for the execution,
+// removing them from the store.
 func (s *sqliteStorage) WorkerCollect(executionID []byte) ([][]byte, error) {
 	rows, err := s.stateDrain(executionID, nsWorker)
 	if err != nil {
@@ -326,6 +330,8 @@ func (s *sqliteStorage) WorkerCollect(executionID []byte) ([][]byte, error) {
 	return out, nil
 }
 
+// WorkerScan returns all worker states for the execution without removing them,
+// ordered by worker ID.
 func (s *sqliteStorage) WorkerScan(executionID []byte) ([]WorkerStateEntry, error) {
 	rows, err := s.stateScan(executionID, nsWorker)
 	if err != nil {
@@ -342,10 +348,14 @@ func (s *sqliteStorage) WorkerScan(executionID []byte) ([]WorkerStateEntry, erro
 // Scan-worker state  (ns=scan_worker, key=stream_id)
 // ---------------------------------------------------------------------------
 
+// ScanWorkerPut stores a scan worker's state under the execution's scan-worker
+// namespace, keyed by stream ID.
 func (s *sqliteStorage) ScanWorkerPut(executionID, streamID, state []byte) error {
 	return s.statePut(executionID, nsScanWorker, streamID, state)
 }
 
+// ScanWorkerScan returns all scan-worker states for the execution without
+// removing them, ordered by stream ID.
 func (s *sqliteStorage) ScanWorkerScan(executionID []byte) ([]ScanWorkerStateEntry, error) {
 	rows, err := s.stateScan(executionID, nsScanWorker)
 	if err != nil {
@@ -362,6 +372,8 @@ func (s *sqliteStorage) ScanWorkerScan(executionID []byte) ([]ScanWorkerStateEnt
 // Work queue  (no registration: pop on empty/unknown returns nil, nil)
 // ---------------------------------------------------------------------------
 
+// QueuePush appends the given items to the execution's work queue and returns
+// the number pushed.
 func (s *sqliteStorage) QueuePush(executionID []byte, items [][]byte) (int, error) {
 	if len(items) == 0 {
 		return 0, nil
@@ -390,6 +402,8 @@ func (s *sqliteStorage) QueuePush(executionID []byte, items [][]byte) (int, erro
 	return count, nil
 }
 
+// QueuePop atomically removes and returns the next item from the execution's
+// work queue, or nil if the queue is empty.
 func (s *sqliteStorage) QueuePop(executionID []byte) ([]byte, error) {
 	// Single DELETE ... RETURNING claims the next item atomically. An empty or
 	// never-pushed queue both return (nil, nil) — there is no registration,
@@ -414,6 +428,8 @@ func (s *sqliteStorage) QueuePop(executionID []byte) ([]byte, error) {
 	return item, nil
 }
 
+// QueueClear removes all items from the execution's work queue and returns the
+// number removed.
 func (s *sqliteStorage) QueueClear(executionID []byte) (int, error) {
 	res, err := s.db.Exec(`DELETE FROM work_queue WHERE execution_id = ?`, executionID)
 	if err != nil {
@@ -427,6 +443,8 @@ func (s *sqliteStorage) QueueClear(executionID []byte) (int, error) {
 // Aggregate state  (ns=agg, key=int64(group_id))
 // ---------------------------------------------------------------------------
 
+// AggregateStateGet returns the aggregate state for each requested group ID,
+// omitting groups with no stored state.
 func (s *sqliteStorage) AggregateStateGet(executionID []byte, groupIDs []int64) ([]AggregateStateEntry, error) {
 	out := make([]AggregateStateEntry, len(groupIDs))
 	for i, gid := range groupIDs {
@@ -441,6 +459,8 @@ func (s *sqliteStorage) AggregateStateGet(executionID []byte, groupIDs []int64) 
 	return out, nil
 }
 
+// AggregateStatePut stores the aggregate state for each entry, keyed by group
+// ID, in a single transaction.
 func (s *sqliteStorage) AggregateStatePut(executionID []byte, entries []AggregateStateEntry) error {
 	if len(entries) == 0 {
 		return nil
@@ -465,6 +485,7 @@ func (s *sqliteStorage) AggregateStatePut(executionID []byte, entries []Aggregat
 	return tx.Commit()
 }
 
+// AggregateStateClear removes all aggregate state for the execution.
 func (s *sqliteStorage) AggregateStateClear(executionID []byte) error {
 	return s.stateDeleteNS(executionID, nsAgg)
 }
@@ -473,10 +494,14 @@ func (s *sqliteStorage) AggregateStateClear(executionID []byte) error {
 // Aggregate const args  (ns=agg_const, key=function_name)
 // ---------------------------------------------------------------------------
 
+// AggregateConstArgsPut stores the constant arguments for an aggregate
+// function, keyed by function name.
 func (s *sqliteStorage) AggregateConstArgsPut(executionID []byte, functionName string, args []byte) error {
 	return s.statePut(executionID, nsAggConst, []byte(functionName), args)
 }
 
+// AggregateConstArgsGet returns the constant arguments stored for an aggregate
+// function, or nil if none are stored.
 func (s *sqliteStorage) AggregateConstArgsGet(executionID []byte, functionName string) ([]byte, error) {
 	return s.stateGetOne(executionID, nsAggConst, []byte(functionName))
 }
@@ -485,18 +510,26 @@ func (s *sqliteStorage) AggregateConstArgsGet(executionID []byte, functionName s
 // Aggregate window partition  (ns=win, key=int64(partition_id))
 // ---------------------------------------------------------------------------
 
+// AggregateWindowPartitionPut stores window-partition data, keyed by partition
+// ID.
 func (s *sqliteStorage) AggregateWindowPartitionPut(executionID []byte, partitionID int64, data []byte) error {
 	return s.statePut(executionID, nsWin, int64Key(partitionID), data)
 }
 
+// AggregateWindowPartitionGet returns the window-partition data for the given
+// partition ID, or nil if none is stored.
 func (s *sqliteStorage) AggregateWindowPartitionGet(executionID []byte, partitionID int64) ([]byte, error) {
 	return s.stateGetOne(executionID, nsWin, int64Key(partitionID))
 }
 
+// AggregateWindowPartitionDelete removes the window-partition data for the
+// given partition ID.
 func (s *sqliteStorage) AggregateWindowPartitionDelete(executionID []byte, partitionID int64) error {
 	return s.stateDeleteKey(executionID, nsWin, int64Key(partitionID))
 }
 
+// AggregateWindowPartitionClear removes all window-partition data for the
+// execution.
 func (s *sqliteStorage) AggregateWindowPartitionClear(executionID []byte) error {
 	return s.stateDeleteNS(executionID, nsWin)
 }
@@ -505,6 +538,8 @@ func (s *sqliteStorage) AggregateWindowPartitionClear(executionID []byte) error 
 // Transaction state  (scope=transaction_opaque_data, ns=txn)
 // ---------------------------------------------------------------------------
 
+// TransactionStateGet returns the transaction-state value for each requested
+// key, with nil entries for keys that have no stored value.
 func (s *sqliteStorage) TransactionStateGet(transactionOpaqueData []byte, keys [][]byte) ([][]byte, error) {
 	out := make([][]byte, len(keys))
 	for i, k := range keys {
@@ -517,6 +552,8 @@ func (s *sqliteStorage) TransactionStateGet(transactionOpaqueData []byte, keys [
 	return out, nil
 }
 
+// TransactionStatePut stores each key/value item under the transaction scope in
+// a single transaction.
 func (s *sqliteStorage) TransactionStatePut(transactionOpaqueData []byte, items []TransactionStateItem) error {
 	if len(items) == 0 {
 		return nil
@@ -541,6 +578,7 @@ func (s *sqliteStorage) TransactionStatePut(transactionOpaqueData []byte, items 
 	return tx.Commit()
 }
 
+// TransactionStateClear removes all transaction state for the given scope.
 func (s *sqliteStorage) TransactionStateClear(transactionOpaqueData []byte) error {
 	return s.stateDeleteNS(transactionOpaqueData, nsTxn)
 }
@@ -603,14 +641,20 @@ func (s *sqliteStorage) StateLogClear(executionID []byte) error {
 // key. accumulate-style collections use this for cross-query persistence.
 // ---------------------------------------------------------------------------
 
+// AttachStatePut stores a value in attach state under the given scope,
+// namespace, and key.
 func (s *sqliteStorage) AttachStatePut(scope, ns, key, value []byte) error {
 	return s.statePut(scope, ns, key, value)
 }
 
+// AttachStateGet returns the attach-state value for the given scope, namespace,
+// and key, or nil if none is stored.
 func (s *sqliteStorage) AttachStateGet(scope, ns, key []byte) ([]byte, error) {
 	return s.stateGetOne(scope, ns, key)
 }
 
+// AttachStateScan returns all attach-state key/value pairs under the given
+// scope and namespace, ordered by key.
 func (s *sqliteStorage) AttachStateScan(scope, ns []byte) ([]AttachStateKV, error) {
 	rows, err := s.stateScan(scope, ns)
 	if err != nil {
@@ -623,16 +667,21 @@ func (s *sqliteStorage) AttachStateScan(scope, ns []byte) ([]AttachStateKV, erro
 	return out, nil
 }
 
+// AttachStateDeleteKey removes a single attach-state entry by scope, namespace,
+// and key.
 func (s *sqliteStorage) AttachStateDeleteKey(scope, ns, key []byte) error {
 	return s.stateDeleteKey(scope, ns, key)
 }
 
+// AttachStateDeleteNS removes all attach-state entries under the given scope and
+// namespace.
 func (s *sqliteStorage) AttachStateDeleteNS(scope, ns []byte) error {
 	return s.stateDeleteNS(scope, ns)
 }
 
 // ---------------------------------------------------------------------------
 
+// Close closes the underlying SQLite database. Safe to call multiple times.
 func (s *sqliteStorage) Close() error {
 	if s.db == nil {
 		return nil

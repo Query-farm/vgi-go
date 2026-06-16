@@ -17,14 +17,19 @@ import (
 
 // Local aliases so subtest code stays terse.
 type (
-	FunctionStorage      = vgi.FunctionStorage
-	WorkerStateEntry     = vgi.WorkerStateEntry
+	// FunctionStorage is a local alias for vgi.FunctionStorage so subtest code stays terse.
+	FunctionStorage = vgi.FunctionStorage
+	// WorkerStateEntry is a local alias for vgi.WorkerStateEntry so subtest code stays terse.
+	WorkerStateEntry = vgi.WorkerStateEntry
+	// ScanWorkerStateEntry is a local alias for vgi.ScanWorkerStateEntry so subtest code stays terse.
 	ScanWorkerStateEntry = vgi.ScanWorkerStateEntry
-	AggregateStateEntry  = vgi.AggregateStateEntry
+	// AggregateStateEntry is a local alias for vgi.AggregateStateEntry so subtest code stays terse.
+	AggregateStateEntry = vgi.AggregateStateEntry
+	// TransactionStateItem is a local alias for vgi.TransactionStateItem so subtest code stays terse.
 	TransactionStateItem = vgi.TransactionStateItem
 )
 
-// RunFunctionStorageConformance runs the full FunctionStorage behavioral
+// RunConformance runs the full FunctionStorage behavioral
 // contract against the provided factory. Each subtest gets a freshly
 // constructed storage instance (so backends needn't worry about test
 // isolation between subtests). The factory must return a storage that is

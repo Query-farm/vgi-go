@@ -61,6 +61,9 @@ type storageCleanupHook struct {
 	isHTTP      bool     // when true, skip storage cleanup (no reliable stream-end signal)
 }
 
+// OnDispatchStart begins tracking storage for an "init" dispatch: it snapshots the
+// previous cycle's pending keys as stale candidates and installs a storageTracker in
+// the context so keys touched during this dispatch can be recorded.
 func (h *storageCleanupHook) OnDispatchStart(ctx context.Context, info vgirpc.DispatchInfo) (context.Context, vgirpc.HookToken) {
 	if info.Method != "init" {
 		return ctx, nil
@@ -74,6 +77,9 @@ func (h *storageCleanupHook) OnDispatchStart(ctx context.Context, info vgirpc.Di
 	return ctx, tracker
 }
 
+// OnDispatchEnd cleans up stale storage entries that were not reused in this dispatch
+// and defers this dispatch's keys to the next cycle. In HTTP mode it does nothing,
+// since there is no reliable stream-end signal.
 func (h *storageCleanupHook) OnDispatchEnd(ctx context.Context, token vgirpc.HookToken, info vgirpc.DispatchInfo, stats *vgirpc.CallStatistics, err error) {
 	if h.isHTTP {
 		// In HTTP mode there is no reliable stream-end signal — each request
@@ -123,7 +129,7 @@ type SettingSpec struct {
 }
 
 // serializeSettingSpec serializes a SettingSpec to Arrow IPC bytes.
-// Format: RecordBatch with schema {name: string, description: string, type: binary, default_value: binary?}
+// Format: RecordBatch with schema {name: string, description: string, type: binary, default_value: binary?}.
 func serializeSettingSpec(spec SettingSpec) ([]byte, error) {
 	mem := memory.NewGoAllocator()
 	settingSchema := arrow.NewSchema([]arrow.Field{
@@ -201,7 +207,7 @@ func serializeSettingSpec(spec SettingSpec) ([]byte, error) {
 }
 
 // serializeSecretTypeSpec serializes a SecretTypeSpec to Arrow IPC bytes.
-// Format: RecordBatch with schema {name: string, description: string, parameters_schema: binary}
+// Format: RecordBatch with schema {name: string, description: string, parameters_schema: binary}.
 func serializeSecretTypeSpec(spec SecretTypeSpec) ([]byte, error) {
 	if spec.Schema == nil {
 		return nil, fmt.Errorf("secret type %q: Schema must not be nil", spec.Name)
@@ -761,7 +767,6 @@ func (w *Worker) RegisterCatalogView(schemaName string, view CatalogView) {
 	w.catalogViews[schemaName] = append(w.catalogViews[schemaName], view)
 }
 
-// RegisterCatalogMacro registers a macro in the given schema of the catalog.
 // RegisterCatalogSchema declares a schema that exists in the catalog but
 // whose tables are produced dynamically by a SchemaContentsHandler. Use
 // when there are no registered CatalogTable/View/Macro entries to "anchor"
@@ -770,6 +775,7 @@ func (w *Worker) RegisterCatalogSchema(name, comment string) {
 	w.dynamicSchemas[name] = comment
 }
 
+// RegisterCatalogMacro registers a macro in the given schema of the catalog.
 func (w *Worker) RegisterCatalogMacro(schemaName string, macro CatalogMacro) {
 	w.catalogMacros[schemaName] = append(w.catalogMacros[schemaName], macro)
 }

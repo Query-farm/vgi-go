@@ -56,14 +56,21 @@ type typedTableInOutAdapter[S any] struct {
 	onInit func(*InitParams) (*GlobalInitResponse, error)
 }
 
-func (a *typedTableInOutAdapter[S]) Name() string               { return a.inner.Name() }
-func (a *typedTableInOutAdapter[S]) Metadata() FunctionMetadata { return a.inner.Metadata() }
-func (a *typedTableInOutAdapter[S]) ArgumentSpecs() []ArgSpec   { return a.inner.ArgumentSpecs() }
+// Name forwards to the wrapped typed function's Name.
+func (a *typedTableInOutAdapter[S]) Name() string { return a.inner.Name() }
 
+// Metadata forwards to the wrapped typed function's Metadata.
+func (a *typedTableInOutAdapter[S]) Metadata() FunctionMetadata { return a.inner.Metadata() }
+
+// ArgumentSpecs forwards to the wrapped typed function's ArgumentSpecs.
+func (a *typedTableInOutAdapter[S]) ArgumentSpecs() []ArgSpec { return a.inner.ArgumentSpecs() }
+
+// OnBind forwards to the wrapped typed function's OnBind.
 func (a *typedTableInOutAdapter[S]) OnBind(params *BindParams) (*BindResponse, error) {
 	return a.inner.OnBind(params)
 }
 
+// OnInit invokes the optional OnIniter hook if present, otherwise returns DefaultInit.
 func (a *typedTableInOutAdapter[S]) OnInit(params *InitParams) (*GlobalInitResponse, error) {
 	if a.onInit != nil {
 		return a.onInit(params)
@@ -71,10 +78,14 @@ func (a *typedTableInOutAdapter[S]) OnInit(params *InitParams) (*GlobalInitRespo
 	return DefaultInit()
 }
 
+// NewState forwards to the wrapped typed function's NewState, returning the
+// typed state as an untyped interface{}.
 func (a *typedTableInOutAdapter[S]) NewState(params *ProcessParams) (interface{}, error) {
 	return a.inner.NewState(params)
 }
 
+// Process type-asserts the untyped state to *S and forwards to the wrapped
+// typed function's Process, returning an error on a state type mismatch.
 func (a *typedTableInOutAdapter[S]) Process(ctx context.Context, params *ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	s, ok := state.(*S)
 	if !ok {
@@ -83,6 +94,8 @@ func (a *typedTableInOutAdapter[S]) Process(ctx context.Context, params *Process
 	return a.inner.Process(ctx, params, s, batch, out)
 }
 
+// Finalize type-asserts the untyped state to *S and forwards to the wrapped
+// typed function's Finalize, returning an error on a state type mismatch.
 func (a *typedTableInOutAdapter[S]) Finalize(ctx context.Context, params *ProcessParams, state interface{}) ([]arrow.RecordBatch, error) {
 	s, ok := state.(*S)
 	if !ok {

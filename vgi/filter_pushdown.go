@@ -25,14 +25,22 @@ const supportedFilterVersion = "1"
 type FilterType string
 
 const (
-	FilterConstant  FilterType = "constant"
-	FilterIsNull    FilterType = "is_null"
+	// FilterConstant is a filter comparing a column against a constant value.
+	FilterConstant FilterType = "constant"
+	// FilterIsNull is a filter testing whether a column value is null.
+	FilterIsNull FilterType = "is_null"
+	// FilterIsNotNull is a filter testing whether a column value is not null.
 	FilterIsNotNull FilterType = "is_not_null"
-	FilterIn        FilterType = "in"
-	FilterJoinKeys  FilterType = "join_keys"
-	FilterAnd       FilterType = "and"
-	FilterOr        FilterType = "or"
-	FilterStruct    FilterType = "struct"
+	// FilterIn is a filter testing whether a column value is in a value set.
+	FilterIn FilterType = "in"
+	// FilterJoinKeys is a filter matching a column against dynamic join keys.
+	FilterJoinKeys FilterType = "join_keys"
+	// FilterAnd is a conjunction of child filters.
+	FilterAnd FilterType = "and"
+	// FilterOr is a disjunction of child filters.
+	FilterOr FilterType = "or"
+	// FilterStruct is a filter applied to a nested field of a struct column.
+	FilterStruct FilterType = "struct"
 	// FilterExpression is a recursive expression tree evaluated by the
 	// worker (typically via an embedded DuckDB connection).
 	FilterExpression FilterType = "expression"
@@ -42,11 +50,17 @@ const (
 type ComparisonOp string
 
 const (
+	// OpEQ is the equality (=) comparison operator.
 	OpEQ ComparisonOp = "eq"
+	// OpNE is the inequality (!=) comparison operator.
 	OpNE ComparisonOp = "ne"
+	// OpGT is the greater-than (>) comparison operator.
 	OpGT ComparisonOp = "gt"
+	// OpGE is the greater-than-or-equal (>=) comparison operator.
 	OpGE ComparisonOp = "ge"
+	// OpLT is the less-than (<) comparison operator.
 	OpLT ComparisonOp = "lt"
+	// OpLE is the less-than-or-equal (<=) comparison operator.
 	OpLE ComparisonOp = "le"
 )
 
@@ -119,10 +133,17 @@ type ConstantFilter struct {
 	Value       scalar.Scalar
 }
 
+// ColumnName returns the name of the column this filter applies to.
 func (f *ConstantFilter) ColumnName() string { return f.columnName }
-func (f *ConstantFilter) ColumnIndex() int   { return f.columnIndex }
-func (f *ConstantFilter) Type() FilterType   { return FilterConstant }
 
+// ColumnIndex returns the index of the column this filter applies to.
+func (f *ConstantFilter) ColumnIndex() int { return f.columnIndex }
+
+// Type returns the filter type identifier, FilterConstant.
+func (f *ConstantFilter) Type() FilterType { return FilterConstant }
+
+// Evaluate compares the column against the constant value using the
+// configured comparison operator, returning a boolean array of matches.
 func (f *ConstantFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	col := batch.Column(f.columnIndex)
 	funcName := f.Op.computeFuncName()
@@ -154,10 +175,17 @@ type IsNullFilter struct {
 	columnIndex int
 }
 
+// ColumnName returns the name of the column this filter applies to.
 func (f *IsNullFilter) ColumnName() string { return f.columnName }
-func (f *IsNullFilter) ColumnIndex() int   { return f.columnIndex }
-func (f *IsNullFilter) Type() FilterType   { return FilterIsNull }
 
+// ColumnIndex returns the index of the column this filter applies to.
+func (f *IsNullFilter) ColumnIndex() int { return f.columnIndex }
+
+// Type returns the filter type identifier, FilterIsNull.
+func (f *IsNullFilter) Type() FilterType { return FilterIsNull }
+
+// Evaluate tests each column value for null, returning a boolean array that
+// is true where the value is null.
 func (f *IsNullFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	col := batch.Column(f.columnIndex)
 	colDatum := compute.NewDatum(col)
@@ -182,10 +210,17 @@ type IsNotNullFilter struct {
 	columnIndex int
 }
 
+// ColumnName returns the name of the column this filter applies to.
 func (f *IsNotNullFilter) ColumnName() string { return f.columnName }
-func (f *IsNotNullFilter) ColumnIndex() int   { return f.columnIndex }
-func (f *IsNotNullFilter) Type() FilterType   { return FilterIsNotNull }
 
+// ColumnIndex returns the index of the column this filter applies to.
+func (f *IsNotNullFilter) ColumnIndex() int { return f.columnIndex }
+
+// Type returns the filter type identifier, FilterIsNotNull.
+func (f *IsNotNullFilter) Type() FilterType { return FilterIsNotNull }
+
+// Evaluate tests each column value for non-null, returning a boolean array
+// that is true where the value is not null.
 func (f *IsNotNullFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	col := batch.Column(f.columnIndex)
 	colDatum := compute.NewDatum(col)
@@ -212,10 +247,17 @@ type InFilter struct {
 	Values      arrow.Array
 }
 
+// ColumnName returns the name of the column this filter applies to.
 func (f *InFilter) ColumnName() string { return f.columnName }
-func (f *InFilter) ColumnIndex() int   { return f.columnIndex }
-func (f *InFilter) Type() FilterType   { return FilterIn }
 
+// ColumnIndex returns the index of the column this filter applies to.
+func (f *InFilter) ColumnIndex() int { return f.columnIndex }
+
+// Type returns the filter type identifier, FilterIn.
+func (f *InFilter) Type() FilterType { return FilterIn }
+
+// Evaluate tests whether each column value is a member of the filter's value
+// set, returning a boolean array that is true for matching rows.
 func (f *InFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	col := batch.Column(f.columnIndex)
 	colDatum := compute.NewDatum(col)
@@ -244,10 +286,17 @@ type AndFilter struct {
 	Children    []Filter
 }
 
+// ColumnName returns the name of the column this filter applies to.
 func (f *AndFilter) ColumnName() string { return f.columnName }
-func (f *AndFilter) ColumnIndex() int   { return f.columnIndex }
-func (f *AndFilter) Type() FilterType   { return FilterAnd }
 
+// ColumnIndex returns the index of the column this filter applies to.
+func (f *AndFilter) ColumnIndex() int { return f.columnIndex }
+
+// Type returns the filter type identifier, FilterAnd.
+func (f *AndFilter) Type() FilterType { return FilterAnd }
+
+// Evaluate combines its child filters with a Kleene logical AND, returning a
+// boolean array that is true only where every child passes.
 func (f *AndFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	if len(f.Children) == 0 {
 		return makeBoolArray(true, int(batch.NumRows())), nil
@@ -292,10 +341,17 @@ type OrFilter struct {
 	Children    []Filter
 }
 
+// ColumnName returns the name of the column this filter applies to.
 func (f *OrFilter) ColumnName() string { return f.columnName }
-func (f *OrFilter) ColumnIndex() int   { return f.columnIndex }
-func (f *OrFilter) Type() FilterType   { return FilterOr }
 
+// ColumnIndex returns the index of the column this filter applies to.
+func (f *OrFilter) ColumnIndex() int { return f.columnIndex }
+
+// Type returns the filter type identifier, FilterOr.
+func (f *OrFilter) Type() FilterType { return FilterOr }
+
+// Evaluate combines its child filters with a Kleene logical OR, returning a
+// boolean array that is true where at least one child passes.
 func (f *OrFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	if len(f.Children) == 0 {
 		return makeBoolArray(false, int(batch.NumRows())), nil
@@ -342,10 +398,17 @@ type StructFilter struct {
 	ChildFilter Filter
 }
 
+// ColumnName returns the name of the column this filter applies to.
 func (f *StructFilter) ColumnName() string { return f.columnName }
-func (f *StructFilter) ColumnIndex() int   { return f.columnIndex }
-func (f *StructFilter) Type() FilterType   { return FilterStruct }
 
+// ColumnIndex returns the index of the column this filter applies to.
+func (f *StructFilter) ColumnIndex() int { return f.columnIndex }
+
+// Type returns the filter type identifier, FilterStruct.
+func (f *StructFilter) Type() FilterType { return FilterStruct }
+
+// Evaluate applies the child filter to the nested struct field, returning the
+// boolean array produced by evaluating that field.
 func (f *StructFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
 	structCol, ok := batch.Column(f.columnIndex).(*array.Struct)
 	if !ok {

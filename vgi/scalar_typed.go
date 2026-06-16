@@ -146,10 +146,17 @@ func (a *typedScalarAdapter[A]) bindColumnArgs(target *A, batch arrow.RecordBatc
 	}
 }
 
-func (a *typedScalarAdapter[A]) Name() string               { return a.inner.Name() }
-func (a *typedScalarAdapter[A]) Metadata() FunctionMetadata { return a.inner.Metadata() }
-func (a *typedScalarAdapter[A]) ArgumentSpecs() []ArgSpec   { return a.specs }
+// Name forwards to the wrapped typed function's Name.
+func (a *typedScalarAdapter[A]) Name() string { return a.inner.Name() }
 
+// Metadata forwards to the wrapped typed function's Metadata.
+func (a *typedScalarAdapter[A]) Metadata() FunctionMetadata { return a.inner.Metadata() }
+
+// ArgumentSpecs returns the argument specs derived once from A's struct tags.
+func (a *typedScalarAdapter[A]) ArgumentSpecs() []ArgSpec { return a.specs }
+
+// OnBind binds the argument struct A from params.Args and forwards to the
+// wrapped typed function's OnBindTyped.
 func (a *typedScalarAdapter[A]) OnBind(params *BindParams) (*BindResponse, error) {
 	var args A
 	if err := BindArgs(params.Args, &args); err != nil {
@@ -158,6 +165,9 @@ func (a *typedScalarAdapter[A]) OnBind(params *BindParams) (*BindResponse, error
 	return a.inner.OnBindTyped(&args, params)
 }
 
+// Process binds the argument struct A from params.Args, populates its
+// column-arg fields from the input batch, and forwards to the wrapped typed
+// function's ProcessTyped.
 func (a *typedScalarAdapter[A]) Process(ctx context.Context, params *ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 	var args A
 	if err := BindArgs(params.Args, &args); err != nil {

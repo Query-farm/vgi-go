@@ -99,6 +99,8 @@ func (a *typedTableAdapter[S]) DynamicToString(ctx context.Context, params *Dyna
 	return nil, nil, nil
 }
 
+// Statistics delegates to the wrapped function's StatisticsProvider if it
+// implements one, returning nil otherwise.
 func (a *typedTableAdapter[S]) Statistics(params *BindParams) ([]ColumnStatistics, error) {
 	if a.statsProvider == nil {
 		return nil, nil
@@ -106,14 +108,21 @@ func (a *typedTableAdapter[S]) Statistics(params *BindParams) ([]ColumnStatistic
 	return a.statsProvider.Statistics(params)
 }
 
-func (a *typedTableAdapter[S]) Name() string               { return a.inner.Name() }
-func (a *typedTableAdapter[S]) Metadata() FunctionMetadata { return a.inner.Metadata() }
-func (a *typedTableAdapter[S]) ArgumentSpecs() []ArgSpec   { return a.inner.ArgumentSpecs() }
+// Name forwards to the wrapped typed function's Name.
+func (a *typedTableAdapter[S]) Name() string { return a.inner.Name() }
 
+// Metadata forwards to the wrapped typed function's Metadata.
+func (a *typedTableAdapter[S]) Metadata() FunctionMetadata { return a.inner.Metadata() }
+
+// ArgumentSpecs forwards to the wrapped typed function's ArgumentSpecs.
+func (a *typedTableAdapter[S]) ArgumentSpecs() []ArgSpec { return a.inner.ArgumentSpecs() }
+
+// OnBind forwards to the wrapped typed function's OnBind.
 func (a *typedTableAdapter[S]) OnBind(params *BindParams) (*BindResponse, error) {
 	return a.inner.OnBind(params)
 }
 
+// OnInit invokes the optional OnIniter hook if present, otherwise returns DefaultInit.
 func (a *typedTableAdapter[S]) OnInit(params *InitParams) (*GlobalInitResponse, error) {
 	if a.onInit != nil {
 		return a.onInit(params)
@@ -121,10 +130,14 @@ func (a *typedTableAdapter[S]) OnInit(params *InitParams) (*GlobalInitResponse, 
 	return DefaultInit()
 }
 
+// NewState forwards to the wrapped typed function's NewState, returning the
+// typed state as an untyped interface{}.
 func (a *typedTableAdapter[S]) NewState(params *ProcessParams) (interface{}, error) {
 	return a.inner.NewState(params)
 }
 
+// Process type-asserts the untyped state to *S and forwards to the wrapped
+// typed function's Process, returning an error on a state type mismatch.
 func (a *typedTableAdapter[S]) Process(ctx context.Context, params *ProcessParams, state interface{}, out *vgirpc.OutputCollector) error {
 	s, ok := state.(*S)
 	if !ok {
@@ -141,6 +154,7 @@ type typedTableAdapterWithCard[S any] struct {
 	card CardinalityEstimator
 }
 
+// Cardinality forwards to the wrapped CardinalityEstimator's Cardinality.
 func (a *typedTableAdapterWithCard[S]) Cardinality(params *BindParams) (*TableCardinality, error) {
 	return a.card.Cardinality(params)
 }

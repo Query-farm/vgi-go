@@ -16,6 +16,12 @@ linters:
     - ineffassign
     - staticcheck
     - unused
+    # Documentation quality (closest Go has to pydoclint): revive's "exported"
+    # rule enforces that exported symbols carry a doc comment; godot enforces
+    # that doc comments are punctuated sentences. Scoped to the public SDK
+    # below — examples stay relaxed.
+    - revive
+    - godot
   settings:
     staticcheck:
       checks:
@@ -26,14 +32,30 @@ linters:
         # Disabled: ST1003 ("var should be in camelCase") flags Arrow-style
         # snake_case wire field names used in serialized payloads.
         - "-ST1003"
+    revive:
+      # Only report rules we explicitly enable (no default rule set).
+      enable-all-rules: false
+      rules:
+        # Every exported symbol must have a doc comment starting with its name.
+        - name: exported
+          arguments: [checkPrivateReceivers]
+        # Package-level doc comment must be present and well-formed.
+        - name: package-comments
+    godot:
+      # Check top-level declaration comments (not every inline comment).
+      scope: declarations
   exclusions:
     rules:
       # Generated code — leave alone.
       - path: vgi/generated/
-        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, revive, godot]
       # Tests often defer Close/Cleanup without checking the error.
       - path: _test\.go
         linters: [errcheck]
+      # Doc-coverage rules apply only to the public SDK (vgi/). Examples,
+      # commands, internal helpers, and tests stay relaxed for now.
+      - path: (examples/|cmd/|internal/|_test\.go)
+        linters: [revive, godot]
 
 issues:
   # Show every issue per file (default: 3) — the suite is small enough.

@@ -442,10 +442,14 @@ func (s *Storage) executionClear(scopeID []byte) error {
 
 // Worker state → ns=worker, key = int64(worker_id).
 
+// WorkerPut stores a worker's state under the execution's worker namespace,
+// keyed by worker ID.
 func (s *Storage) WorkerPut(executionID []byte, workerID int64, state []byte) error {
 	return s.statePutMany(executionID, nsWorker, []kvPair{{key: int64Key(workerID), value: state}})
 }
 
+// WorkerCollect drains and returns all worker states for the execution,
+// removing them from the store.
 func (s *Storage) WorkerCollect(executionID []byte) ([][]byte, error) {
 	rows, err := s.statePaged("state_drain", executionID, nsWorker, newAttemptID())
 	if err != nil {
@@ -458,6 +462,8 @@ func (s *Storage) WorkerCollect(executionID []byte) ([][]byte, error) {
 	return out, nil
 }
 
+// WorkerScan returns all worker states for the execution without removing them,
+// ordered by worker ID.
 func (s *Storage) WorkerScan(executionID []byte) ([]vgi.WorkerStateEntry, error) {
 	rows, err := s.statePaged("state_scan", executionID, nsWorker, "")
 	if err != nil {
@@ -472,10 +478,14 @@ func (s *Storage) WorkerScan(executionID []byte) ([]vgi.WorkerStateEntry, error)
 
 // Scan-worker state → ns=scan_worker, key = stream_id.
 
+// ScanWorkerPut stores a scan worker's state under the execution's scan-worker
+// namespace, keyed by stream ID.
 func (s *Storage) ScanWorkerPut(executionID, streamID, state []byte) error {
 	return s.statePutMany(executionID, nsScanWorker, []kvPair{{key: streamID, value: state}})
 }
 
+// ScanWorkerScan returns all scan-worker states for the execution without
+// removing them, ordered by stream ID.
 func (s *Storage) ScanWorkerScan(executionID []byte) ([]vgi.ScanWorkerStateEntry, error) {
 	rows, err := s.statePaged("state_scan", executionID, nsScanWorker, "")
 	if err != nil {
@@ -492,6 +502,8 @@ func (s *Storage) ScanWorkerScan(executionID []byte) ([]vgi.ScanWorkerStateEntry
 // Work queue
 // ---------------------------------------------------------------------------
 
+// QueuePush appends the given items to the execution's work queue and returns
+// the number pushed.
 func (s *Storage) QueuePush(executionID []byte, items [][]byte) (int, error) {
 	enc := make([]string, len(items))
 	for i, item := range items {
@@ -510,6 +522,8 @@ func (s *Storage) QueuePush(executionID []byte, items [][]byte) (int, error) {
 	return resp.Count, nil
 }
 
+// QueuePop atomically removes and returns the next item from the execution's
+// work queue, or nil if the queue is empty.
 func (s *Storage) QueuePop(executionID []byte) ([]byte, error) {
 	var resp struct {
 		Item *string `json:"item"` // nullable on the wire
@@ -526,6 +540,8 @@ func (s *Storage) QueuePop(executionID []byte) ([]byte, error) {
 	return unb64(*resp.Item)
 }
 
+// QueueClear removes all items from the execution's work queue and returns the
+// number removed.
 func (s *Storage) QueueClear(executionID []byte) (int, error) {
 	var resp struct {
 		Cleared int `json:"cleared"`
@@ -543,6 +559,8 @@ func (s *Storage) QueueClear(executionID []byte) (int, error) {
 // Aggregate state → ns=agg, key = int64(group_id)
 // ---------------------------------------------------------------------------
 
+// AggregateStateGet returns the aggregate state for each requested group ID,
+// parallel to groupIDs (nil state for groups with none stored).
 func (s *Storage) AggregateStateGet(executionID []byte, groupIDs []int64) ([]vgi.AggregateStateEntry, error) {
 	if len(groupIDs) == 0 {
 		return []vgi.AggregateStateEntry{}, nil
@@ -562,6 +580,8 @@ func (s *Storage) AggregateStateGet(executionID []byte, groupIDs []int64) ([]vgi
 	return out, nil
 }
 
+// AggregateStatePut stores the aggregate state for each entry, keyed by group
+// ID.
 func (s *Storage) AggregateStatePut(executionID []byte, entries []vgi.AggregateStateEntry) error {
 	if len(entries) == 0 {
 		return nil
@@ -573,6 +593,7 @@ func (s *Storage) AggregateStatePut(executionID []byte, entries []vgi.AggregateS
 	return s.statePutMany(executionID, nsAgg, items)
 }
 
+// AggregateStateClear removes all aggregate state for the execution.
 func (s *Storage) AggregateStateClear(executionID []byte) error {
 	_, err := s.stateDelete(executionID, nsAgg, nil)
 	return err
@@ -580,10 +601,14 @@ func (s *Storage) AggregateStateClear(executionID []byte) error {
 
 // Aggregate const args → ns=agg_const, key = function_name.
 
+// AggregateConstArgsPut stores the constant arguments for an aggregate
+// function, keyed by function name.
 func (s *Storage) AggregateConstArgsPut(executionID []byte, functionName string, args []byte) error {
 	return s.statePutMany(executionID, nsAggConst, []kvPair{{key: []byte(functionName), value: args}})
 }
 
+// AggregateConstArgsGet returns the constant arguments stored for an aggregate
+// function, or nil if none are stored.
 func (s *Storage) AggregateConstArgsGet(executionID []byte, functionName string) ([]byte, error) {
 	values, err := s.stateGetMany(executionID, nsAggConst, [][]byte{[]byte(functionName)})
 	if err != nil {
@@ -594,10 +619,14 @@ func (s *Storage) AggregateConstArgsGet(executionID []byte, functionName string)
 
 // Aggregate window partition → ns=win, key = int64(partition_id).
 
+// AggregateWindowPartitionPut stores window-partition data, keyed by partition
+// ID.
 func (s *Storage) AggregateWindowPartitionPut(executionID []byte, partitionID int64, data []byte) error {
 	return s.statePutMany(executionID, nsWin, []kvPair{{key: int64Key(partitionID), value: data}})
 }
 
+// AggregateWindowPartitionGet returns the window-partition data for the given
+// partition ID, or nil if none is stored.
 func (s *Storage) AggregateWindowPartitionGet(executionID []byte, partitionID int64) ([]byte, error) {
 	values, err := s.stateGetMany(executionID, nsWin, [][]byte{int64Key(partitionID)})
 	if err != nil {
@@ -606,11 +635,15 @@ func (s *Storage) AggregateWindowPartitionGet(executionID []byte, partitionID in
 	return values[0], nil
 }
 
+// AggregateWindowPartitionDelete removes the window-partition data for the
+// given partition ID.
 func (s *Storage) AggregateWindowPartitionDelete(executionID []byte, partitionID int64) error {
 	_, err := s.stateDelete(executionID, nsWin, [][]byte{int64Key(partitionID)})
 	return err
 }
 
+// AggregateWindowPartitionClear removes all window-partition data for the
+// execution.
 func (s *Storage) AggregateWindowPartitionClear(executionID []byte) error {
 	_, err := s.stateDelete(executionID, nsWin, nil)
 	return err
@@ -620,10 +653,13 @@ func (s *Storage) AggregateWindowPartitionClear(executionID []byte) error {
 // Transaction state → scope = transaction_opaque_data, ns=txn
 // ---------------------------------------------------------------------------
 
+// TransactionStateGet returns the transaction-state value for each requested
+// key, with nil entries for keys that have no stored value.
 func (s *Storage) TransactionStateGet(transactionOpaqueData []byte, keys [][]byte) ([][]byte, error) {
 	return s.stateGetMany(transactionOpaqueData, nsTxn, keys)
 }
 
+// TransactionStatePut stores each key/value item under the transaction scope.
 func (s *Storage) TransactionStatePut(transactionOpaqueData []byte, items []vgi.TransactionStateItem) error {
 	if len(items) == 0 {
 		return nil
@@ -635,6 +671,7 @@ func (s *Storage) TransactionStatePut(transactionOpaqueData []byte, items []vgi.
 	return s.statePutMany(transactionOpaqueData, nsTxn, pairs)
 }
 
+// TransactionStateClear removes all transaction state for the given scope.
 func (s *Storage) TransactionStateClear(transactionOpaqueData []byte) error {
 	// Only ns=txn lives under a transaction scope, so a scope-wide clear is
 	// equivalent and matches vgi-python's TransactionBoundStorage.clear().
@@ -645,6 +682,8 @@ func (s *Storage) TransactionStateClear(transactionOpaqueData []byte) error {
 // State log (StateLogStorage) → ns=log; buffering functions stash batches here
 // ---------------------------------------------------------------------------
 
+// StateAppend appends a value to the (executionID, key) log and returns the new
+// monotonic ordinal.
 func (s *Storage) StateAppend(executionID, key, value []byte) (int64, error) {
 	var resp struct {
 		Ordinal int64 `json:"ordinal"`
@@ -661,6 +700,8 @@ func (s *Storage) StateAppend(executionID, key, value []byte) (int64, error) {
 	return resp.Ordinal, nil
 }
 
+// StateLogScan returns log entries for (executionID, key) with id > afterID,
+// ordered by id. limit <= 0 means no limit.
 func (s *Storage) StateLogScan(executionID, key []byte, afterID int64, limit int) ([]vgi.StateLogEntry, error) {
 	body := map[string]any{
 		"scope_id": b64(executionID),
@@ -691,6 +732,7 @@ func (s *Storage) StateLogScan(executionID, key []byte, afterID int64, limit int
 	return out, nil
 }
 
+// StateLogClear removes all state-log rows for the execution.
 func (s *Storage) StateLogClear(executionID []byte) error {
 	// No log-only clear endpoint; execution_clear wipes state + log for the
 	// scope. StateLogClear is a teardown call (buffering destructor), so the

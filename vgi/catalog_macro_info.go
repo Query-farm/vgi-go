@@ -18,8 +18,10 @@ import (
 type MacroType string
 
 const (
+	// MacroTypeScalar marks a scalar macro (expands to a SQL expression).
 	MacroTypeScalar MacroType = "scalar"
-	MacroTypeTable  MacroType = "table"
+	// MacroTypeTable marks a table macro (expands to a SQL query).
+	MacroTypeTable MacroType = "table"
 )
 
 // macroKindFilter maps a schema_contents_macros "type" filter value (as sent

@@ -13,9 +13,13 @@ type TypeBoundPredicate func(arrow.DataType) bool
 type FunctionType string
 
 const (
-	FunctionTypeScalar         FunctionType = "scalar"
-	FunctionTypeTable          FunctionType = "table"
-	FunctionTypeAggregate      FunctionType = "aggregate"
+	// FunctionTypeScalar marks a scalar (row-to-row) function.
+	FunctionTypeScalar FunctionType = "scalar"
+	// FunctionTypeTable marks a table function (row generator).
+	FunctionTypeTable FunctionType = "table"
+	// FunctionTypeAggregate marks an aggregate function.
+	FunctionTypeAggregate FunctionType = "aggregate"
+	// FunctionTypeTableBuffering marks a table-buffering (sink) function.
 	FunctionTypeTableBuffering FunctionType = "table_buffering"
 )
 
@@ -23,8 +27,14 @@ const (
 type FunctionStability string
 
 const (
-	StabilityConsistent            FunctionStability = "CONSISTENT"
-	StabilityVolatile              FunctionStability = "VOLATILE"
+	// StabilityConsistent marks a function whose result never changes for the
+	// same inputs (safe to cache and fold).
+	StabilityConsistent FunctionStability = "CONSISTENT"
+	// StabilityVolatile marks a function whose result may change on every call
+	// (e.g. random or time-dependent).
+	StabilityVolatile FunctionStability = "VOLATILE"
+	// StabilityConsistentWithinQuery marks a function whose result is consistent
+	// for the duration of a single query but may change between queries.
 	StabilityConsistentWithinQuery FunctionStability = "CONSISTENT_WITHIN_QUERY"
 )
 
@@ -80,15 +90,15 @@ const (
 	// picks its default.
 	OrderPreservationUnspecified OrderPreservation = ""
 
-	// OrderPreservationPreservesOrder: output rows are in the same order as
+	// OrderPreservationPreservesOrder means output rows are in the same order as
 	// input rows (DuckDB INSERTION_ORDER).
 	OrderPreservationPreservesOrder OrderPreservation = "PRESERVES_ORDER"
 
-	// OrderPreservationNoOrderGuarantee: output order is undefined; DuckDB may
+	// OrderPreservationNoOrderGuarantee means output order is undefined; DuckDB may
 	// freely reorder (DuckDB NO_ORDER).
 	OrderPreservationNoOrderGuarantee OrderPreservation = "NO_ORDER_GUARANTEE"
 
-	// OrderPreservationFixedOrder: output is in a fixed mandatory order; DuckDB
+	// OrderPreservationFixedOrder means output is in a fixed mandatory order; DuckDB
 	// serializes the pipeline to a single worker to preserve it (FIXED_ORDER).
 	OrderPreservationFixedOrder OrderPreservation = "FIXED_ORDER"
 )
@@ -98,10 +108,10 @@ const (
 type OrderDependence string
 
 const (
-	// OrderDependenceDependent: result changes with row order (FIRST, LAST, LISTAGG).
+	// OrderDependenceDependent means the result changes with row order (FIRST, LAST, LISTAGG).
 	OrderDependenceDependent OrderDependence = "ORDER_DEPENDENT"
 
-	// OrderDependenceNotDependent: result is order-independent (SUM, COUNT).
+	// OrderDependenceNotDependent means the result is order-independent (SUM, COUNT).
 	OrderDependenceNotDependent OrderDependence = "NOT_ORDER_DEPENDENT"
 )
 
@@ -110,10 +120,10 @@ const (
 type DistinctDependence string
 
 const (
-	// DistinctDependenceDependent: DISTINCT changes the result (COUNT DISTINCT).
+	// DistinctDependenceDependent means DISTINCT changes the result (COUNT DISTINCT).
 	DistinctDependenceDependent DistinctDependence = "DISTINCT_DEPENDENT"
 
-	// DistinctDependenceNotDependent: DISTINCT has no effect (MAX, MIN).
+	// DistinctDependenceNotDependent means DISTINCT has no effect (MAX, MIN).
 	DistinctDependenceNotDependent DistinctDependence = "NOT_DISTINCT_DEPENDENT"
 )
 

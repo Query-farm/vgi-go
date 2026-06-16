@@ -116,6 +116,8 @@ type ScalarExchangeState struct {
 	params *ProcessParams // transient
 }
 
+// Exchange processes one input batch through the scalar function and emits the
+// resulting batch to the output collector.
 func (s *ScalarExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
 	s.params.Auth = callCtx.Auth
 	result, err := s.fn.Process(ctx, s.params, input)
@@ -136,6 +138,9 @@ type TableProducerState struct {
 	autoApply      *PushdownFilters // transient
 }
 
+// Produce advances the table function by one tick, applying any dynamic filter
+// update carried on the tick's metadata and emitting produced batches to the
+// output collector.
 func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
 	s.params.Auth = callCtx.Auth
 	// Decode any dynamic filter update carried on this tick's custom metadata.
@@ -228,6 +233,8 @@ type TableInOutExchangeState struct {
 	autoApply      *PushdownFilters   // transient
 }
 
+// Exchange transforms one input batch through the table-in-out function and emits
+// the resulting batches to the output collector.
 func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
 	s.params.Auth = callCtx.Auth
 	// Projection pushdown: a function declaring projection_pushdown emits a
@@ -277,6 +284,8 @@ type FinalizeProducerState struct {
 	batches  []arrow.RecordBatch // transient (deserialized from BatchIPC)
 }
 
+// Produce emits the next buffered finalize batch to the output collector, finishing
+// the stream once all batches have been emitted.
 func (s *FinalizeProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
 	if s.BatchIdx >= len(s.batches) {
 		s.batches = nil
@@ -1023,6 +1032,7 @@ func (w *Worker) getArgSpecs(fn interface{}) []ArgSpec {
 // ArrowSerializable implementation for GlobalInitResponseWire
 // ---------------------------------------------------------------------------
 
+// ArrowSchema returns the Arrow schema used to serialize a GlobalInitResponseWire.
 func (r *GlobalInitResponseWire) ArrowSchema() *arrow.Schema {
 	fields := []arrow.Field{
 		{Name: "execution_id", Type: arrow.BinaryTypes.Binary},

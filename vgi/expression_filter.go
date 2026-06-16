@@ -39,9 +39,14 @@ type scalarValueRef struct {
 	wkb   bool   // true if the value comes from a geoarrow.wkb column
 }
 
+// ColumnName returns the name of the column the filter applies to.
 func (f *ExpressionFilter) ColumnName() string { return f.columnName }
-func (f *ExpressionFilter) ColumnIndex() int   { return f.columnIndex }
-func (f *ExpressionFilter) Type() FilterType   { return FilterExpression }
+
+// ColumnIndex returns the index of the column the filter applies to.
+func (f *ExpressionFilter) ColumnIndex() int { return f.columnIndex }
+
+// Type returns the filter type, which is always FilterExpression.
+func (f *ExpressionFilter) Type() FilterType { return FilterExpression }
 
 // Evaluate renders the expression tree to SQL, feeds the input batch to a
 // local DuckDB, and runs SELECT (<expr>)::BOOLEAN. Returns a Boolean array

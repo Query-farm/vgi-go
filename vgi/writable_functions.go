@@ -58,8 +58,11 @@ type writableScanFn struct{ w *Worker }
 
 var _ TypedTableFunc[writableScanState] = (*writableScanFn)(nil)
 
+// Name returns the registered function name for the writable scan function.
 func (f *writableScanFn) Name() string { return writableScanFunctionName }
 
+// Metadata reports the function as a volatile, internal writable table function
+// with projection pushdown enabled.
 func (f *writableScanFn) Metadata() FunctionMetadata {
 	return FunctionMetadata{
 		Description:        "Generic scan over a writable VGI table",
@@ -69,6 +72,8 @@ func (f *writableScanFn) Metadata() FunctionMetadata {
 	}
 }
 
+// ArgumentSpecs declares the constant schema_name and table_name arguments
+// identifying the writable table to scan.
 func (f *writableScanFn) ArgumentSpecs() []ArgSpec {
 	return []ArgSpec{
 		{Name: "schema_name", Position: 0, ArrowType: "varchar", Doc: "Schema name", IsConst: true},
@@ -76,6 +81,8 @@ func (f *writableScanFn) ArgumentSpecs() []ArgSpec {
 	}
 }
 
+// OnBind looks up the target table and binds the output to its schema plus a
+// synthesized row-ID column.
 func (f *writableScanFn) OnBind(params *BindParams) (*BindResponse, error) {
 	schemaName, _ := params.Args.GetScalarString(0)
 	tableName, _ := params.Args.GetScalarString(1)
@@ -86,6 +93,8 @@ func (f *writableScanFn) OnBind(params *BindParams) (*BindResponse, error) {
 	return BindSchema(withSynthesizedRowID(t.schema))
 }
 
+// Cardinality estimates the result size from the table's stored row count,
+// returning zero if the table cannot be found.
 func (f *writableScanFn) Cardinality(params *BindParams) (*TableCardinality, error) {
 	schemaName, _ := params.Args.GetScalarString(0)
 	tableName, _ := params.Args.GetScalarString(1)
@@ -104,10 +113,13 @@ type writableScanState struct {
 	Emitted bool // exported for gob round-trip via the framework
 }
 
+// NewState creates the per-scan state tracking whether rows have been emitted.
 func (f *writableScanFn) NewState(params *ProcessParams) (*writableScanState, error) {
 	return &writableScanState{}, nil
 }
 
+// Process emits all stored rows once as a single batch, honoring projection
+// pushdown, then finishes the stream.
 func (f *writableScanFn) Process(ctx context.Context, params *ProcessParams, state *writableScanState, out *vgirpc.OutputCollector) error {
 	if state.Emitted {
 		out.Finish()
@@ -196,21 +208,35 @@ func writableArgumentSpecs() []ArgSpec {
 
 type writableInsertFn struct{ w *Worker }
 
+// Name returns the registered function name for the writable insert function.
 func (f *writableInsertFn) Name() string { return writableInsertFunctionName }
+
+// Metadata reports the function as a volatile, internal writable table function.
 func (f *writableInsertFn) Metadata() FunctionMetadata {
 	return writableMetadata("Generic INSERT into writable VGI table")
 }
+
+// ArgumentSpecs declares the constant schema_name and table_name arguments.
 func (f *writableInsertFn) ArgumentSpecs() []ArgSpec { return writableArgumentSpecs() }
+
+// OnBind binds the output to a single-column "rows_inserted" count schema.
 func (f *writableInsertFn) OnBind(p *BindParams) (*BindResponse, error) {
 	return BindSchema(writableCountSchema("rows_inserted"))
 }
+
+// OnInit limits processing to a single worker to serialize mutations.
 func (f *writableInsertFn) OnInit(p *InitParams) (*GlobalInitResponse, error) {
 	return &GlobalInitResponse{MaxWorkers: 1}, nil
 }
+
+// NewState creates the per-call state holding the target schema and table names.
 func (f *writableInsertFn) NewState(p *ProcessParams) (interface{}, error) {
 	schemaName, tableName := writableArgs(p.Args)
 	return &writableMutateState{SchemaName: schemaName, TableName: tableName}, nil
 }
+
+// Process appends the incoming batch rows to the table and emits the inserted
+// row count.
 func (f *writableInsertFn) Process(ctx context.Context, p *ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	st := state.(*writableMutateState)
 	c, _, err := f.w.findWritableTable(st.SchemaName, st.TableName)
@@ -229,6 +255,8 @@ func (f *writableInsertFn) Process(ctx context.Context, p *ProcessParams, state 
 	defer result.Release()
 	return out.Emit(result)
 }
+
+// Finalize emits no additional batches; per-batch counts are returned inline.
 func (f *writableInsertFn) Finalize(ctx context.Context, p *ProcessParams, state interface{}) ([]arrow.RecordBatch, error) {
 	return nil, nil
 }
@@ -239,21 +267,35 @@ func (f *writableInsertFn) Finalize(ctx context.Context, p *ProcessParams, state
 
 type writableUpdateFn struct{ w *Worker }
 
+// Name returns the registered function name for the writable update function.
 func (f *writableUpdateFn) Name() string { return writableUpdateFunctionName }
+
+// Metadata reports the function as a volatile, internal writable table function.
 func (f *writableUpdateFn) Metadata() FunctionMetadata {
 	return writableMetadata("Generic UPDATE on writable VGI table")
 }
+
+// ArgumentSpecs declares the constant schema_name and table_name arguments.
 func (f *writableUpdateFn) ArgumentSpecs() []ArgSpec { return writableArgumentSpecs() }
+
+// OnBind binds the output to a single-column "rows_updated" count schema.
 func (f *writableUpdateFn) OnBind(p *BindParams) (*BindResponse, error) {
 	return BindSchema(writableCountSchema("rows_updated"))
 }
+
+// OnInit limits processing to a single worker to serialize mutations.
 func (f *writableUpdateFn) OnInit(p *InitParams) (*GlobalInitResponse, error) {
 	return &GlobalInitResponse{MaxWorkers: 1}, nil
 }
+
+// NewState creates the per-call state holding the target schema and table names.
 func (f *writableUpdateFn) NewState(p *ProcessParams) (interface{}, error) {
 	schemaName, tableName := writableArgs(p.Args)
 	return &writableMutateState{SchemaName: schemaName, TableName: tableName}, nil
 }
+
+// Process applies the incoming batch rows as updates to the table and emits the
+// updated row count.
 func (f *writableUpdateFn) Process(ctx context.Context, p *ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	st := state.(*writableMutateState)
 	c, _, err := f.w.findWritableTable(st.SchemaName, st.TableName)
@@ -273,6 +315,8 @@ func (f *writableUpdateFn) Process(ctx context.Context, p *ProcessParams, state 
 	defer result.Release()
 	return out.Emit(result)
 }
+
+// Finalize emits no additional batches; per-batch counts are returned inline.
 func (f *writableUpdateFn) Finalize(ctx context.Context, p *ProcessParams, state interface{}) ([]arrow.RecordBatch, error) {
 	return nil, nil
 }
@@ -283,21 +327,35 @@ func (f *writableUpdateFn) Finalize(ctx context.Context, p *ProcessParams, state
 
 type writableDeleteFn struct{ w *Worker }
 
+// Name returns the registered function name for the writable delete function.
 func (f *writableDeleteFn) Name() string { return writableDeleteFunctionName }
+
+// Metadata reports the function as a volatile, internal writable table function.
 func (f *writableDeleteFn) Metadata() FunctionMetadata {
 	return writableMetadata("Generic DELETE on writable VGI table")
 }
+
+// ArgumentSpecs declares the constant schema_name and table_name arguments.
 func (f *writableDeleteFn) ArgumentSpecs() []ArgSpec { return writableArgumentSpecs() }
+
+// OnBind binds the output to a single-column "rows_deleted" count schema.
 func (f *writableDeleteFn) OnBind(p *BindParams) (*BindResponse, error) {
 	return BindSchema(writableCountSchema("rows_deleted"))
 }
+
+// OnInit limits processing to a single worker to serialize mutations.
 func (f *writableDeleteFn) OnInit(p *InitParams) (*GlobalInitResponse, error) {
 	return &GlobalInitResponse{MaxWorkers: 1}, nil
 }
+
+// NewState creates the per-call state holding the target schema and table names.
 func (f *writableDeleteFn) NewState(p *ProcessParams) (interface{}, error) {
 	schemaName, tableName := writableArgs(p.Args)
 	return &writableMutateState{SchemaName: schemaName, TableName: tableName}, nil
 }
+
+// Process deletes rows identified by their synthesized row IDs in the incoming
+// batch and emits the deleted row count.
 func (f *writableDeleteFn) Process(ctx context.Context, p *ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	st := state.(*writableMutateState)
 	c, _, err := f.w.findWritableTable(st.SchemaName, st.TableName)
@@ -323,6 +381,8 @@ func (f *writableDeleteFn) Process(ctx context.Context, p *ProcessParams, state 
 	defer result.Release()
 	return out.Emit(result)
 }
+
+// Finalize emits no additional batches; per-batch counts are returned inline.
 func (f *writableDeleteFn) Finalize(ctx context.Context, p *ProcessParams, state interface{}) ([]arrow.RecordBatch, error) {
 	return nil, nil
 }
