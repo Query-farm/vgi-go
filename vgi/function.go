@@ -246,6 +246,9 @@ type FunctionMetadata struct {
 	AutoApplyFilters bool
 	// Categories is a list of classification tags for the function.
 	Categories []string
+	// Examples lists usage examples surfaced in the catalog's FunctionInfo.
+	// Each example carries SQL, a description, and an optional expected output.
+	Examples []CatalogExample
 	// ReturnType is the static return type for scalar functions.
 	// When set, the catalog registers this concrete type instead of ANY.
 	// Leave nil for functions with dynamic return types (resolved at bind time).

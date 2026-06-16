@@ -19,9 +19,21 @@ type doubleArgs struct {
 func (*DoubleFunction) Name() string { return "double" }
 
 func (*DoubleFunction) Metadata() vgi.FunctionMetadata {
+	four := "4"
 	return vgi.FunctionMetadata{
 		Description: "Doubles numeric values",
 		Stability:   vgi.StabilityConsistent,
+		Examples: []vgi.CatalogExample{
+			{
+				SQL:            "SELECT double(2)",
+				Description:    "Doubles an integer literal",
+				ExpectedOutput: &four,
+			},
+			{
+				SQL:         "SELECT double(value) FROM numbers",
+				Description: "Doubles each value in a column",
+			},
+		},
 	}
 }
 

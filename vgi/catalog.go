@@ -498,6 +498,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			NullHandling:    meta.NullHandling,
 			Description:     meta.Description,
 			Categories:      meta.Categories,
+			Examples:        meta.Examples,
 			ArgSchema:       BuildArgSchema(specs),
 			OutputSchema:    arrow.NewSchema(nil, nil), // empty, resolved at bind time
 			RequiredSecrets: meta.RequiredSecrets,
