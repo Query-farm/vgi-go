@@ -11,6 +11,7 @@ import (
 	"log"
 
 	"github.com/Query-farm/vgi-go/examples/simple_writable"
+	"github.com/Query-farm/vgi-go/internal/covflush"
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-go/vgi/storage/resolve"
 )
@@ -23,9 +24,8 @@ func main() {
 		log.Fatalf("logging flags: %v", err)
 	}
 
-	// Snapshot coverage periodically during integration coverage runs (no-op
-	// otherwise); see cmd/vgi-example-worker/coverage.go for the rationale.
-	startCoverageFlusher()
+	// Flush coverage on SIGTERM (+ periodic) during integration coverage runs.
+	covflush.Start()
 
 	// Per-attach row storage uses AttachStore, which needs a FunctionStorage
 	// backend (SQLite by default; honors VGI_WORKER_SHARED_STORAGE).

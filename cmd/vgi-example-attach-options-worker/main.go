@@ -12,6 +12,7 @@ import (
 	"log"
 
 	"github.com/Query-farm/vgi-go/examples/attach_options"
+	"github.com/Query-farm/vgi-go/internal/covflush"
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
@@ -23,6 +24,7 @@ func main() {
 	if err := logFlags.Apply(); err != nil {
 		log.Fatalf("logging flags: %v", err)
 	}
+	covflush.Start()
 
 	w := vgi.NewWorker(
 		vgi.WithCatalogName(attach_options.CatalogName),

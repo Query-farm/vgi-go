@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/Query-farm/vgi-go/internal/covflush"
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
@@ -39,6 +40,7 @@ func main() {
 	if err := logFlags.Apply(); err != nil {
 		log.Fatalf("logging flags: %v", err)
 	}
+	covflush.Start()
 
 	dvs := dataVersionSpec
 	impl := implementationVersion

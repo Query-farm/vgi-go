@@ -23,6 +23,7 @@ import (
 	"sort"
 
 	ex "github.com/Query-farm/vgi-go/examples/versioned_tables"
+	"github.com/Query-farm/vgi-go/internal/covflush"
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -72,6 +73,7 @@ func main() {
 	if err := logFlags.Apply(); err != nil {
 		log.Fatalf("logging flags: %v", err)
 	}
+	covflush.Start()
 
 	implDefault := defaultImplementationVersion
 	dvs := dataVersionSpec

@@ -16,6 +16,7 @@ import (
 	"github.com/Query-farm/vgi-go/examples/all"
 	"github.com/Query-farm/vgi-go/examples/schema_reconcile"
 	"github.com/Query-farm/vgi-go/examples/table"
+	"github.com/Query-farm/vgi-go/internal/covflush"
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-go/vgi/storage/resolve"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -46,9 +47,9 @@ func main() {
 		log.Fatalf("logging flags: %v", err)
 	}
 
-	// Snapshot coverage periodically during integration coverage runs (no-op
-	// otherwise); the harness kills this long-lived worker without a clean exit.
-	startCoverageFlusher()
+	// Flush coverage on SIGTERM (+ periodic) during integration coverage runs
+	// (no-op otherwise); the harness kills pooled/long-lived workers with SIGTERM.
+	covflush.Start()
 
 	if *unixPath != "" && *httpMode {
 		log.Fatal("--unix and --http are mutually exclusive")
