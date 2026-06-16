@@ -30,7 +30,7 @@ func tableArg(args *vgi.Arguments) (string, error) {
 // wantReturning reports whether the bound output schema is the user-row schema
 // (RETURNING requested) rather than the (count) schema.
 func wantReturning(out *arrow.Schema) bool {
-	return !(out != nil && out.NumFields() == 1 && out.Field(0).Name == "count")
+	return out == nil || out.NumFields() != 1 || out.Field(0).Name != "count"
 }
 
 // returnChunks decodes write_options.return_chunks (a serialized 1-row batch
