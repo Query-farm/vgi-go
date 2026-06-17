@@ -309,7 +309,7 @@ func insertRows(params *vgi.ProcessParams, batch arrow.RecordBatch) ([]rowMap, e
 	for i, f := range us.Fields() {
 		colNames[i] = f.Name
 	}
-	base, err := nextRowid(st, table)
+	base, err := allocRowids(st, table, batch.NumRows())
 	if err != nil {
 		return nil, err
 	}

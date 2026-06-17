@@ -14,12 +14,13 @@ import (
 //
 // A collection's rows live as append-only *segments* under a per-collection
 // namespace, keyed by ingest time so a scan returns them oldest-first. The
-// pinned output schema lives under a shared meta namespace keyed by name. This
-// mirrors vgi-python's accumulate fixture, minus the separate row counter (row
-// counts are derived by scanning the few per-call segments — cheap for the
-// sizes these functions see).
+// pinned output schema lives under a shared meta namespace keyed by name, and an
+// atomic per-collection counter tracks the live row count so reads, TTL and
+// max-rows eviction don't have to scan-and-deserialize every segment. Mirrors
+// vgi-python's accumulate fixture.
 var (
 	metaNS      = []byte("acc.meta")
+	countNS     = []byte("acc.count")
 	segNSPrefix = []byte("acc.seg:")
 )
 
@@ -45,13 +46,6 @@ func segKey(callTsMicros int64) []byte {
 	return k
 }
 
-func segKeyTimeMicros(key []byte) int64 {
-	if len(key) < tsKeyBytes {
-		return 0
-	}
-	return int64(binary.BigEndian.Uint64(key[:tsKeyBytes]))
-}
-
 // getSchema returns the pinned output schema for name, or (nil, nil) if absent.
 func getSchema(st *vgi.AttachStore, name string) (*arrow.Schema, error) {
 	blob, err := st.Get(metaNS, []byte(name))
@@ -70,13 +64,18 @@ func putSchema(st *vgi.AttachStore, name string, schema *arrow.Schema) error {
 	return st.Put(metaNS, []byte(name), b)
 }
 
-// appendSegment stores one time-keyed output segment for name.
+// appendSegment stores one time-keyed output segment for name and bumps the
+// collection's live row counter.
 func appendSegment(st *vgi.AttachStore, name string, batch arrow.RecordBatch, callTsMicros int64) error {
 	ipc, err := vgi.SerializeRecordBatch(batch)
 	if err != nil {
 		return err
 	}
-	return st.Put(segNS(name), segKey(callTsMicros), ipc)
+	if err := st.Put(segNS(name), segKey(callTsMicros), ipc); err != nil {
+		return err
+	}
+	_, err = st.CounterAdd(countNS, []byte(name), batch.NumRows())
+	return err
 }
 
 // readCollection returns every stored segment for name, oldest-first.
@@ -99,91 +98,88 @@ func readCollection(st *vgi.AttachStore, name string) ([]arrow.RecordBatch, erro
 	return out, nil
 }
 
-// countRows returns the current row count for name (summed across segments).
+// countRows returns the current row count for name, read in O(1) from the
+// collection's counter.
 func countRows(st *vgi.AttachStore, name string) (int64, error) {
-	kvs, err := st.Scan(segNS(name))
-	if err != nil {
-		return 0, err
-	}
-	var n int64
-	for _, kv := range kvs {
-		b, err := vgi.DeserializeRecordBatch(kv.Value)
-		if err != nil {
-			return 0, err
-		}
-		n += b.NumRows()
-		b.Release()
-	}
-	return n, nil
+	return st.CounterGet(countNS, []byte(name))
 }
 
-// evictTTL drops every segment whose ingest time is before cutoffMicros. A
-// segment carries a single call timestamp, so the time-keyed range below the
-// cutoff is exactly the expired rows.
+// ttlEndKey is the 8-byte big-endian time bound for a cutoff. Segment keys are
+// the time prefix followed by a uuid, so a key at exactly cutoffMicros sorts
+// after this bound (it has the bound as a strict prefix) — making [.., end)
+// exactly the segments whose ingest time is strictly before the cutoff.
+func ttlEndKey(cutoffMicros int64) []byte {
+	end := make([]byte, tsKeyBytes)
+	binary.BigEndian.PutUint64(end, uint64(cutoffMicros))
+	return end
+}
+
+// evictTTL drops every segment whose ingest time is before cutoffMicros via a
+// single range delete over the time-keyed segments, decrementing the row
+// counter by the rows removed.
 func evictTTL(st *vgi.AttachStore, name string, cutoffMicros int64) error {
 	if cutoffMicros <= 0 {
 		return nil
 	}
-	kvs, err := st.Scan(segNS(name))
+	ns := segNS(name)
+	end := ttlEndKey(cutoffMicros)
+	expired, err := st.Scan(ns, vgi.WithEnd(end))
 	if err != nil {
 		return err
 	}
-	ns := segNS(name)
-	for _, kv := range kvs {
-		if segKeyTimeMicros(kv.Key) < cutoffMicros {
-			if err := st.DeleteKey(ns, kv.Key); err != nil {
-				return err
-			}
-		}
+	if len(expired) == 0 {
+		return nil
 	}
-	return nil
+	var rows int64
+	for _, kv := range expired {
+		b, err := vgi.DeserializeRecordBatch(kv.Value)
+		if err != nil {
+			return err
+		}
+		rows += b.NumRows()
+		b.Release()
+	}
+	if _, err := st.DeleteRange(ns, nil, end); err != nil {
+		return err
+	}
+	_, err = st.CounterAdd(countNS, []byte(name), -rows)
+	return err
 }
 
 // evictMaxRows drops the oldest rows until at most maxRows remain, deleting
-// whole segments and trimming only the one segment that straddles the cap.
+// whole segments and trimming only the one segment that straddles the cap. The
+// live total comes from the counter, and only the segments actually evicted are
+// deserialized (oldest-first).
 func evictMaxRows(st *vgi.AttachStore, name string, maxRows int64) error {
 	if maxRows <= 0 {
 		return nil
 	}
-	kvs, err := st.Scan(segNS(name)) // oldest-first
+	total, err := countRows(st, name)
 	if err != nil {
 		return err
 	}
-	type seg struct {
-		key   []byte
-		batch arrow.RecordBatch
-		rows  int64
-	}
-	segs := make([]seg, 0, len(kvs))
-	var total int64
-	for _, kv := range kvs {
-		b, err := vgi.DeserializeRecordBatch(kv.Value)
-		if err != nil {
-			for _, s := range segs {
-				s.batch.Release()
-			}
-			return err
-		}
-		segs = append(segs, seg{key: kv.Key, batch: b, rows: b.NumRows()})
-		total += b.NumRows()
-	}
-	defer func() {
-		for _, s := range segs {
-			s.batch.Release()
-		}
-	}()
 	if total <= maxRows {
 		return nil
 	}
-	ns := segNS(name)
 	overflow := total - maxRows
+	ns := segNS(name)
+	kvs, err := st.Scan(ns) // oldest-first
+	if err != nil {
+		return err
+	}
 	var removed int64
-	for _, s := range segs {
-		if removed+s.rows <= overflow {
-			if err := st.DeleteKey(ns, s.key); err != nil {
+	for _, kv := range kvs {
+		b, err := vgi.DeserializeRecordBatch(kv.Value)
+		if err != nil {
+			return err
+		}
+		rows := b.NumRows()
+		if removed+rows <= overflow {
+			b.Release()
+			if err := st.DeleteKey(ns, kv.Key); err != nil {
 				return err
 			}
-			removed += s.rows
+			removed += rows
 			if removed == overflow {
 				break
 			}
@@ -191,22 +187,25 @@ func evictMaxRows(st *vgi.AttachStore, name string, maxRows int64) error {
 		}
 		// Boundary segment: keep its newest rows, drop the oldest `offset`.
 		offset := overflow - removed
-		trimmed := s.batch.NewSlice(offset, s.rows)
+		trimmed := b.NewSlice(offset, rows)
 		ipc, serErr := vgi.SerializeRecordBatch(trimmed)
 		trimmed.Release()
+		b.Release()
 		if serErr != nil {
 			return serErr
 		}
-		if err := st.Put(ns, s.key, ipc); err != nil {
+		if err := st.Put(ns, kv.Key, ipc); err != nil {
 			return err
 		}
+		removed = overflow
 		break
 	}
-	return nil
+	_, err = st.CounterAdd(countNS, []byte(name), -removed)
+	return err
 }
 
-// clearCollection drops a collection (segments + pinned schema) and returns the
-// number of rows removed.
+// clearCollection drops a collection (segments + pinned schema + counter) and
+// returns the number of rows removed.
 func clearCollection(st *vgi.AttachStore, name string) (int64, error) {
 	total, err := countRows(st, name)
 	if err != nil {
@@ -216,6 +215,9 @@ func clearCollection(st *vgi.AttachStore, name string) (int64, error) {
 		return 0, err
 	}
 	if err := st.DeleteKey(metaNS, []byte(name)); err != nil {
+		return 0, err
+	}
+	if err := st.CounterDelete(countNS, []byte(name)); err != nil {
 		return 0, err
 	}
 	return total, nil

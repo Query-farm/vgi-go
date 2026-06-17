@@ -363,8 +363,11 @@ func (s *Storage) stateGetMany(scopeID, ns []byte, keys [][]byte) ([][]byte, err
 
 // statePaged drives state_scan / state_drain across pages, accumulating rows.
 // attemptID is "" for state_scan (non-destructive) and a single reused id for
-// state_drain (snapshot-then-page atomicity across pages).
-func (s *Storage) statePaged(endpoint string, scopeID, ns []byte, attemptID string) ([]kvPair, error) {
+// state_drain (snapshot-then-page atomicity across pages). opts (nil for the
+// whole-ns drain/scan paths) carries the start/end/reverse/limit range for a
+// bounded scan; with a limit set, the remaining count is sent on each page and
+// paging stops once it's reached.
+func (s *Storage) statePaged(endpoint string, scopeID, ns []byte, attemptID string, opts *vgi.AttachScanOptions) ([]kvPair, error) {
 	var out []kvPair
 	afterKey := ""
 	for {
@@ -374,6 +377,20 @@ func (s *Storage) statePaged(endpoint string, scopeID, ns []byte, attemptID stri
 		}
 		if attemptID != "" {
 			body["attempt_id"] = attemptID
+		}
+		if opts != nil {
+			if opts.Start != nil {
+				body["start"] = b64(opts.Start)
+			}
+			if opts.End != nil {
+				body["end"] = b64(opts.End)
+			}
+			if opts.Reverse {
+				body["reverse"] = true
+			}
+			if opts.Limit > 0 {
+				body["limit"] = opts.Limit - len(out)
+			}
 		}
 		var resp struct {
 			Rows []struct {
@@ -395,6 +412,10 @@ func (s *Storage) statePaged(endpoint string, scopeID, ns []byte, attemptID stri
 				return nil, fmt.Errorf("cfdo: %s decode value: %w", endpoint, err)
 			}
 			out = append(out, kvPair{key: k, value: v})
+		}
+		if opts != nil && opts.Limit > 0 && len(out) >= opts.Limit {
+			out = out[:opts.Limit]
+			break
 		}
 		if resp.NextAfter == "" {
 			break
@@ -428,12 +449,48 @@ func (s *Storage) stateDelete(scopeID, ns []byte, keys [][]byte) (int, error) {
 	return resp.Deleted, nil
 }
 
-// executionClear wipes ALL state + log rows for one scope across every ns.
-func (s *Storage) executionClear(scopeID []byte) error {
-	return s.post("execution_clear", map[string]any{
+// stateDeleteRange removes keys in the half-open range [start, end) of a
+// namespace (a nil bound is open on that side) and returns the count deleted.
+func (s *Storage) stateDeleteRange(scopeID, ns, start, end []byte) (int, error) {
+	body := map[string]any{
+		"scope_id":   b64(scopeID),
+		"ns":         b64(ns),
+		"attempt_id": newAttemptID(),
+	}
+	if start != nil {
+		body["start"] = b64(start)
+	}
+	if end != nil {
+		body["end"] = b64(end)
+	}
+	var resp struct {
+		Deleted int `json:"deleted"`
+	}
+	if err := s.post("state_delete", body, &resp); err != nil {
+		return 0, err
+	}
+	return resp.Deleted, nil
+}
+
+// executionClear wipes ALL state + log + counter rows for one scope across every
+// ns, returning the total rows removed.
+func (s *Storage) executionClear(scopeID []byte) (int, error) {
+	var resp struct {
+		Deleted int `json:"deleted"`
+	}
+	if err := s.post("execution_clear", map[string]any{
 		"scope_id":   b64(scopeID),
 		"attempt_id": newAttemptID(),
-	}, nil)
+	}, &resp); err != nil {
+		return 0, err
+	}
+	return resp.Deleted, nil
+}
+
+// ExecutionClear wipes every state, log and counter row under the scope across
+// all namespaces (not the work queue), returning the total removed.
+func (s *Storage) ExecutionClear(scope []byte) (int, error) {
+	return s.executionClear(scope)
 }
 
 // ---------------------------------------------------------------------------
@@ -451,7 +508,7 @@ func (s *Storage) WorkerPut(executionID []byte, workerID int64, state []byte) er
 // WorkerCollect drains and returns all worker states for the execution,
 // removing them from the store.
 func (s *Storage) WorkerCollect(executionID []byte) ([][]byte, error) {
-	rows, err := s.statePaged("state_drain", executionID, nsWorker, newAttemptID())
+	rows, err := s.statePaged("state_drain", executionID, nsWorker, newAttemptID(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -465,7 +522,7 @@ func (s *Storage) WorkerCollect(executionID []byte) ([][]byte, error) {
 // WorkerScan returns all worker states for the execution without removing them,
 // ordered by worker ID.
 func (s *Storage) WorkerScan(executionID []byte) ([]vgi.WorkerStateEntry, error) {
-	rows, err := s.statePaged("state_scan", executionID, nsWorker, "")
+	rows, err := s.statePaged("state_scan", executionID, nsWorker, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -487,7 +544,7 @@ func (s *Storage) ScanWorkerPut(executionID, streamID, state []byte) error {
 // ScanWorkerScan returns all scan-worker states for the execution without
 // removing them, ordered by stream ID.
 func (s *Storage) ScanWorkerScan(executionID []byte) ([]vgi.ScanWorkerStateEntry, error) {
-	rows, err := s.statePaged("state_scan", executionID, nsScanWorker, "")
+	rows, err := s.statePaged("state_scan", executionID, nsScanWorker, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -675,7 +732,8 @@ func (s *Storage) TransactionStatePut(transactionOpaqueData []byte, items []vgi.
 func (s *Storage) TransactionStateClear(transactionOpaqueData []byte) error {
 	// Only ns=txn lives under a transaction scope, so a scope-wide clear is
 	// equivalent and matches vgi-python's TransactionBoundStorage.clear().
-	return s.executionClear(transactionOpaqueData)
+	_, err := s.executionClear(transactionOpaqueData)
+	return err
 }
 
 // ---------------------------------------------------------------------------
@@ -737,12 +795,139 @@ func (s *Storage) StateLogClear(executionID []byte) error {
 	// No log-only clear endpoint; execution_clear wipes state + log for the
 	// scope. StateLogClear is a teardown call (buffering destructor), so the
 	// broader sweep is fine.
-	return s.executionClear(executionID)
+	_, err := s.executionClear(executionID)
+	return err
+}
+
+// ---------------------------------------------------------------------------
+// Attach state (AttachStateStorage) → caller-chosen scope + ns; persistent
+//
+// Maps onto the same unified state_* endpoints as the legacy families, but with
+// a caller-supplied scope (the per-ATTACH plaintext) and namespace. Ranged
+// scan/delete and counters back attach-scoped fixtures (accumulate,
+// simple_writable) over the remote backend.
+// ---------------------------------------------------------------------------
+
+// AttachStatePut stores or replaces value under (scope, ns, key).
+func (s *Storage) AttachStatePut(scope, ns, key, value []byte) error {
+	return s.statePutMany(scope, ns, []kvPair{{key: key, value: value}})
+}
+
+// AttachStateGet returns the value under (scope, ns, key), or nil if absent.
+func (s *Storage) AttachStateGet(scope, ns, key []byte) ([]byte, error) {
+	values, err := s.stateGetMany(scope, ns, [][]byte{key})
+	if err != nil {
+		return nil, err
+	}
+	return values[0], nil
+}
+
+// AttachStateScan returns the (key, value) pairs in (scope, ns) ordered by key
+// and bounded per opts.
+func (s *Storage) AttachStateScan(scope, ns []byte, opts vgi.AttachScanOptions) ([]vgi.AttachStateKV, error) {
+	rows, err := s.statePaged("state_scan", scope, ns, "", &opts)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]vgi.AttachStateKV, len(rows))
+	for i, r := range rows {
+		out[i] = vgi.AttachStateKV{Key: r.key, Value: r.value}
+	}
+	return out, nil
+}
+
+// AttachStateDeleteKey removes one key under (scope, ns). No-op if absent.
+func (s *Storage) AttachStateDeleteKey(scope, ns, key []byte) error {
+	_, err := s.stateDelete(scope, ns, [][]byte{key})
+	return err
+}
+
+// AttachStateDeleteNS removes every key under (scope, ns).
+func (s *Storage) AttachStateDeleteNS(scope, ns []byte) error {
+	_, err := s.stateDelete(scope, ns, nil)
+	return err
+}
+
+// AttachStateDeleteRange removes keys in the half-open range [start, end) of
+// (scope, ns) and returns the number removed.
+func (s *Storage) AttachStateDeleteRange(scope, ns, start, end []byte) (int, error) {
+	return s.stateDeleteRange(scope, ns, start, end)
+}
+
+// AttachStateDrain atomically reads and removes every (key, value) in
+// (scope, ns), returning them ordered by key.
+func (s *Storage) AttachStateDrain(scope, ns []byte) ([]vgi.AttachStateKV, error) {
+	rows, err := s.statePaged("state_drain", scope, ns, newAttemptID(), nil)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]vgi.AttachStateKV, len(rows))
+	for i, r := range rows {
+		out[i] = vgi.AttachStateKV{Key: r.key, Value: r.value}
+	}
+	return out, nil
+}
+
+// AttachCounterGet returns the int64 counter under (scope, ns, key), or 0 if
+// absent.
+func (s *Storage) AttachCounterGet(scope, ns, key []byte) (int64, error) {
+	var resp struct {
+		N int64 `json:"n"`
+	}
+	if err := s.post("state_counter_get", map[string]any{
+		"scope_id": b64(scope),
+		"ns":       b64(ns),
+		"key":      b64(key),
+	}, &resp); err != nil {
+		return 0, err
+	}
+	return resp.N, nil
+}
+
+// AttachCounterAdd atomically adds delta to the counter under (scope, ns, key)
+// and returns the new value.
+func (s *Storage) AttachCounterAdd(scope, ns, key []byte, delta int64) (int64, error) {
+	var resp struct {
+		N int64 `json:"n"`
+	}
+	if err := s.post("state_counter_add", map[string]any{
+		"scope_id":   b64(scope),
+		"ns":         b64(ns),
+		"key":        b64(key),
+		"delta":      delta,
+		"attempt_id": newAttemptID(),
+	}, &resp); err != nil {
+		return 0, err
+	}
+	return resp.N, nil
+}
+
+// AttachCounterSet overwrites the counter under (scope, ns, key) with value.
+func (s *Storage) AttachCounterSet(scope, ns, key []byte, value int64) error {
+	return s.post("state_counter_set", map[string]any{
+		"scope_id":   b64(scope),
+		"ns":         b64(ns),
+		"key":        b64(key),
+		"value":      value,
+		"attempt_id": newAttemptID(),
+	}, nil)
+}
+
+// AttachCounterDelete removes the counter under (scope, ns, key). No-op if
+// absent.
+func (s *Storage) AttachCounterDelete(scope, ns, key []byte) error {
+	return s.post("state_counter_delete", map[string]any{
+		"scope_id":   b64(scope),
+		"ns":         b64(ns),
+		"key":        b64(key),
+		"attempt_id": newAttemptID(),
+	}, nil)
 }
 
 // Compile-time interface checks.
 var (
-	_ vgi.FunctionStorage = (*Storage)(nil)
-	_ vgi.StateLogStorage = (*Storage)(nil)
-	_ vgi.ShardedBackend  = (*Storage)(nil)
+	_ vgi.FunctionStorage    = (*Storage)(nil)
+	_ vgi.StateLogStorage    = (*Storage)(nil)
+	_ vgi.AttachStateStorage = (*Storage)(nil)
+	_ vgi.ShardedBackend     = (*Storage)(nil)
 )

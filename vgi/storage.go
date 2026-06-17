@@ -133,6 +133,28 @@ func newAttachStore(back FunctionStorage, scope []byte) (*AttachStore, error) {
 	return &AttachStore{back: as, scope: scope}, nil
 }
 
+// ScanOption configures an AttachStore.Scan. See WithRange / WithStart /
+// WithEnd / WithReverse / WithLimit.
+type ScanOption func(*AttachScanOptions)
+
+// WithStart bounds a scan to keys >= start (inclusive).
+func WithStart(start []byte) ScanOption { return func(o *AttachScanOptions) { o.Start = start } }
+
+// WithEnd bounds a scan to keys < end (exclusive).
+func WithEnd(end []byte) ScanOption { return func(o *AttachScanOptions) { o.End = end } }
+
+// WithRange bounds a scan to the half-open key range [start, end) (a nil bound
+// is open on that side).
+func WithRange(start, end []byte) ScanOption {
+	return func(o *AttachScanOptions) { o.Start, o.End = start, end }
+}
+
+// WithReverse returns the scan in descending key order.
+func WithReverse() ScanOption { return func(o *AttachScanOptions) { o.Reverse = true } }
+
+// WithLimit caps the scan at n rows (n <= 0 means no limit).
+func WithLimit(n int) ScanOption { return func(o *AttachScanOptions) { o.Limit = n } }
+
 // Put stores or replaces value under (ns, key) in this attach scope.
 func (a *AttachStore) Put(ns, key, value []byte) error {
 	return a.back.AttachStatePut(a.scope, ns, key, value)
@@ -143,9 +165,15 @@ func (a *AttachStore) Get(ns, key []byte) ([]byte, error) {
 	return a.back.AttachStateGet(a.scope, ns, key)
 }
 
-// Scan returns every (key, value) under ns, ordered by key.
-func (a *AttachStore) Scan(ns []byte) ([]AttachStateKV, error) {
-	return a.back.AttachStateScan(a.scope, ns)
+// Scan returns the (key, value) pairs under ns ordered by key. With no options
+// it returns the whole namespace ascending; pass WithRange/WithReverse/WithLimit
+// to bound it.
+func (a *AttachStore) Scan(ns []byte, opts ...ScanOption) ([]AttachStateKV, error) {
+	var o AttachScanOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return a.back.AttachStateScan(a.scope, ns, o)
 }
 
 // DeleteKey removes one key under ns. No-op if absent.
@@ -156,6 +184,39 @@ func (a *AttachStore) DeleteKey(ns, key []byte) error {
 // DeleteNS removes every key under ns.
 func (a *AttachStore) DeleteNS(ns []byte) error {
 	return a.back.AttachStateDeleteNS(a.scope, ns)
+}
+
+// DeleteRange removes every key in the half-open range [start, end) under ns
+// (a nil bound is open on that side) and returns the number removed.
+func (a *AttachStore) DeleteRange(ns, start, end []byte) (int, error) {
+	return a.back.AttachStateDeleteRange(a.scope, ns, start, end)
+}
+
+// Drain atomically reads and removes every (key, value) under ns, returning
+// them ordered by key.
+func (a *AttachStore) Drain(ns []byte) ([]AttachStateKV, error) {
+	return a.back.AttachStateDrain(a.scope, ns)
+}
+
+// CounterGet returns the int64 counter under (ns, key), or 0 if absent.
+func (a *AttachStore) CounterGet(ns, key []byte) (int64, error) {
+	return a.back.AttachCounterGet(a.scope, ns, key)
+}
+
+// CounterAdd atomically adds delta to the counter under (ns, key) and returns
+// the new value.
+func (a *AttachStore) CounterAdd(ns, key []byte, delta int64) (int64, error) {
+	return a.back.AttachCounterAdd(a.scope, ns, key, delta)
+}
+
+// CounterSet overwrites the counter under (ns, key) with value.
+func (a *AttachStore) CounterSet(ns, key []byte, value int64) error {
+	return a.back.AttachCounterSet(a.scope, ns, key, value)
+}
+
+// CounterDelete removes the counter under (ns, key). No-op if absent.
+func (a *AttachStore) CounterDelete(ns, key []byte) error {
+	return a.back.AttachCounterDelete(a.scope, ns, key)
 }
 
 // AttachStore returns an attach-scoped key/value store bound to scope, using
@@ -309,14 +370,15 @@ func (s *ExecutionStorage) Collect() ([][]byte, error) {
 	return back.WorkerCollect(exec)
 }
 
-// Cleanup drops every record under this execution_id (work queue + worker
-// state). The underlying FunctionStorage is owned by the Worker and is
-// shared across executions; it is NOT closed here.
+// Cleanup drops every record under this execution_id: all scope-keyed state
+// (worker, scan-worker, aggregate, attach, log, counters — via ExecutionClear)
+// plus the separately-keyed work queue. The underlying FunctionStorage is owned
+// by the Worker and is shared across executions; it is NOT closed here.
 func (s *ExecutionStorage) Cleanup() {
 	back, exec, err := s.resolve()
 	if err != nil {
 		return
 	}
+	_, _ = back.ExecutionClear(exec)
 	_, _ = back.QueueClear(exec)
-	_, _ = back.WorkerCollect(exec)
 }

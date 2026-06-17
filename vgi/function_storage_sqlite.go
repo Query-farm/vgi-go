@@ -24,6 +24,7 @@ import (
 //	                    transaction state all live here under a reserved ns.
 //	function_state_log  append-only log keyed by (scope_id, ns, key); the
 //	                    AUTOINCREMENT id is the scan cursor.
+//	function_counter    atomic int64 counters keyed by (scope_id, ns, key).
 //	work_queue          FIFO work items, destructive pop (no registration).
 //
 // scope_id holds either execution_id or transaction_opaque_data (caller's
@@ -139,9 +140,9 @@ func defaultSQLitePath() string {
 	return filepath.Join(dir, "storage.db")
 }
 
-// initSQLiteSchema creates the three unified tables. Idempotent. Drops any
-// legacy split-schema or idempotency-column tables left over from an older
-// on-disk DB (all this state is ephemeral in-progress worker state).
+// initSQLiteSchema creates the unified tables. Idempotent. Drops any legacy
+// split-schema or idempotency-column tables left over from an older on-disk DB
+// (all this state is ephemeral in-progress worker state).
 func initSQLiteSchema(db *sql.DB) error {
 	for _, dead := range []string{
 		"worker_state", "scan_worker_state", "invocation_registry",
@@ -190,6 +191,13 @@ func initSQLiteSchema(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_function_state_log_lookup
 			ON function_state_log(scope_id, ns, key, id)`,
+		`CREATE TABLE IF NOT EXISTS function_counter (
+			scope_id BLOB NOT NULL,
+			ns BLOB NOT NULL,
+			key BLOB NOT NULL,
+			n INTEGER NOT NULL,
+			PRIMARY KEY (scope_id, ns, key)
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
@@ -276,10 +284,33 @@ func (s *sqliteStorage) stateDrain(scope, ns []byte) ([][2][]byte, error) {
 
 // stateScan returns every (key, value) in (scope, ns), ordered by key.
 func (s *sqliteStorage) stateScan(scope, ns []byte) ([][2][]byte, error) {
-	rows, err := s.db.Query(
-		`SELECT key, value FROM function_state WHERE scope_id = ? AND ns = ? ORDER BY key`,
-		scope, ns,
-	)
+	return s.stateScanRange(scope, ns, AttachScanOptions{})
+}
+
+// stateScanRange returns the (key, value) pairs in (scope, ns) within the
+// half-open range [opts.Start, opts.End) (nil bound = open), ordered by key
+// (descending when opts.Reverse), capped at opts.Limit (<= 0 = no limit).
+func (s *sqliteStorage) stateScanRange(scope, ns []byte, opts AttachScanOptions) ([][2][]byte, error) {
+	q := `SELECT key, value FROM function_state WHERE scope_id = ? AND ns = ?`
+	args := []any{scope, ns}
+	if opts.Start != nil {
+		q += ` AND key >= ?`
+		args = append(args, opts.Start)
+	}
+	if opts.End != nil {
+		q += ` AND key < ?`
+		args = append(args, opts.End)
+	}
+	if opts.Reverse {
+		q += ` ORDER BY key DESC`
+	} else {
+		q += ` ORDER BY key ASC`
+	}
+	if opts.Limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, opts.Limit)
+	}
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -298,6 +329,27 @@ func (s *sqliteStorage) stateScan(scope, ns []byte) ([][2][]byte, error) {
 func (s *sqliteStorage) stateDeleteNS(scope, ns []byte) error {
 	_, err := s.db.Exec(`DELETE FROM function_state WHERE scope_id = ? AND ns = ?`, scope, ns)
 	return err
+}
+
+// stateDeleteRange removes keys in the half-open range [start, end) of
+// (scope, ns) (nil bound = open) and returns the number removed.
+func (s *sqliteStorage) stateDeleteRange(scope, ns, start, end []byte) (int, error) {
+	q := `DELETE FROM function_state WHERE scope_id = ? AND ns = ?`
+	args := []any{scope, ns}
+	if start != nil {
+		q += ` AND key >= ?`
+		args = append(args, start)
+	}
+	if end != nil {
+		q += ` AND key < ?`
+		args = append(args, end)
+	}
+	res, err := s.db.Exec(q, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 func (s *sqliteStorage) stateDeleteKey(scope, ns, key []byte) error {
@@ -653,10 +705,10 @@ func (s *sqliteStorage) AttachStateGet(scope, ns, key []byte) ([]byte, error) {
 	return s.stateGetOne(scope, ns, key)
 }
 
-// AttachStateScan returns all attach-state key/value pairs under the given
-// scope and namespace, ordered by key.
-func (s *sqliteStorage) AttachStateScan(scope, ns []byte) ([]AttachStateKV, error) {
-	rows, err := s.stateScan(scope, ns)
+// AttachStateScan returns the attach-state key/value pairs under the given
+// scope and namespace, ordered by key and bounded per opts.
+func (s *sqliteStorage) AttachStateScan(scope, ns []byte, opts AttachScanOptions) ([]AttachStateKV, error) {
+	rows, err := s.stateScanRange(scope, ns, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -679,6 +731,105 @@ func (s *sqliteStorage) AttachStateDeleteNS(scope, ns []byte) error {
 	return s.stateDeleteNS(scope, ns)
 }
 
+// AttachStateDeleteRange removes attach-state entries in the half-open key
+// range [start, end) of (scope, ns) and returns the number removed.
+func (s *sqliteStorage) AttachStateDeleteRange(scope, ns, start, end []byte) (int, error) {
+	return s.stateDeleteRange(scope, ns, start, end)
+}
+
+// AttachStateDrain atomically reads and removes every attach-state entry under
+// (scope, ns), returning them ordered by key.
+func (s *sqliteStorage) AttachStateDrain(scope, ns []byte) ([]AttachStateKV, error) {
+	rows, err := s.stateDrain(scope, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AttachStateKV, len(rows))
+	for i, kv := range rows {
+		out[i] = AttachStateKV{Key: kv[0], Value: kv[1]}
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Atomic counters  (function_counter table, keyed by (scope, ns, key))
+// ---------------------------------------------------------------------------
+
+// AttachCounterGet returns the int64 counter under (scope, ns, key), or 0 if
+// absent.
+func (s *sqliteStorage) AttachCounterGet(scope, ns, key []byte) (int64, error) {
+	var n int64
+	err := s.db.QueryRow(
+		`SELECT n FROM function_counter WHERE scope_id = ? AND ns = ? AND key = ?`,
+		scope, ns, key,
+	).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return n, err
+}
+
+// AttachCounterAdd atomically adds delta to the counter under (scope, ns, key),
+// initializing an absent counter to 0, and returns the new value.
+func (s *sqliteStorage) AttachCounterAdd(scope, ns, key []byte, delta int64) (int64, error) {
+	var n int64
+	err := s.db.QueryRow(
+		`INSERT INTO function_counter (scope_id, ns, key, n) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(scope_id, ns, key) DO UPDATE SET n = n + excluded.n
+		 RETURNING n`,
+		scope, ns, key, delta,
+	).Scan(&n)
+	return n, err
+}
+
+// AttachCounterSet overwrites the counter under (scope, ns, key) with value.
+func (s *sqliteStorage) AttachCounterSet(scope, ns, key []byte, value int64) error {
+	_, err := s.db.Exec(
+		`INSERT INTO function_counter (scope_id, ns, key, n) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(scope_id, ns, key) DO UPDATE SET n = excluded.n`,
+		scope, ns, key, value,
+	)
+	return err
+}
+
+// AttachCounterDelete removes the counter under (scope, ns, key). No-op if
+// absent.
+func (s *sqliteStorage) AttachCounterDelete(scope, ns, key []byte) error {
+	_, err := s.db.Exec(
+		`DELETE FROM function_counter WHERE scope_id = ? AND ns = ? AND key = ?`,
+		scope, ns, key,
+	)
+	return err
+}
+
+// ---------------------------------------------------------------------------
+// Per-scope teardown
+// ---------------------------------------------------------------------------
+
+// ExecutionClear wipes function_state, function_state_log and function_counter
+// rows for the scope across every namespace in one transaction, returning the
+// total rows removed. Does not touch work_queue. Idempotent.
+func (s *sqliteStorage) ExecutionClear(scope []byte) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, table := range []string{"function_state", "function_state_log", "function_counter"} {
+		res, err := tx.Exec(`DELETE FROM `+table+` WHERE scope_id = ?`, scope)
+		if err != nil {
+			_ = tx.Rollback()
+			return 0, err
+		}
+		n, _ := res.RowsAffected()
+		total += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(total), nil
+}
+
 // ---------------------------------------------------------------------------
 
 // Close closes the underlying SQLite database. Safe to call multiple times.
@@ -690,3 +841,10 @@ func (s *sqliteStorage) Close() error {
 	s.db = nil
 	return err
 }
+
+// Compile-time interface checks.
+var (
+	_ FunctionStorage    = (*sqliteStorage)(nil)
+	_ StateLogStorage    = (*sqliteStorage)(nil)
+	_ AttachStateStorage = (*sqliteStorage)(nil)
+)

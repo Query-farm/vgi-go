@@ -13,11 +13,12 @@ import (
 // Per-attach row storage over vgi.AttachStore.
 //
 // Each pre-defined table gets its own namespace ("sw:<table>"); rows live there
-// keyed by an 8-byte big-endian rowid (assigned monotonically), with the value a
-// gob-encoded column→Go-value map. The AttachStore is scoped to the random
-// per-ATTACH id minted at catalog_attach, so two ATTACH sessions never share
-// rows — matching vgi-python's per-attach SQLite file. The gob map (rather than a
-// serialized Arrow batch) makes UPDATE a trivial key overwrite.
+// keyed by an 8-byte big-endian rowid (assigned monotonically from a per-table
+// atomic counter), with the value a gob-encoded column→Go-value map. The
+// AttachStore is scoped to the random per-ATTACH id minted at catalog_attach, so
+// two ATTACH sessions never share rows — matching vgi-python's per-attach SQLite
+// file. The gob map (rather than a serialized Arrow batch) makes UPDATE a trivial
+// key overwrite.
 
 func init() {
 	// gob needs the concrete types behind the map's interface values.
@@ -29,6 +30,11 @@ func init() {
 type rowMap = map[string]any
 
 func tableNS(table string) []byte { return []byte("sw:" + table) }
+
+// rowidSeqKey names the per-table monotonic rowid counter. It lives in the
+// counter store, distinct from the row data (which is keyed by 8-byte rowid),
+// so it never collides with a row.
+var rowidSeqKey = []byte("rowid_seq")
 
 func ridKey(rid int64) []byte {
 	k := make([]byte, 8)
@@ -54,20 +60,18 @@ func decodeRow(data []byte) (rowMap, error) {
 	return r, nil
 }
 
-// nextRowid returns max(existing rowid)+1 for table (1 for an empty table).
-// Fine for the small row counts these wire-protocol tests use.
-func nextRowid(st *vgi.AttachStore, table string) (int64, error) {
-	kvs, err := st.Scan(tableNS(table))
+// allocRowids atomically reserves n consecutive rowids for table and returns the
+// first. The per-table counter is monotonic and race-free across concurrent
+// writers (unlike a scan-for-max read-modify-write) and never reuses a freed id.
+func allocRowids(st *vgi.AttachStore, table string, n int64) (int64, error) {
+	if n <= 0 {
+		return 0, nil
+	}
+	last, err := st.CounterAdd(tableNS(table), rowidSeqKey, n)
 	if err != nil {
 		return 0, err
 	}
-	var max int64
-	for _, kv := range kvs {
-		if r := ridFromKey(kv.Key); r > max {
-			max = r
-		}
-	}
-	return max + 1, nil
+	return last - n + 1, nil
 }
 
 // storedRow is a rowid + decoded values, returned by scanRows in rowid order.

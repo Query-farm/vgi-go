@@ -95,6 +95,20 @@ type AttachStateKV struct {
 	Value []byte
 }
 
+// AttachScanOptions bounds an AttachStateScan. Start/End describe a half-open
+// key range [Start, End) compared bytewise (a nil bound is open on that side);
+// Reverse flips the result order to descending; Limit caps the number of rows
+// returned, with Limit <= 0 meaning no limit (matching StateLogScan). The zero
+// value scans the whole namespace ascending. Mirrors vgi-python's state_scan
+// keyword arguments. The range predicate is independent of Reverse: Start is
+// always the >= bound and End always the < bound regardless of direction.
+type AttachScanOptions struct {
+	Start   []byte
+	End     []byte
+	Reverse bool
+	Limit   int
+}
+
 // AttachStateStorage is an optional capability: a scoped, namespaced, ordered
 // key/value store that persists for the life of the shared backend rather than
 // a single execution — i.e. across queries (and, for the SQLite backend, across
@@ -112,12 +126,34 @@ type AttachStateStorage interface {
 	AttachStatePut(scope, ns, key, value []byte) error
 	// AttachStateGet returns the value under (scope, ns, key), or (nil, nil) if absent.
 	AttachStateGet(scope, ns, key []byte) ([]byte, error)
-	// AttachStateScan returns every (key, value) in (scope, ns), ordered by key.
-	AttachStateScan(scope, ns []byte) ([]AttachStateKV, error)
+	// AttachStateScan returns the (key, value) pairs in (scope, ns) ordered by
+	// key, bounded and limited per opts. See AttachScanOptions.
+	AttachStateScan(scope, ns []byte, opts AttachScanOptions) ([]AttachStateKV, error)
 	// AttachStateDeleteKey removes one key. No-op if absent.
 	AttachStateDeleteKey(scope, ns, key []byte) error
 	// AttachStateDeleteNS removes every key in (scope, ns).
 	AttachStateDeleteNS(scope, ns []byte) error
+	// AttachStateDeleteRange removes every key in the half-open range
+	// [start, end) of (scope, ns) (a nil bound is open on that side) and returns
+	// the number of keys removed.
+	AttachStateDeleteRange(scope, ns, start, end []byte) (int, error)
+	// AttachStateDrain atomically reads and removes every (key, value) in
+	// (scope, ns), returning them ordered by key.
+	AttachStateDrain(scope, ns []byte) ([]AttachStateKV, error)
+
+	// --- Atomic int64 counters (separate from the K/V state above) ---
+
+	// AttachCounterGet returns the int64 counter under (scope, ns, key), or 0 if
+	// absent.
+	AttachCounterGet(scope, ns, key []byte) (int64, error)
+	// AttachCounterAdd atomically adds delta to the counter under (scope, ns,
+	// key) (initializing absent counters to 0) and returns the new value.
+	AttachCounterAdd(scope, ns, key []byte, delta int64) (int64, error)
+	// AttachCounterSet overwrites the counter under (scope, ns, key) with value.
+	AttachCounterSet(scope, ns, key []byte, value int64) error
+	// AttachCounterDelete removes the counter under (scope, ns, key). No-op if
+	// absent.
+	AttachCounterDelete(scope, ns, key []byte) error
 }
 
 // FunctionStorage is the cross-process shared-state interface backing
@@ -234,6 +270,16 @@ type FunctionStorage interface {
 	// when the catalog observes commit/rollback; implementations should
 	// also TTL-sweep to handle leaked transaction_opaque_data values.
 	TransactionStateClear(transactionOpaqueData []byte) error
+
+	// --- Per-scope teardown ---
+
+	// ExecutionClear wipes every K/V state row, append-log row and counter under
+	// the given scope (an execution_id or transaction_opaque_data), across all
+	// namespaces, in one shot. It does NOT touch the work queue (keyed
+	// separately). Returns the total number of rows removed and is idempotent.
+	// Consolidates the per-family Clear/Collect calls a teardown would otherwise
+	// issue. Mirrors vgi-python's execution_clear.
+	ExecutionClear(scope []byte) (int, error)
 
 	// Close releases any underlying resources (DB handles, HTTP clients).
 	// Safe to call multiple times.

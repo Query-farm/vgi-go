@@ -98,6 +98,12 @@ func RunConformanceFiltered(t *testing.T, factory func(t *testing.T) FunctionSto
 		{name: "AggregateWindowPartition_put_get_delete_clear", run: testAggregateWindowPartition, aggregate: true},
 		{name: "TransactionState_put_get_clear", run: testTransactionStateLifecycle},
 		{name: "StateLog_append_scan_clear", run: testStateLogLifecycle},
+		{name: "AttachState_put_get_scan_delete", run: testAttachStateLifecycle},
+		{name: "AttachState_scan_range_reverse_limit", run: testAttachStateScanRange},
+		{name: "AttachState_delete_range", run: testAttachStateDeleteRange},
+		{name: "AttachState_drain", run: testAttachStateDrain},
+		{name: "AttachCounter_get_add_set_delete", run: testAttachCounters},
+		{name: "ExecutionClear_wipes_scope_keeps_queue", run: testExecutionClear},
 		{name: "Close_idempotent", run: testCloseIdempotent},
 	}
 
@@ -475,6 +481,299 @@ func testStateLogLifecycle(t *testing.T, s FunctionStorage) {
 	if len(cleared) != 0 {
 		t.Errorf("after clear: expected 0 rows, got %d", len(cleared))
 	}
+}
+
+// attachStore type-asserts the optional AttachStateStorage capability, skipping
+// the subtest if the backend doesn't implement it.
+func attachStore(t *testing.T, s FunctionStorage) vgi.AttachStateStorage {
+	as, ok := s.(vgi.AttachStateStorage)
+	if !ok {
+		t.Skip("backend does not implement AttachStateStorage")
+	}
+	return as
+}
+
+// testAttachStateLifecycle exercises the basic attach-scoped K/V: put, get,
+// full-namespace ordered scan, single-key and whole-namespace delete, plus
+// (scope, ns) isolation.
+func testAttachStateLifecycle(t *testing.T, s FunctionStorage) {
+	as := attachStore(t, s)
+	scope, ns := []byte("att-1"), []byte("nsA")
+
+	if v, err := as.AttachStateGet(scope, ns, []byte("missing")); err != nil || v != nil {
+		t.Fatalf("absent get: v=%v err=%v", v, err)
+	}
+	for _, k := range []string{"b", "a", "c"} {
+		if err := as.AttachStatePut(scope, ns, []byte(k), []byte("v-"+k)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := as.AttachStateGet(scope, ns, []byte("a"))
+	if err != nil || !bytes.Equal(v, []byte("v-a")) {
+		t.Fatalf("get a: v=%q err=%v", v, err)
+	}
+	// Put replaces.
+	if err := as.AttachStatePut(scope, ns, []byte("a"), []byte("v-a2")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := as.AttachStateScan(scope, ns, vgi.AttachScanOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !attachKeysEqual(got, []string{"a", "b", "c"}) {
+		t.Errorf("scan order: %v", attachKeys(got))
+	}
+	if !bytes.Equal(got[0].Value, []byte("v-a2")) {
+		t.Errorf("replaced value: %q", got[0].Value)
+	}
+
+	// (scope, ns) isolation: a different ns and a different scope are empty.
+	if other, _ := as.AttachStateScan(scope, []byte("nsB"), vgi.AttachScanOptions{}); len(other) != 0 {
+		t.Errorf("ns isolation: %v", attachKeys(other))
+	}
+	if other, _ := as.AttachStateScan([]byte("att-2"), ns, vgi.AttachScanOptions{}); len(other) != 0 {
+		t.Errorf("scope isolation: %v", attachKeys(other))
+	}
+
+	// Delete one key, then the namespace.
+	if err := as.AttachStateDeleteKey(scope, ns, []byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := as.AttachStateScan(scope, ns, vgi.AttachScanOptions{}); !attachKeysEqual(got, []string{"a", "c"}) {
+		t.Errorf("after delete-key: %v", attachKeys(got))
+	}
+	if err := as.AttachStateDeleteNS(scope, ns); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := as.AttachStateScan(scope, ns, vgi.AttachScanOptions{}); len(got) != 0 {
+		t.Errorf("after delete-ns: %v", attachKeys(got))
+	}
+}
+
+// testAttachStateScanRange exercises the bounded/ordered/limited scan.
+func testAttachStateScanRange(t *testing.T, s FunctionStorage) {
+	as := attachStore(t, s)
+	scope, ns := []byte("att-range"), []byte("ns")
+	for _, k := range []string{"a", "b", "c", "d"} {
+		if err := as.AttachStatePut(scope, ns, []byte(k), []byte(k)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		name string
+		opts vgi.AttachScanOptions
+		want []string
+	}{
+		{"default_ascending", vgi.AttachScanOptions{}, []string{"a", "b", "c", "d"}},
+		{"reverse", vgi.AttachScanOptions{Reverse: true}, []string{"d", "c", "b", "a"}},
+		{"half_open_range", vgi.AttachScanOptions{Start: []byte("b"), End: []byte("d")}, []string{"b", "c"}},
+		{"start_only", vgi.AttachScanOptions{Start: []byte("c")}, []string{"c", "d"}},
+		{"end_only", vgi.AttachScanOptions{End: []byte("b")}, []string{"a"}},
+		{"limit", vgi.AttachScanOptions{Limit: 2}, []string{"a", "b"}},
+		{"reverse_limit", vgi.AttachScanOptions{Reverse: true, Limit: 2}, []string{"d", "c"}},
+	}
+	for _, c := range cases {
+		got, err := as.AttachStateScan(scope, ns, c.opts)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if !attachKeysEqualOrdered(got, c.want) {
+			t.Errorf("%s: got %v want %v", c.name, attachKeys(got), c.want)
+		}
+	}
+}
+
+// testAttachStateDeleteRange exercises range and whole-namespace delete with
+// returned counts.
+func testAttachStateDeleteRange(t *testing.T, s FunctionStorage) {
+	as := attachStore(t, s)
+	scope, ns := []byte("att-del"), []byte("ns")
+	put := func() {
+		for _, k := range []string{"a", "b", "c", "d"} {
+			if err := as.AttachStatePut(scope, ns, []byte(k), []byte(k)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	put()
+	// [b, d) removes b and c.
+	if n, err := as.AttachStateDeleteRange(scope, ns, []byte("b"), []byte("d")); err != nil || n != 2 {
+		t.Fatalf("delete [b,d): n=%d err=%v", n, err)
+	}
+	if got, _ := as.AttachStateScan(scope, ns, vgi.AttachScanOptions{}); !attachKeysEqualOrdered(got, []string{"a", "d"}) {
+		t.Errorf("after range delete: %v", attachKeys(got))
+	}
+	// Open-ended both sides removes everything; idempotent re-delete returns 0.
+	if n, err := as.AttachStateDeleteRange(scope, ns, nil, nil); err != nil || n != 2 {
+		t.Fatalf("delete all: n=%d err=%v", n, err)
+	}
+	if n, err := as.AttachStateDeleteRange(scope, ns, nil, nil); err != nil || n != 0 {
+		t.Fatalf("delete all (idempotent): n=%d err=%v", n, err)
+	}
+}
+
+// testAttachStateDrain exercises atomic scan-and-delete of a namespace.
+func testAttachStateDrain(t *testing.T, s FunctionStorage) {
+	as := attachStore(t, s)
+	scope, ns := []byte("att-drain"), []byte("ns")
+	for _, k := range []string{"a", "b", "c"} {
+		if err := as.AttachStatePut(scope, ns, []byte(k), []byte("v-"+k)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A sibling namespace must be untouched by the drain.
+	if err := as.AttachStatePut(scope, []byte("other"), []byte("x"), []byte("y")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := as.AttachStateDrain(scope, ns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !attachKeysEqual(got, []string{"a", "b", "c"}) {
+		t.Errorf("drain keys: %v", attachKeys(got))
+	}
+	if after, _ := as.AttachStateScan(scope, ns, vgi.AttachScanOptions{}); len(after) != 0 {
+		t.Errorf("namespace not drained: %v", attachKeys(after))
+	}
+	if other, _ := as.AttachStateScan(scope, []byte("other"), vgi.AttachScanOptions{}); len(other) != 1 {
+		t.Errorf("drain touched sibling ns: %v", attachKeys(other))
+	}
+}
+
+// testAttachCounters exercises the atomic int64 counters.
+func testAttachCounters(t *testing.T, s FunctionStorage) {
+	as := attachStore(t, s)
+	scope, ns, key := []byte("att-ctr"), []byte("ns"), []byte("k")
+
+	if n, err := as.AttachCounterGet(scope, ns, key); err != nil || n != 0 {
+		t.Fatalf("absent get: n=%d err=%v", n, err)
+	}
+	if n, err := as.AttachCounterAdd(scope, ns, key, 5); err != nil || n != 5 {
+		t.Fatalf("add 5: n=%d err=%v", n, err)
+	}
+	if n, err := as.AttachCounterAdd(scope, ns, key, 3); err != nil || n != 8 {
+		t.Fatalf("add 3: n=%d err=%v", n, err)
+	}
+	if n, err := as.AttachCounterAdd(scope, ns, key, -2); err != nil || n != 6 {
+		t.Fatalf("add -2: n=%d err=%v", n, err)
+	}
+	if err := as.AttachCounterSet(scope, ns, key, 100); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := as.AttachCounterGet(scope, ns, key); err != nil || n != 100 {
+		t.Fatalf("after set: n=%d err=%v", n, err)
+	}
+	// A distinct key is independent.
+	if n, err := as.AttachCounterAdd(scope, ns, []byte("k2"), 1); err != nil || n != 1 {
+		t.Fatalf("distinct key: n=%d err=%v", n, err)
+	}
+	if err := as.AttachCounterDelete(scope, ns, key); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := as.AttachCounterGet(scope, ns, key); err != nil || n != 0 {
+		t.Fatalf("after delete: n=%d err=%v", n, err)
+	}
+	// Delete of an absent counter is a no-op.
+	if err := as.AttachCounterDelete(scope, ns, []byte("never")); err != nil {
+		t.Fatalf("delete absent: %v", err)
+	}
+}
+
+// testExecutionClear verifies ExecutionClear wipes every scope-keyed family
+// (worker state, append-log, and — when supported — attach state + counters)
+// while leaving the separately-keyed work queue and other scopes intact.
+func testExecutionClear(t *testing.T, s FunctionStorage) {
+	scope := []byte("exec-clear")
+
+	if err := s.WorkerPut(scope, 1, []byte("w")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.QueuePush(scope, [][]byte{[]byte("q")}); err != nil {
+		t.Fatal(err)
+	}
+	if ls, ok := s.(vgi.StateLogStorage); ok {
+		if _, err := ls.StateAppend(scope, []byte("k"), []byte("a")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	as, hasAttach := s.(vgi.AttachStateStorage)
+	if hasAttach {
+		if err := as.AttachStatePut(scope, []byte("ns"), []byte("k"), []byte("v")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := as.AttachCounterAdd(scope, []byte("ns"), []byte("c"), 7); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A different scope's worker state must survive.
+	if err := s.WorkerPut([]byte("other"), 1, []byte("keep")); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.ExecutionClear(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n <= 0 {
+		t.Errorf("ExecutionClear returned %d, expected > 0", n)
+	}
+
+	if w, _ := s.WorkerScan(scope); len(w) != 0 {
+		t.Errorf("worker state not cleared: %v", w)
+	}
+	if ls, ok := s.(vgi.StateLogStorage); ok {
+		if rows, _ := ls.StateLogScan(scope, []byte("k"), -1, 0); len(rows) != 0 {
+			t.Errorf("log not cleared: %v", rows)
+		}
+	}
+	if hasAttach {
+		if v, _ := as.AttachStateGet(scope, []byte("ns"), []byte("k")); v != nil {
+			t.Errorf("attach state not cleared: %q", v)
+		}
+		if c, _ := as.AttachCounterGet(scope, []byte("ns"), []byte("c")); c != 0 {
+			t.Errorf("counter not cleared: %d", c)
+		}
+	}
+	// The work queue is keyed separately and must survive ExecutionClear.
+	if item, _ := s.QueuePop(scope); !bytes.Equal(item, []byte("q")) {
+		t.Errorf("ExecutionClear wrongly touched the queue: item=%q", item)
+	}
+	// Other scope intact.
+	if w, _ := s.WorkerScan([]byte("other")); len(w) != 1 {
+		t.Errorf("ExecutionClear leaked into other scope: %v", w)
+	}
+
+	// Idempotent: a second clear of an already-empty scope returns 0.
+	if n, err := s.ExecutionClear(scope); err != nil || n != 0 {
+		t.Errorf("second ExecutionClear: n=%d err=%v", n, err)
+	}
+}
+
+// --- attach-scan assertion helpers ---
+
+func attachKeys(kvs []vgi.AttachStateKV) []string {
+	out := make([]string, len(kvs))
+	for i, kv := range kvs {
+		out[i] = string(kv.Key)
+	}
+	return out
+}
+
+// attachKeysEqualOrdered checks the keys match want in the exact order given.
+func attachKeysEqualOrdered(kvs []vgi.AttachStateKV, want []string) bool {
+	return reflect.DeepEqual(attachKeys(kvs), want)
+}
+
+// attachKeysEqual checks the keys match want as a sorted set (order-insensitive),
+// for assertions where the backend's drain/scan order is not contractual.
+func attachKeysEqual(kvs []vgi.AttachStateKV, want []string) bool {
+	got := attachKeys(kvs)
+	gc := append([]string(nil), got...)
+	wc := append([]string(nil), want...)
+	sort.Strings(gc)
+	sort.Strings(wc)
+	return reflect.DeepEqual(gc, wc)
 }
 
 func testCloseIdempotent(t *testing.T, s FunctionStorage) {
