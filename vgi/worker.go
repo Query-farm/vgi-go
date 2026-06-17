@@ -758,8 +758,18 @@ func (w *Worker) RegisterWritableCatalog(c *WritableCatalog) {
 }
 
 // RegisterCatalogTable registers a table in the given schema of the catalog.
+//
+// If table.Function is set, the function is also auto-registered into the
+// dispatch table (deduped by name) so the scan resolves without a separate
+// RegisterTable call — mirroring vgi-python's _build_registry, which auto-scans
+// each Table.function.
 func (w *Worker) RegisterCatalogTable(schemaName string, table CatalogTable) {
 	w.catalogTables[schemaName] = append(w.catalogTables[schemaName], table)
+	if table.Function != nil {
+		if _, exists := w.tables[table.Function.Name()]; !exists {
+			w.tables[table.Function.Name()] = append(w.tables[table.Function.Name()], table.Function)
+		}
+	}
 }
 
 // RegisterCatalogView registers a view in the given schema of the catalog.

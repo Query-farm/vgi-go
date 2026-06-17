@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
+	"reflect"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
@@ -70,7 +71,39 @@ type StatisticsProvider interface {
 //	func NewSequenceFunction() vgi.TableFunction {
 //	    return vgi.AsTableFunction[sequenceState](&SequenceFunction{})
 //	}
+// validateGobState fails fast (at registration) when the per-scan state type S
+// cannot be gob-encoded for HTTP rehydration — the common pitfall being a struct
+// whose fields are all unexported (e.g. `struct{ done bool }`). gob would
+// otherwise only surface this mid-query, on the first HTTP continuation, as
+// "gob: type ... has no exported fields". A truly empty `struct{}` (no fields)
+// is fine — gob encodes it as nothing — and a type providing its own
+// gob.GobEncoder is exempt. Mirrors vgi-python enforcing serializable state at
+// class-definition time.
+func validateGobState[S any]() {
+	t := reflect.TypeOf((*S)(nil)).Elem()
+	gobEncoder := reflect.TypeOf((*gob.GobEncoder)(nil)).Elem()
+	if t.Implements(gobEncoder) || reflect.PointerTo(t).Implements(gobEncoder) {
+		return
+	}
+	if t.Kind() == reflect.Struct && t.NumField() > 0 {
+		exported := 0
+		for i := 0; i < t.NumField(); i++ {
+			if t.Field(i).IsExported() {
+				exported++
+			}
+		}
+		if exported == 0 {
+			panic(fmt.Sprintf(
+				"vgi.AsTableFunction[%s]: state type %s has no exported fields and cannot be "+
+					"gob-encoded for HTTP rehydration — export its fields (e.g. `Done bool`) or "+
+					"implement gob.GobEncoder/GobDecoder",
+				t.Name(), t.String()))
+		}
+	}
+}
+
 func AsTableFunction[S any](f TypedTableFunc[S]) TableFunction {
+	validateGobState[S]()
 	gob.Register(new(S))
 	base := &typedTableAdapter[S]{inner: f}
 
