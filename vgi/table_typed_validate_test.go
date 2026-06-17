@@ -22,14 +22,14 @@ type emptyState struct{}
 // encoderState has no exported fields but provides its own gob encoding.
 type encoderState struct{ n int } //nolint:unused
 
-func (e encoderState) GobEncode() ([]byte, error)  { return nil, nil }
-func (e *encoderState) GobDecode(_ []byte) error    { return nil }
+func (e encoderState) GobEncode() ([]byte, error) { return nil, nil }
+func (e *encoderState) GobDecode(_ []byte) error  { return nil }
 
 type validateProbe[S any] struct{}
 
-func (validateProbe[S]) Name() string                   { return "validate_probe" }
-func (validateProbe[S]) Metadata() FunctionMetadata     { return DefaultMetadata() }
-func (validateProbe[S]) ArgumentSpecs() []ArgSpec       { return nil }
+func (validateProbe[S]) Name() string               { return "validate_probe" }
+func (validateProbe[S]) Metadata() FunctionMetadata { return DefaultMetadata() }
+func (validateProbe[S]) ArgumentSpecs() []ArgSpec   { return nil }
 func (validateProbe[S]) OnBind(*BindParams) (*BindResponse, error) {
 	return BindSchema(nil)
 }

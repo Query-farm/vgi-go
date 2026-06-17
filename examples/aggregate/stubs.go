@@ -59,7 +59,6 @@ func stubFinalize(gids []int64, states map[int64]interface{}, p *vgi.AggregatePr
 	return array.NewRecordBatch(p.OutputSchema, []arrow.Array{col}, int64(len(gids))), nil
 }
 
-
 // The following functions are registered to satisfy the vgi extension's
 // duckdb_functions() inventory test (function_registration.test). Their
 // runtime behavior is the simplest meaningful implementation that lets the

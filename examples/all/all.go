@@ -60,6 +60,8 @@ func registerScalars(w *vgi.Worker) {
 	w.RegisterScalar(&scalar.RandomBytesFunction{})
 	w.RegisterScalar(&scalar.RandomIntFunction{})
 	w.RegisterScalar(&scalar.ReturnSecretValueFunction{})
+	w.RegisterScalar(&scalar.ScaleBySettingFunction{})
+	w.RegisterScalar(&scalar.SecretFieldFunction{})
 	w.RegisterScalar(&scalar.SmartFormatWidthFunction{})
 	w.RegisterScalar(&scalar.SmartFormatPrefixFunction{})
 	w.RegisterScalar(scalar.NewSumValues())
@@ -71,6 +73,7 @@ func registerScalars(w *vgi.Worker) {
 func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewConstantColumnsFunction())
 	w.RegisterTable(table.NewFilterEchoFunction())
+	w.RegisterTable(table.NewFilteredColumnsEchoFunction())
 	w.RegisterTable(table.NewDictFilterEchoFunction())
 	w.RegisterTable(table.NewValuePruneFunction())
 	w.RegisterTable(table.NewLateMaterializationFunction())

@@ -39,11 +39,27 @@ func PromoteForAddition(dt arrow.DataType) arrow.DataType {
 }
 
 // CommonTypeForAddition determines the output type when adding two numeric types.
-// If either type is floating point, the result is float64. Otherwise, the wider
-// integer type is promoted.
+// If either type is floating point, the result is float64. For two decimals the
+// common type widens to the max precision AND max scale of the inputs (so adding
+// DECIMAL(5,2) + DECIMAL(7,3) yields a scale-3 result); otherwise the wider
+// integer type is promoted. The common type is then promoted for overflow
+// headroom via PromoteForAddition.
 func CommonTypeForAddition(dt1, dt2 arrow.DataType) arrow.DataType {
 	if IsFloatingType(dt1) || IsFloatingType(dt2) {
 		return arrow.PrimitiveTypes.Float64
+	}
+	if d1, ok1 := dt1.(*arrow.Decimal128Type); ok1 {
+		if d2, ok2 := dt2.(*arrow.Decimal128Type); ok2 {
+			p := d1.Precision
+			if d2.Precision > p {
+				p = d2.Precision
+			}
+			s := d1.Scale
+			if d2.Scale > s {
+				s = d2.Scale
+			}
+			return PromoteForAddition(&arrow.Decimal128Type{Precision: p, Scale: s})
+		}
 	}
 	wider := dt1
 	if NumericTypeSize(dt2) > NumericTypeSize(dt1) {

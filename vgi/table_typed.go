@@ -71,6 +71,7 @@ type StatisticsProvider interface {
 //	func NewSequenceFunction() vgi.TableFunction {
 //	    return vgi.AsTableFunction[sequenceState](&SequenceFunction{})
 //	}
+//
 // validateGobState fails fast (at registration) when the per-scan state type S
 // cannot be gob-encoded for HTTP rehydration — the common pitfall being a struct
 // whose fields are all unexported (e.g. `struct{ done bool }`). gob would

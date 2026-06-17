@@ -132,6 +132,12 @@ func main() {
 				DefaultValue: int64(0),
 			},
 			vgi.SettingSpec{
+				Name:         "scale_factor",
+				Description:  "Float scale factor",
+				Type:         arrow.PrimitiveTypes.Float64,
+				DefaultValue: float64(1),
+			},
+			vgi.SettingSpec{
 				Name:        "config",
 				Description: "Sequence configuration struct",
 				Type: arrow.StructOf(

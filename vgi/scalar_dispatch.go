@@ -104,7 +104,11 @@ func NumericDispatch(
 			var sum decimal128.Num
 			for _, c := range cols {
 				if d, ok := c.(*array.Decimal128); ok {
-					sum = sum.Add(d.Value(i))
+					// Rescale each input value to the output scale before
+					// adding — inputs of differing scale (e.g. DECIMAL(5,2) +
+					// DECIMAL(7,3)) carry differently-scaled raw integers, so
+					// they must be aligned to a common scale first.
+					sum = sum.Add(rescaleDecimal128(d.Value(i), d.DataType().(*arrow.Decimal128Type).Scale, decType.Scale))
 				} else {
 					sum = sum.Add(decimal128.FromI64(intFn(cols, i)))
 					break
@@ -112,7 +116,7 @@ func NumericDispatch(
 			}
 			if doubleSemantics {
 				if d, ok := cols[0].(*array.Decimal128); ok {
-					sum = sum.Add(d.Value(i))
+					sum = sum.Add(rescaleDecimal128(d.Value(i), d.DataType().(*arrow.Decimal128Type).Scale, decType.Scale))
 				}
 			}
 			if !sum.FitsInPrecision(decType.Precision) {
@@ -127,6 +131,19 @@ func NumericDispatch(
 
 	defer resultArr.Release()
 	return array.NewRecordBatch(params.OutputSchema, []arrow.Array{resultArr}, int64(n)), nil
+}
+
+// rescaleDecimal128 aligns a decimal128 raw value from fromScale to toScale.
+// The output scale is the max of the inputs' scales (see CommonTypeForAddition),
+// so toScale >= fromScale and only a scale increase is ever required.
+func rescaleDecimal128(v decimal128.Num, fromScale, toScale int32) decimal128.Num {
+	if toScale > fromScale {
+		return v.IncreaseScaleBy(toScale - fromScale)
+	}
+	if toScale < fromScale {
+		return v.ReduceScaleBy(fromScale-toScale, true)
+	}
+	return v
 }
 
 // numericBuild is a generic helper for NumericDispatch that builds an array
