@@ -120,7 +120,7 @@ func assertGobEncodable(t reflect.Type, path string, seen map[reflect.Type]bool)
 				"plain serializable Go values (slices, scalars) and rebuild them in Process (see "+
 				"the static_data.go example), or implement gob.GobEncoder/GobDecoder.",
 			path, t.String(), t.Kind()))
-	case reflect.Ptr, reflect.Slice, reflect.Array:
+	case reflect.Pointer, reflect.Slice, reflect.Array:
 		assertGobEncodable(t.Elem(), path+"[]", seen)
 	case reflect.Map:
 		assertGobEncodable(t.Key(), path+".<key>", seen)
