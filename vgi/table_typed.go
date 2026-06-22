@@ -72,33 +72,78 @@ type StatisticsProvider interface {
 //	    return vgi.AsTableFunction[sequenceState](&SequenceFunction{})
 //	}
 //
+// implementsGobEncoder reports whether t (or *t) defines its own gob encoding,
+// in which case it manages its own serialization and is exempt from inspection.
+func implementsGobEncoder(t reflect.Type) bool {
+	gobEncoder := reflect.TypeOf((*gob.GobEncoder)(nil)).Elem()
+	return t.Implements(gobEncoder) || reflect.PointerTo(t).Implements(gobEncoder)
+}
+
 // validateGobState fails fast (at registration) when the per-scan state type S
-// cannot be gob-encoded for HTTP rehydration — the common pitfall being a struct
-// whose fields are all unexported (e.g. `struct{ done bool }`). gob would
-// otherwise only surface this mid-query, on the first HTTP continuation, as
-// "gob: type ... has no exported fields". A truly empty `struct{}` (no fields)
-// is fine — gob encodes it as nothing — and a type providing its own
-// gob.GobEncoder is exempt. Mirrors vgi-python enforcing serializable state at
-// class-definition time.
+// cannot be gob-encoded for HTTP rehydration. gob otherwise surfaces these only
+// mid-query, on the first HTTP continuation, with a cryptic message. Two pitfalls
+// are caught by walking S's exported, gob-reachable fields:
+//
+//   - a struct whose fields are all unexported (e.g. `struct{ done bool }`): gob
+//     encodes nothing and reports "type ... has no exported fields".
+//   - an exported field of a kind gob cannot encode — an interface (the common
+//     case being an Arrow `arrow.Record`/`arrow.Array` stashed in state to emit
+//     later), a chan, a func, or an unsafe.Pointer. The fix is to store plain
+//     serializable Go values (slices, scalars) in state and rebuild the Arrow
+//     batch in Process, mirroring the SDK's static_data.go example.
+//
+// A truly empty `struct{}` is fine, and any type providing its own
+// gob.GobEncoder is exempt (at the top level or as a nested field). Mirrors
+// vgi-python enforcing serializable state at class-definition time.
 func validateGobState[S any]() {
 	t := reflect.TypeOf((*S)(nil)).Elem()
-	gobEncoder := reflect.TypeOf((*gob.GobEncoder)(nil)).Elem()
-	if t.Implements(gobEncoder) || reflect.PointerTo(t).Implements(gobEncoder) {
+	assertGobEncodable(t, t.String(), map[reflect.Type]bool{})
+}
+
+// assertGobEncodable panics if t — reachable from a state field via path — holds
+// a value gob cannot encode. seen guards against self-referential types.
+func assertGobEncodable(t reflect.Type, path string, seen map[reflect.Type]bool) {
+	if t == nil || seen[t] {
 		return
 	}
-	if t.Kind() == reflect.Struct && t.NumField() > 0 {
+	seen[t] = true
+	// A type that defines its own gob serialization handles itself.
+	if implementsGobEncoder(t) {
+		return
+	}
+	switch t.Kind() {
+	case reflect.Interface, reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		panic(fmt.Sprintf(
+			"vgi.AsTableFunction: state field %s has type %s (kind %s), which cannot be "+
+				"gob-encoded for HTTP rehydration. Arrow values (arrow.Record/arrow.Array) and "+
+				"other interface/chan/func fields must not live in table-function state — store "+
+				"plain serializable Go values (slices, scalars) and rebuild them in Process (see "+
+				"the static_data.go example), or implement gob.GobEncoder/GobDecoder.",
+			path, t.String(), t.Kind()))
+	case reflect.Ptr, reflect.Slice, reflect.Array:
+		assertGobEncodable(t.Elem(), path+"[]", seen)
+	case reflect.Map:
+		assertGobEncodable(t.Key(), path+".<key>", seen)
+		assertGobEncodable(t.Elem(), path+".<value>", seen)
+	case reflect.Struct:
+		if t.NumField() == 0 {
+			return // a truly empty struct gob-encodes as nothing
+		}
 		exported := 0
 		for i := 0; i < t.NumField(); i++ {
-			if t.Field(i).IsExported() {
-				exported++
+			f := t.Field(i)
+			if !f.IsExported() {
+				continue // gob skips unexported fields, so they cannot break encoding
 			}
+			exported++
+			assertGobEncodable(f.Type, path+"."+f.Name, seen)
 		}
 		if exported == 0 {
 			panic(fmt.Sprintf(
-				"vgi.AsTableFunction[%s]: state type %s has no exported fields and cannot be "+
+				"vgi.AsTableFunction: state type %s has no exported fields and cannot be "+
 					"gob-encoded for HTTP rehydration — export its fields (e.g. `Done bool`) or "+
-					"implement gob.GobEncoder/GobDecoder",
-				t.Name(), t.String()))
+					"implement gob.GobEncoder/GobDecoder.",
+				path))
 		}
 	}
 }
