@@ -25,6 +25,7 @@ func (f *EchoFunction) Metadata() vgi.FunctionMetadata {
 		FilterPushdown:     true,
 		AutoApplyFilters:   true,
 		Categories:         []string{"utility", "debug"},
+		Tags:               map[string]string{"category": "debug", "type": "passthrough"},
 	}
 }
 

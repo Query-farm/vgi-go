@@ -256,6 +256,10 @@ type FunctionMetadata struct {
 	AutoApplyFilters bool
 	// Categories is a list of classification tags for the function.
 	Categories []string
+	// Tags are arbitrary key/value annotations surfaced through the catalog as
+	// duckdb_functions().tags. Distinct from Categories (a flat list); Tags is
+	// a map for structured metadata (e.g. {"category": "debug"}).
+	Tags map[string]string
 	// Examples lists usage examples surfaced in the catalog's FunctionInfo.
 	// Each example carries SQL, a description, and an optional expected output.
 	Examples []CatalogExample
