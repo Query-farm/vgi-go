@@ -276,6 +276,76 @@ func NewDisjointRangePartitionedFunction() vgi.TableFunction {
 }
 
 // ---------------------------------------------------------------------------
+// overlapping_range_partitioned — OVERLAPPING, one column. The only fixture
+// that declares OVERLAPPING_PARTITIONS. Each chunk N emits key values in
+// [N*500, N*500+rows); with rows_per_partition > 500 consecutive chunks overlap
+// on key (distinguishing it from disjoint). DuckDB has no consumer for
+// OVERLAPPING today, so GROUP BY falls back to HASH_GROUP_BY; the value's
+// purpose is to keep the wire path (declaration + per-batch min/max) exercised.
+// ---------------------------------------------------------------------------
+
+type overlappingArgs struct {
+	Partitions       int64 `vgi:"pos=0,doc=Number of overlapping partitions"`
+	RowsPerPartition int64 `vgi:"default=10,doc=Rows per partition"`
+}
+
+type OverlappingRangePartitionedFunction struct{}
+
+var _ vgi.TypedTableFunc[pcState] = (*OverlappingRangePartitionedFunction)(nil)
+
+func (f *OverlappingRangePartitionedFunction) Name() string {
+	return "overlapping_range_partitioned"
+}
+func (f *OverlappingRangePartitionedFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{Description: "Overlapping per-chunk integer ranges on key (OVERLAPPING partition; wire-level only).", Categories: []string{"generator", "partitioning", "testing"}, PartitionKind: vgi.PartitionKindOverlappingPartitions}
+}
+func (f *OverlappingRangePartitionedFunction) ArgumentSpecs() []vgi.ArgSpec {
+	return vgi.DeriveArgSpecs(overlappingArgs{})
+}
+func (f *OverlappingRangePartitionedFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+	return vgi.BindSchema(arrow.NewSchema([]arrow.Field{pcKeyField, {Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil))
+}
+func (f *OverlappingRangePartitionedFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
+	var args overlappingArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	if err := pushIndexQueue(params, int(args.Partitions)); err != nil {
+		return nil, err
+	}
+	return &vgi.GlobalInitResponse{MaxWorkers: 4}, nil
+}
+func (f *OverlappingRangePartitionedFunction) NewState(params *vgi.ProcessParams) (*pcState, error) {
+	return &pcState{}, nil
+}
+func (f *OverlappingRangePartitionedFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *pcState, out *vgirpc.OutputCollector) error {
+	idx, ok, err := popIndex(params)
+	if err != nil || !ok {
+		return finishOr(out, err)
+	}
+	var args overlappingArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return err
+	}
+	rpp := args.RowsPerPartition
+	if rpp <= 0 {
+		rpp = 10
+	}
+	// Stride of 500 (< rpp when callers want overlap) makes consecutive chunks
+	// share key values.
+	base := idx * 500
+	keyArr := vgi.BuildInt64Array(rpp, func(i int64) int64 { return base + i })
+	defer keyArr.Release()
+	valArr := vgi.BuildInt64Array(rpp, func(i int64) int64 { return idx*10 + i })
+	defer valArr.Release()
+	batch := array.NewRecordBatch(params.OutputSchema, []arrow.Array{keyArr, valArr}, rpp)
+	return vgi.EmitPartitioned(out, batch, []arrow.Field{pcKeyField}, vgi.PartitionKindOverlappingPartitions, nil)
+}
+func NewOverlappingRangePartitionedFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[pcState](&OverlappingRangePartitionedFunction{})
+}
+
+// ---------------------------------------------------------------------------
 // Deliberately-broken partition_columns fixtures (partition_columns_contract.test).
 // ---------------------------------------------------------------------------
 
