@@ -14,7 +14,6 @@ import (
 
 	"github.com/Query-farm/vgi-go/examples/accumulate"
 	"github.com/Query-farm/vgi-go/examples/all"
-	"github.com/Query-farm/vgi-go/examples/narrow_bind"
 	"github.com/Query-farm/vgi-go/examples/schema_reconcile"
 	"github.com/Query-farm/vgi-go/examples/table"
 	"github.com/Query-farm/vgi-go/internal/covflush"
@@ -97,7 +96,7 @@ func main() {
 		}),
 		// Cross-language reproducer catalogs share this binary; ATTACH
 		// against any of these names succeeds (functions are catalog-agnostic).
-		vgi.WithCatalogAliases("projection_repro", "schema_reconcile", narrow_bind.CatalogName),
+		vgi.WithCatalogAliases("projection_repro", "schema_reconcile"),
 		// The accumulate fixture catalog is discoverable (data version 2.0.0)
 		// and isolated per ATTACH (random scope); its functions are registered
 		// catalog-scoped below so they don't leak into the example catalog.
@@ -107,27 +106,9 @@ func main() {
 		// served by handlers (not declared via RegisterCatalogTable). The four
 		// handlers below are wired in registration order; they short-circuit on
 		// any other catalog name.
-		// Each option is single-valued, so the schema_reconcile and narrow_bind
-		// fixtures are composed: try the first, fall through to the second when
-		// it declines (returns false).
-		vgi.WithSchemaContentsHandler(func(attach []byte, schema string) ([]vgi.SerializedSchemaItem, bool) {
-			if items, ok := schema_reconcile.SchemaContentsHandler(attach, schema); ok {
-				return items, true
-			}
-			return narrow_bind.SchemaContentsHandler(attach, schema)
-		}),
-		vgi.WithAttachTableGetHandler(func(attach []byte, schema, name string, atUnit, atValue *string) ([]byte, bool, error) {
-			if data, ok, err := schema_reconcile.AttachTableGetHandler(attach, schema, name, atUnit, atValue); ok || err != nil {
-				return data, ok, err
-			}
-			return narrow_bind.AttachTableGetHandler(attach, schema, name, atUnit, atValue)
-		}),
-		vgi.WithAttachScanFunctionGetHandler(func(attach []byte, schema, name string, atUnit, atValue *string) (*vgi.ScanFunctionResult, bool, error) {
-			if res, ok, err := schema_reconcile.AttachScanFunctionGetHandler(attach, schema, name, atUnit, atValue); ok || err != nil {
-				return res, ok, err
-			}
-			return narrow_bind.AttachScanFunctionGetHandler(attach, schema, name, atUnit, atValue)
-		}),
+		vgi.WithSchemaContentsHandler(schema_reconcile.SchemaContentsHandler),
+		vgi.WithAttachTableGetHandler(schema_reconcile.AttachTableGetHandler),
+		vgi.WithAttachScanFunctionGetHandler(schema_reconcile.AttachScanFunctionGetHandler),
 		vgi.WithAttachScanBranchesGetHandler(multiBranchScanBranchesGet),
 		vgi.WithAttachWriteFunctionGetHandler(schema_reconcile.AttachWriteFunctionGetHandler),
 		vgi.WithSecretTypes(
@@ -195,11 +176,6 @@ func main() {
 	// Register the accumulate fixture (catalog-scoped, so it is invisible under
 	// the example catalog and preserves its function inventory).
 	accumulate.Register(w)
-
-	// Register the narrow_bind reproducer fixture (catalog-scoped). Its
-	// scan functions back the mismatch/consistent tables advertised by the
-	// composed catalog handlers above.
-	narrow_bind.RegisterAll(w)
 
 	// Writable catalog (in-memory, per-process state). Gated off by default so
 	// the example worker's function inventory matches the reference vgi-python
