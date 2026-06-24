@@ -32,7 +32,7 @@ func (f *SequenceFunction) Metadata() vgi.FunctionMetadata {
 // sequenceArgs is the typed argument schema for sequence().
 type sequenceArgs struct {
 	Count     int64 `vgi:"pos=0,doc=Number of integers to generate"`
-	BatchSize int64 `vgi:"default=1000,doc=Batch size for output"`
+	BatchSize int64 `vgi:"default=2048,doc=Batch size for output"`
 	Increment int64 `vgi:"default=1,doc=Step between values"`
 }
 

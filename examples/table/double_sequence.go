@@ -27,7 +27,7 @@ func (f *DoubleSequenceFunction) Metadata() vgi.FunctionMetadata {
 // doubleSequenceArgs is the typed argument schema for double_sequence().
 type doubleSequenceArgs struct {
 	Count     int64   `vgi:"pos=0,doc=Number of values to generate"`
-	BatchSize int64   `vgi:"default=1000,doc=Batch size for output"`
+	BatchSize int64   `vgi:"default=2048,doc=Batch size for output"`
 	Increment float64 `vgi:"default=1.0,doc=Step between values"`
 }
 

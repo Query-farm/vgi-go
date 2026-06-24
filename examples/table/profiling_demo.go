@@ -36,7 +36,7 @@ func (f *ProfilingDemoFunction) Metadata() vgi.FunctionMetadata {
 // profilingDemoArgs is the typed argument schema for profiling_demo().
 type profilingDemoArgs struct {
 	Count     int64 `vgi:"pos=0,doc=Number of rows to generate"`
-	BatchSize int64 `vgi:"default=1000,doc=Rows per batch"`
+	BatchSize int64 `vgi:"default=2048,doc=Rows per batch"`
 	Increment int64 `vgi:"default=1,doc=Increment between values"`
 }
 

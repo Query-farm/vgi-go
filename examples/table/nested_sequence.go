@@ -42,7 +42,7 @@ func (f *NestedSequenceFunction) Metadata() vgi.FunctionMetadata {
 // nestedSequenceArgs is the typed argument schema for nested_sequence().
 type nestedSequenceArgs struct {
 	Count       int64 `vgi:"pos=0,doc=Number of rows to generate"`
-	BatchSize   int64 `vgi:"default=1000,doc=Batch size for output"`
+	BatchSize   int64 `vgi:"default=2048,doc=Batch size for output"`
 	HistorySize int64 `vgi:"default=20,doc=Max items in history list"`
 }
 
