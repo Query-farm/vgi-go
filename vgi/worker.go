@@ -300,6 +300,7 @@ type Worker struct {
 	catalogTags          map[string]string
 	supportsTransactions bool
 	schemaComments       map[string]string
+	schemaTags           map[string]map[string]string
 	catalog              *DefaultReadOnlyCatalog
 	// extraCatalogs are additional catalog names this worker accepts via
 	// catalog_attach. They share the worker's registered functions but
@@ -576,6 +577,28 @@ func WithSchemaComments(comments map[string]string) WorkerOption {
 		}
 		for k, v := range comments {
 			w.schemaComments[k] = v
+		}
+	}
+}
+
+// WithSchemaTags sets schema-level tags surfaced via duckdb_schemas().tags
+// (SchemaInfo.tags). Keyed by schema name. The metadata-quality linter expects
+// vgi.description_llm / vgi.description_md tags on each schema. Tags merge with
+// any previously configured tags for the same schema; later keys win.
+func WithSchemaTags(tags map[string]map[string]string) WorkerOption {
+	return func(w *Worker) {
+		if w.schemaTags == nil {
+			w.schemaTags = map[string]map[string]string{}
+		}
+		for schema, kv := range tags {
+			st := w.schemaTags[schema]
+			if st == nil {
+				st = map[string]string{}
+				w.schemaTags[schema] = st
+			}
+			for k, v := range kv {
+				st[k] = v
+			}
 		}
 	}
 }

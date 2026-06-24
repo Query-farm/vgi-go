@@ -101,3 +101,40 @@ func TestFunctionExamplesSurfacedInCatalog(t *testing.T) {
 		t.Fatalf("SerializeFunctionInfo: %v", err)
 	}
 }
+
+// TestSchemaTagsSurfacedInCatalog verifies that tags configured via
+// WithSchemaTags are threaded onto SchemaInfo.Tags (duckdb_schemas().tags) and
+// serialize cleanly.
+func TestSchemaTagsSurfacedInCatalog(t *testing.T) {
+	w := NewWorker(WithSchemaTags(map[string]map[string]string{
+		"main": {
+			"vgi.description_llm": "LLM description",
+			"vgi.description_md":  "MD description",
+		},
+	}))
+	w.RegisterScalar(AsScalarFunction[exampleArgs](exampleImpl{}))
+
+	cat := NewDefaultReadOnlyCatalog("example", w)
+	si, ok := cat.schemas["main"]
+	if !ok {
+		t.Fatalf("main schema not found in catalog")
+	}
+	if got := si.info.Tags["vgi.description_llm"]; got != "LLM description" {
+		t.Errorf("tags[vgi.description_llm] = %q", got)
+	}
+	if got := si.info.Tags["vgi.description_md"]; got != "MD description" {
+		t.Errorf("tags[vgi.description_md] = %q", got)
+	}
+	if _, err := SerializeSchemaInfo(si.info); err != nil {
+		t.Fatalf("SerializeSchemaInfo: %v", err)
+	}
+}
+
+// TestCatalogSourceURLSerialized verifies that a worker-set CatalogInfo.SourceURL
+// serializes into the catalog_catalogs discovery record (source_url column).
+func TestCatalogSourceURLSerialized(t *testing.T) {
+	url := "https://github.com/Query-farm/vgi-go"
+	if _, err := SerializeCatalogInfo(&CatalogInfo{Name: "example", SourceURL: &url}); err != nil {
+		t.Fatalf("SerializeCatalogInfo: %v", err)
+	}
+}

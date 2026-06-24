@@ -727,6 +727,22 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		si.info.EstimatedObjectCount = counts
 	}
 
+	// Apply worker-configured schema-level tags (WithSchemaTags), surfaced via
+	// SchemaInfo.tags / duckdb_schemas().tags. The metadata-quality linter
+	// expects e.g. vgi.description_llm / vgi.description_md per schema.
+	for name, tags := range w.schemaTags {
+		si, ok := cat.schemas[name]
+		if !ok || len(tags) == 0 {
+			continue
+		}
+		if si.info.Tags == nil {
+			si.info.Tags = make(map[string]string, len(tags))
+		}
+		for k, v := range tags {
+			si.info.Tags[k] = v
+		}
+	}
+
 	return cat
 }
 
