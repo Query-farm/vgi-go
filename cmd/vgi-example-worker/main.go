@@ -675,6 +675,10 @@ func main() {
 		MacroType:  vgi.MacroTypeScalar,
 		Parameters: []string{"x", "y"},
 		Definition: "x * y",
+		ParameterDocs: map[string]string{
+			"x": "First factor",
+			"y": "Second factor",
+		},
 	})
 
 	clampDefaults, err := vgi.BuildMacroDefaultValues([]vgi.MacroDefault{
@@ -694,9 +698,9 @@ func main() {
 		// arguments_schema's vgi_doc field metadata (the same channel functions
 		// use for per-argument docs). Optional; undocumented params carry no doc.
 		ParameterDocs: map[string]string{
-			"val": "The value to clamp.",
-			"lo":  "Lower bound (inclusive); defaults to 0.",
-			"hi":  "Upper bound (inclusive); defaults to 100.",
+			"val": "Value to clamp",
+			"lo":  "Lower bound (inclusive)",
+			"hi":  "Upper bound (inclusive)",
 		},
 	})
 
@@ -705,6 +709,9 @@ func main() {
 		MacroType:  vgi.MacroTypeTable,
 		Parameters: []string{"n"},
 		Definition: "SELECT * FROM range(n)",
+		ParameterDocs: map[string]string{
+			"n": "Number of rows to generate",
+		},
 	})
 
 	// Handler for time-travel table_get (returns version-specific schemas)
