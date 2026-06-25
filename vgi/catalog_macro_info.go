@@ -54,6 +54,12 @@ type CatalogMacro struct {
 	// Tags are arbitrary key/value annotations attached to this macro;
 	// surfaced through MacroInfo.tags.
 	Tags map[string]string
+	// ParameterDocs is an optional mapping of parameter name to a
+	// human/agent-facing description. Keys must appear in Parameters.
+	// Descriptions flow over the wire via the macro arguments_schema's
+	// vgi_doc field metadata (the same channel functions use for per-argument
+	// docs). Empty/nil means no per-parameter docs.
+	ParameterDocs map[string]string
 }
 
 // MacroInfo describes a macro in the catalog for wire serialization.
@@ -66,6 +72,11 @@ type MacroInfo struct {
 	Parameters             []string
 	ParameterDefaultValues []byte
 	Definition             string
+	// ArgumentsSchema is the optional macro arguments schema, serialized as
+	// Arrow IPC bytes: one nullable field per parameter, in Parameters order,
+	// each carrying its description via the vgi_doc field-metadata key (the
+	// same channel functions use). nil when no per-parameter docs are supplied.
+	ArgumentsSchema []byte
 }
 
 var macroInfoSchema = generated.MacroInfoSchema
@@ -136,6 +147,15 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 	defer defBuilder.Release()
 	defBuilder.Append(info.Definition)
 
+	// arguments_schema (binary, non-null; empty bytes when no per-parameter docs)
+	argsBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	defer argsBuilder.Release()
+	if info.ArgumentsSchema != nil {
+		argsBuilder.Append(info.ArgumentsSchema)
+	} else {
+		argsBuilder.Append([]byte{})
+	}
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
@@ -145,6 +165,7 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 		paramsBuilder.NewArray(),
 		pdvBuilder.NewArray(),
 		defBuilder.NewArray(),
+		argsBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {
@@ -164,6 +185,27 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// macroInfoFromCatalogMacro builds the wire MacroInfo for a registered
+// CatalogMacro in the given schema, including the per-parameter arguments_schema
+// (carrying vgi_doc field metadata for documented parameters).
+func macroInfoFromCatalogMacro(cm CatalogMacro, schemaName string) (*MacroInfo, error) {
+	argsSchema, err := BuildMacroArgumentsSchema(cm.Parameters, cm.ParameterDefaultValues, cm.ParameterDocs)
+	if err != nil {
+		return nil, err
+	}
+	return &MacroInfo{
+		Name:                   cm.Name,
+		SchemaName:             schemaName,
+		Comment:                cm.Comment,
+		Tags:                   cm.Tags,
+		MacroType:              cm.MacroType,
+		Parameters:             cm.Parameters,
+		ParameterDefaultValues: cm.ParameterDefaultValues,
+		Definition:             cm.Definition,
+		ArgumentsSchema:        argsSchema,
+	}, nil
 }
 
 // MacroDefault describes a single parameter default value.
@@ -211,4 +253,78 @@ func BuildMacroDefaultValues(defaults []MacroDefault) ([]byte, error) {
 		return nil, fmt.Errorf("serializing macro default values: %w", err)
 	}
 	return data, nil
+}
+
+// BuildMacroArgumentsSchema builds the macro arguments_schema describing macro
+// parameters, mirroring the function arguments_schema mechanism: one nullable
+// Arrow field per parameter, in parameters order. Each parameter's field type is
+// the type of its default value when known (derived from parameterDefaultValues,
+// the serialized 1-row RecordBatch of typed defaults) else arrow.Null. The
+// per-parameter description rides as field metadata under the same vgi_doc key
+// functions use (UTF-8, presence-only — the key is omitted entirely when there
+// is no doc).
+//
+// Returns nil when there are no parameters (nothing to describe). The returned
+// bytes are Arrow IPC schema bytes suitable for MacroInfo.ArgumentsSchema and
+// the macro create-request arguments_schema slot.
+func BuildMacroArgumentsSchema(parameters []string, parameterDefaultValues []byte, parameterDocs map[string]string) ([]byte, error) {
+	if len(parameters) == 0 {
+		return nil, nil
+	}
+
+	// Map parameter name -> Arrow type from the typed default values, if any.
+	defaultTypes := map[string]arrow.DataType{}
+	if len(parameterDefaultValues) > 0 {
+		defaultsSchema, err := DeserializeSchema(parameterDefaultValues)
+		if err != nil {
+			return nil, fmt.Errorf("reading macro default-value schema: %w", err)
+		}
+		for _, f := range defaultsSchema.Fields() {
+			defaultTypes[f.Name] = f.Type
+		}
+	}
+
+	fields := make([]arrow.Field, len(parameters))
+	for i, name := range parameters {
+		fieldType, ok := defaultTypes[name]
+		if !ok || fieldType == nil {
+			fieldType = arrow.Null
+		}
+
+		var fieldMeta arrow.Metadata
+		if doc := parameterDocs[name]; doc != "" {
+			fieldMeta = arrow.NewMetadata([]string{"vgi_doc"}, []string{doc})
+		}
+
+		fields[i] = arrow.Field{
+			Name:     name,
+			Type:     fieldType,
+			Nullable: true,
+			Metadata: fieldMeta,
+		}
+	}
+
+	return SerializeSchema(arrow.NewSchema(fields, nil))
+}
+
+// MacroParameterDocsFromSchema extracts per-parameter descriptions from a macro
+// arguments_schema (Arrow IPC schema bytes). Inverse of
+// BuildMacroArgumentsSchema's vgi_doc handling: reads the vgi_doc field metadata
+// (UTF-8) for each field. Fields without the key (undocumented) are omitted from
+// the result. Returns an empty map when the input is empty or carries no docs.
+func MacroParameterDocsFromSchema(argumentsSchema []byte) (map[string]string, error) {
+	docs := map[string]string{}
+	if len(argumentsSchema) == 0 {
+		return docs, nil
+	}
+	schema, err := DeserializeSchema(argumentsSchema)
+	if err != nil {
+		return nil, fmt.Errorf("reading macro arguments schema: %w", err)
+	}
+	for _, f := range schema.Fields() {
+		if idx := f.Metadata.FindKey("vgi_doc"); idx >= 0 {
+			docs[f.Name] = f.Metadata.Values()[idx]
+		}
+	}
+	return docs, nil
 }

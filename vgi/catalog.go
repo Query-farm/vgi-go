@@ -378,7 +378,12 @@ type MacroCreateRequestWire struct {
 	Definition             string   `vgirpc:"definition"`
 	OnConflict             string   `vgirpc:"on_conflict,enum"`
 	ParameterDefaultValues *[]byte  `vgirpc:"parameter_default_values"`
-	TransactionOpaqueData  *[]byte  `vgirpc:"transaction_opaque_data"`
+	// ArgumentsSchema is the optional macro arguments schema (Arrow IPC schema
+	// bytes): one nullable field per parameter, in Parameters order, each
+	// carrying its description via the vgi_doc field-metadata key. nil when no
+	// per-parameter docs are supplied. Decode with MacroParameterDocsFromSchema.
+	ArgumentsSchema       *[]byte `vgirpc:"arguments_schema"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // MacroDropRequestWire is for catalog_macro_drop.
@@ -1505,15 +1510,9 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			}
 			for _, cm := range si.macros {
 				if cm.Name == req.Name {
-					info := &MacroInfo{
-						Name:                   cm.Name,
-						SchemaName:             req.SchemaName,
-						Comment:                cm.Comment,
-						Tags:                   cm.Tags,
-						MacroType:              cm.MacroType,
-						Parameters:             cm.Parameters,
-						ParameterDefaultValues: cm.ParameterDefaultValues,
-						Definition:             cm.Definition,
+					info, err := macroInfoFromCatalogMacro(cm, req.SchemaName)
+					if err != nil {
+						return ItemsResponseWire{}, err
 					}
 					data, err := SerializeMacroInfo(info)
 					if err != nil {
@@ -1548,15 +1547,9 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 						}
 					}
 				}
-				info := &MacroInfo{
-					Name:                   cm.Name,
-					SchemaName:             req.Name,
-					Comment:                cm.Comment,
-					Tags:                   cm.Tags,
-					MacroType:              cm.MacroType,
-					Parameters:             cm.Parameters,
-					ParameterDefaultValues: cm.ParameterDefaultValues,
-					Definition:             cm.Definition,
+				info, err := macroInfoFromCatalogMacro(cm, req.Name)
+				if err != nil {
+					return ItemsResponseWire{}, err
 				}
 				data, err := SerializeMacroInfo(info)
 				if err != nil {

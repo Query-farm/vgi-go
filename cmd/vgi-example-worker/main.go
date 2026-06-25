@@ -690,6 +690,14 @@ func main() {
 		Parameters:             []string{"val", "lo", "hi"},
 		ParameterDefaultValues: clampDefaults,
 		Definition:             "GREATEST(lo, LEAST(hi, val))",
+		// Per-parameter documentation rides over the wire via the macro
+		// arguments_schema's vgi_doc field metadata (the same channel functions
+		// use for per-argument docs). Optional; undocumented params carry no doc.
+		ParameterDocs: map[string]string{
+			"val": "The value to clamp.",
+			"lo":  "Lower bound (inclusive); defaults to 0.",
+			"hi":  "Upper bound (inclusive); defaults to 100.",
+		},
 	})
 
 	w.RegisterCatalogMacro("main", vgi.CatalogMacro{
