@@ -445,6 +445,43 @@ func TestBindArgs_NilArgsAppliesDefaults(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// BuildArgSchema — vgi_doc metadata
+// ---------------------------------------------------------------------------
+
+func TestArgSchema_EmitsVgiDoc(t *testing.T) {
+	// One arg carries a (unicode) doc; the other has none.
+	const docText = "µ ≥ value — note"
+	specs := []ArgSpec{
+		{Name: "documented", Position: 0, ArrowType: "int64", Doc: docText, IsConst: true, ArrowDataType: arrow.PrimitiveTypes.Int64},
+		{Name: "plain", Position: 1, ArrowType: "varchar", IsConst: true, ArrowDataType: arrow.BinaryTypes.String},
+	}
+
+	schema := BuildArgSchema(specs)
+	if schema.NumFields() != 2 {
+		t.Fatalf("expected 2 fields, got %d", schema.NumFields())
+	}
+
+	// Field 0 must carry vgi_doc == the (unicode) doc string.
+	doc := schema.Field(0)
+	idx := doc.Metadata.FindKey("vgi_doc")
+	if idx < 0 {
+		t.Fatalf("documented field missing vgi_doc metadata; keys=%v", doc.Metadata.Keys())
+	}
+	if got := doc.Metadata.Values()[idx]; got != docText {
+		t.Errorf("vgi_doc: got %q want %q", got, docText)
+	}
+
+	// Field 1 must NOT carry vgi_doc at all (presence-only encoding).
+	plain := schema.Field(1)
+	if plain.Metadata.FindKey("vgi_doc") >= 0 {
+		t.Errorf("empty-doc field should not carry vgi_doc; keys=%v", plain.Metadata.Keys())
+	}
+
+	// No schema→specs decoder exists in this package, so round-trip is not
+	// asserted here. If one is added, extend this test to verify Doc survives.
+}
+
 func TestRegisterTypeBound_RoundTrip(t *testing.T) {
 	RegisterTypeBound("custom_bound", IsNumericType)
 	if LookupTypeBound("CUSTOM_BOUND") == nil {

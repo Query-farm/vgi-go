@@ -178,6 +178,11 @@ func BuildArgSchema(specs []ArgSpec) *arrow.Schema {
 			meta["vgi_varargs"] = "true"
 		}
 
+		// Per-argument description (UTF-8; presence-only — omit when empty).
+		if spec.Doc != "" {
+			meta["vgi_doc"] = spec.Doc
+		}
+
 		var fieldMeta arrow.Metadata
 		if len(meta) > 0 {
 			keys := make([]string, 0, len(meta))
