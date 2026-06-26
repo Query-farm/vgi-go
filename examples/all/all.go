@@ -146,6 +146,7 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewSettingsAwareFunction())
 	w.RegisterTable(table.NewStructSettingsFunction())
 	w.RegisterTable(table.NewTenThousandFunction())
+	w.RegisterTable(table.NewUnionVarargsFunction())
 	w.RegisterTable(table.NewVersionedDataFunction())
 	w.RegisterTable(table.NewDepartmentsScanFunction())
 	w.RegisterTable(table.NewEmployeesScanFunction())
