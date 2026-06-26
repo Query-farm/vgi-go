@@ -859,6 +859,7 @@ const (
 	transportStdio serverTransport = iota // single serial stream — deferred cleanup
 	transportHTTP                         // independent requests — no deferred cleanup (TTL sweep)
 	transportUnix                         // concurrent connections — no cleanup hook (TTL sweep)
+	transportTCP                          // concurrent connections — no cleanup hook (TTL sweep)
 )
 
 func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
@@ -903,6 +904,8 @@ func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 		s.SetDispatchHook(&storageCleanupHook{worker: w, isHTTP: true})
 	case transportUnix:
 		// no cleanup hook
+	case transportTCP:
+		// no cleanup hook (concurrent connections, like unix)
 	}
 
 	// Register bind (unary)
@@ -955,6 +958,23 @@ func (w *Worker) RunUnix(path string, idleTimeout time.Duration) error {
 	s := w.buildServer(transportUnix)
 	return s.RunUnix(path, idleTimeout, func(bound string) {
 		fmt.Println("UNIX:" + bound)
+		os.Stdout.Sync()
+	})
+}
+
+// RunTcp runs the worker serving RPC over a raw TCP socket — the launcher
+// transport's AF_INET sibling. It binds host:port (host "" defaults to
+// 127.0.0.1; port 0 picks a free port), prints the readiness marker
+// "TCP:<host>:<port>" with the actual bound port to stdout once listening
+// (then writes nothing further to stdout), and self-shuts-down after
+// idleTimeout with no active connections (<=0 disables the timeout).
+//
+// Raw TCP framing carries no auth/encryption — bind loopback / a trusted
+// network only; use RunHttp for untrusted networks.
+func (w *Worker) RunTcp(host string, port int, idleTimeout time.Duration) error {
+	s := w.buildServer(transportTCP)
+	return s.RunTcp(host, port, idleTimeout, func(boundHost string, boundPort int) {
+		fmt.Printf("TCP:%s:%d\n", boundHost, boundPort)
 		os.Stdout.Sync()
 	})
 }

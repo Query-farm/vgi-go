@@ -9,6 +9,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,7 +27,8 @@ import (
 func main() {
 	httpMode := flag.Bool("http", false, "Run as HTTP server instead of stdio")
 	unixPath := flag.String("unix", "", "Bind to this AF_UNIX socket path (launcher transport); mutually exclusive with --http")
-	idleTimeout := flag.Float64("idle-timeout", 300, "Self-shutdown after N seconds idle when serving --unix (0 = never)")
+	tcpAddr := flag.String("tcp", "", "Bind a raw TCP socket ([HOST:]PORT, host defaults to 127.0.0.1, port 0 auto-selects); mutually exclusive with --http/--unix")
+	idleTimeout := flag.Float64("idle-timeout", 300, "Self-shutdown after N seconds idle when serving --unix/--tcp (0 = never)")
 	// --describe / --no-describe: accepted for launcher compatibility (the VGI
 	// extension passes it through). Description pages aren't served over the
 	// socket/stdio transports, so it is currently a no-op here.
@@ -38,6 +40,7 @@ func main() {
 	// rather than failing to start. Flags named here consume a value token.
 	flag.CommandLine.Parse(filterKnownFlags(os.Args[1:], map[string]bool{
 		"unix":         true,
+		"tcp":          true,
 		"idle-timeout": true,
 		"log-level":    true,
 		"log-format":   true,
@@ -52,8 +55,14 @@ func main() {
 	// (no-op otherwise); the harness kills pooled/long-lived workers with SIGTERM.
 	covflush.Start()
 
-	if *unixPath != "" && *httpMode {
-		log.Fatal("--unix and --http are mutually exclusive")
+	nTransports := 0
+	for _, on := range []bool{*unixPath != "", *tcpAddr != "", *httpMode} {
+		if on {
+			nTransports++
+		}
+	}
+	if nTransports > 1 {
+		log.Fatal("--unix, --tcp, and --http are mutually exclusive")
 	}
 
 	// Pick the FunctionStorage backend from VGI_WORKER_SHARED_STORAGE.
@@ -936,6 +945,14 @@ func main() {
 		if err := w.RunUnix(*unixPath, time.Duration(*idleTimeout*float64(time.Second))); err != nil {
 			log.Fatal(err)
 		}
+	case *tcpAddr != "":
+		host, port, err := parseTCPAddr(*tcpAddr)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := w.RunTcp(host, port, time.Duration(*idleTimeout*float64(time.Second))); err != nil {
+			log.Fatal(err)
+		}
 	case *httpMode:
 		authFn, jwtCleanup := resolveAuthenticate()
 		if jwtCleanup != nil {
@@ -953,6 +970,24 @@ func main() {
 	default:
 		w.RunStdio()
 	}
+}
+
+// parseTCPAddr parses a "[HOST:]PORT" --tcp bind spec. A bare PORT (no colon)
+// binds 127.0.0.1; an empty host (leading ":") also defaults to loopback.
+func parseTCPAddr(spec string) (string, int, error) {
+	host := "127.0.0.1"
+	portStr := spec
+	if i := strings.LastIndex(spec, ":"); i >= 0 {
+		if spec[:i] != "" {
+			host = spec[:i]
+		}
+		portStr = spec[i+1:]
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return "", 0, fmt.Errorf("--tcp expects [HOST:]PORT, got %q", spec)
+	}
+	return host, port, nil
 }
 
 // filterKnownFlags drops command-line tokens for flags this binary doesn't
