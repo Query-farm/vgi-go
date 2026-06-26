@@ -975,7 +975,7 @@ func (w *Worker) RunTcp(host string, port int, idleTimeout time.Duration) error 
 	s := w.buildServer(transportTCP)
 	return s.RunTcp(host, port, idleTimeout, func(boundHost string, boundPort int) {
 		fmt.Printf("TCP:%s:%d\n", boundHost, boundPort)
-		os.Stdout.Sync()
+		_ = os.Stdout.Sync()
 	})
 }
 
