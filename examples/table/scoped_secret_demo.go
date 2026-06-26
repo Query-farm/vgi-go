@@ -79,7 +79,8 @@ func (f *ScopedSecretDemoFunction) NewState(params *vgi.ProcessParams) (*scopedS
 	}
 
 	if params.Secrets != nil {
-		if secret, ok := params.Secrets["vgi_example"]; ok && len(secret) > 0 {
+		if matches := params.Secrets.OfType("vgi_example"); len(matches) > 0 && len(matches[0]) > 0 {
+			secret := matches[0]
 			state.Found = true
 			keys := make([]string, 0, len(secret))
 			for k := range secret {

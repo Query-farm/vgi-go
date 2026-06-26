@@ -54,10 +54,12 @@ func (f *SecretDemoFunction) NewState(params *vgi.ProcessParams) (*secretDemoSta
 	if params.Secrets == nil {
 		return state, nil
 	}
-	secret, ok := params.Secrets["vgi_example"]
-	if !ok || len(secret) == 0 {
+	// Secrets are keyed by name; select by type via OfType.
+	matches := params.Secrets.OfType("vgi_example")
+	if len(matches) == 0 || len(matches[0]) == 0 {
 		return state, nil
 	}
+	secret := matches[0]
 
 	// Sort keys for deterministic output
 	keys := make([]string, 0, len(secret))

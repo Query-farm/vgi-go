@@ -22,7 +22,7 @@ type ProcessParams struct {
 	// Settings is a map of DuckDB setting names to their scalar values.
 	Settings map[string]interface{}
 	// Secrets is a map of secret names to their value maps.
-	Secrets map[string]map[string]interface{}
+	Secrets Secrets
 	// ExecutionID is the execution identifier.
 	ExecutionID []byte
 	// AttachScope is the per-ATTACH plaintext (the catalog's attach_opaque_data

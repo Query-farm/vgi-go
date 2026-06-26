@@ -29,7 +29,7 @@ type InitParams struct {
 	// Settings is a map of DuckDB setting names to their scalar values.
 	Settings map[string]interface{}
 	// Secrets is a map of secret names to their value maps.
-	Secrets map[string]map[string]interface{}
+	Secrets Secrets
 	// IsSecondary is true if this is a secondary init (worker init).
 	IsSecondary bool
 	// PushdownFilters is the pushdown filter batch (nil if none).

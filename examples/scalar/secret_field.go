@@ -46,13 +46,11 @@ func (f *SecretFieldFunction) Process(ctx context.Context, params *vgi.ProcessPa
 		func(i int) string { return s })
 }
 
-// namedSecretField looks up a field on a specific named secret type, rendering
-// its value to a string. Returns "" when the secret or field is absent.
-func namedSecretField(secrets map[string]map[string]interface{}, secretType, field string) string {
-	if secrets == nil {
-		return ""
-	}
-	if fields, ok := secrets[secretType]; ok {
+// namedSecretField looks up a field on the first secret of secretType (secrets
+// are keyed by name, so select by type), rendering its value to a string.
+// Returns "" when the secret or field is absent.
+func namedSecretField(secrets vgi.Secrets, secretType, field string) string {
+	for _, fields := range secrets.OfType(secretType) {
 		if v, ok := fields[field]; ok {
 			return renderSecretValue(v)
 		}

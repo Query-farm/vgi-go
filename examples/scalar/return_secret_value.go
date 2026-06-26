@@ -40,8 +40,8 @@ func (f *ReturnSecretValueFunction) OnBind(params *vgi.BindParams) (*vgi.BindRes
 func (f *ReturnSecretValueFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 	var jsonStr string
 	if params.Secrets != nil {
-		if secret, ok := params.Secrets["vgi_example"]; ok {
-			jsonBytes, err := marshalOrderedJSON(secret)
+		if matches := params.Secrets.OfType("vgi_example"); len(matches) > 0 {
+			jsonBytes, err := marshalOrderedJSON(matches[0])
 			if err == nil {
 				jsonStr = string(jsonBytes)
 			}

@@ -20,7 +20,7 @@ type BindParams struct {
 	// Settings is a map of DuckDB setting names to their scalar values.
 	Settings map[string]interface{}
 	// Secrets is a map of secret names to their value maps.
-	Secrets map[string]map[string]interface{}
+	Secrets Secrets
 	// AttachOpaqueData is the catalog attachment identifier.
 	AttachOpaqueData []byte
 	// TransactionOpaqueData is the transaction identifier.
