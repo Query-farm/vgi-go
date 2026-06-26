@@ -360,6 +360,11 @@ type Worker struct {
 	// it would only add a cross-implementation incompatibility (the published
 	// extension round-trips plaintext opaque-data, not the longer sealed envelope).
 	sealOpaqueData bool
+
+	// copyFromFormats holds the custom COPY ... FROM formats advertised by this
+	// worker (one per RegisterCopyFrom). Surfaced via catalog_copy_from_formats
+	// so the VGI extension can register a DuckDB CopyFunction per entry.
+	copyFromFormats []copyFromFormatRecord
 }
 
 // WorkerOption configures a Worker.

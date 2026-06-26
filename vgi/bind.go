@@ -35,6 +35,10 @@ type BindParams struct {
 	// attach with no AT), so read it at NewState via ProcessParams.AtUnit/AtValue.
 	AtUnit  *string
 	AtValue *string
+	// CopyFrom carries the COPY ... FROM context when this bind opens a
+	// COPY-FROM scan (nil otherwise). A CopyFromFunction's OnBind reads its
+	// ExpectedSchema here. Mirrors Python's BindParams.bind_call.copy_from.
+	CopyFrom *CopyFromContext
 	// Auth is the authentication context for the current request.
 	// Always non-nil; unauthenticated requests receive vgirpc.Anonymous().
 	Auth *vgirpc.AuthContext

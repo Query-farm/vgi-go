@@ -8,6 +8,7 @@ package all
 
 import (
 	"github.com/Query-farm/vgi-go/examples/aggregate"
+	copy_from "github.com/Query-farm/vgi-go/examples/copy_from"
 	"github.com/Query-farm/vgi-go/examples/scalar"
 	"github.com/Query-farm/vgi-go/examples/schema_reconcile"
 	"github.com/Query-farm/vgi-go/examples/table"
@@ -23,7 +24,14 @@ func RegisterAll(w *vgi.Worker) {
 	registerTables(w)
 	aggregate.RegisterAll(w)
 	registerTableInOuts(w)
+	registerCopyFroms(w)
 	schema_reconcile.RegisterAll(w)
+}
+
+func registerCopyFroms(w *vgi.Worker) {
+	// Custom COPY ... FROM format reader (advertised via catalog_copy_from_formats
+	// and registered as an ordinary producer-mode table function).
+	w.RegisterCopyFrom(&copy_from.ExampleLinesCopyFromFunction{})
 }
 
 func registerScalars(w *vgi.Worker) {

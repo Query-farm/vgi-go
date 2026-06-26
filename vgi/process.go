@@ -43,6 +43,11 @@ type ProcessParams struct {
 	// version from these at NewState.
 	AtUnit  *string
 	AtValue *string
+	// CopyFrom carries the COPY ... FROM context when this scan was opened by a
+	// COPY-FROM statement (nil otherwise). A CopyFromFunction reads FilePath /
+	// ExpectedSchema here in Process. Mirrors Python's
+	// ProcessParams.init_call.bind_call.copy_from.
+	CopyFrom *CopyFromContext
 	// CurrentPushdownFilters is the filter state for the *current* Produce
 	// tick. It starts at the init-time pushdown filters and is replaced
 	// whenever DuckDB's dynamic filter tightens (DynamicFilter pushdown).

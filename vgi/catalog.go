@@ -108,6 +108,13 @@ type ItemsResponseWire struct {
 	Items SerializedItems `vgirpc:"items"`
 }
 
+// CopyFromFormatsRequestWire is the wire type for catalog_copy_from_formats.
+// Catalog-level (not schema-scoped).
+type CopyFromFormatsRequestWire struct {
+	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
+	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
+}
+
 // DetachRequestWire is the wire type for catalog_detach.
 type DetachRequestWire struct {
 	AttachOpaqueData []byte `vgirpc:"attach_opaque_data"`
@@ -1247,6 +1254,23 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				}
 				LogCatalog.Debug("catalog: returning function", "name", fi.Name, "type", fi.FunctionType)
 				data, err := SerializeFunctionInfo(fi)
+				if err != nil {
+					return ItemsResponseWire{}, err
+				}
+				items = append(items, data)
+			}
+			return ItemsResponseWire{Items: items}, nil
+		})
+
+	// catalog_copy_from_formats — list custom COPY ... FROM formats advertised
+	// by this catalog (catalog-level, not schema-scoped). Returns an empty list
+	// when the worker registers no copy-from formats. The VGI extension registers
+	// one DuckDB CopyFunction per returned entry at ATTACH time.
+	unaryCatalog[CopyFromFormatsRequestWire, ItemsResponseWire](w, s, "catalog_copy_from_formats",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req CopyFromFormatsRequestWire) (ItemsResponseWire, error) {
+			items := make([][]byte, 0, len(w.copyFromFormats))
+			for _, rec := range w.copyFromFormats {
+				data, err := SerializeCopyFromFormatInfo(rec)
 				if err != nil {
 					return ItemsResponseWire{}, err
 				}

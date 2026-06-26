@@ -37,6 +37,42 @@ type BindRequestWire struct {
 	// once at attach with no AT). Both nil when the scan has no AT clause.
 	AtUnit  *string `vgirpc:"at_unit" arrow:"at_unit"`
 	AtValue *string `vgirpc:"at_value" arrow:"at_value"`
+
+	// CopyFrom carries the COPY ... FROM context (None unless this bind/init
+	// opens a COPY-FROM scan). Mirrors Python's BindRequest.copy_from. The C++
+	// extension ships it as a nested struct<format, file_path, expected_schema>
+	// column, only added for a COPY scan; fields are matched by name so its
+	// absence is wire-safe. Read at bind/init via CopyFromContextWire.
+	CopyFrom *CopyFromContextWire `vgirpc:"copy_from" arrow:"copy_from"`
+}
+
+// CopyFromContextWire is the wire form of a COPY ... FROM context, carried as a
+// nested struct on the bind request. Mirrors Python's CopyFromContext dataclass:
+// format (utf8), file_path (utf8), expected_schema (binary IPC schema bytes).
+type CopyFromContextWire struct {
+	Format         string `arrow:"format"`
+	FilePath       string `arrow:"file_path"`
+	ExpectedSchema []byte `arrow:"expected_schema"`
+}
+
+// copyFromContextWireType is the Arrow struct type for the copy_from field; its
+// child field names/types must match the arrow tags on CopyFromContextWire and
+// the C++ extension's encoder (vgi_rpc_types.cpp).
+var copyFromContextWireType = arrow.StructOf(
+	arrow.Field{Name: "format", Type: arrow.BinaryTypes.String},
+	arrow.Field{Name: "file_path", Type: arrow.BinaryTypes.String},
+	arrow.Field{Name: "expected_schema", Type: arrow.BinaryTypes.Binary},
+)
+
+// copyFromContextWireSchema describes the children of the copy_from struct.
+var copyFromContextWireSchema = arrow.NewSchema(copyFromContextWireType.Fields(), nil)
+
+// ArrowSchema makes CopyFromContextWire an ArrowSerializable so the framework's
+// schema builder accepts it as a nested struct field on BindRequestWire and the
+// deserializer routes the incoming struct (or binary-IPC) column through
+// setStructField. The C++ extension ships it as a struct column.
+func (CopyFromContextWire) ArrowSchema() *arrow.Schema {
+	return copyFromContextWireSchema
 }
 
 // bindRequestWireSchema is the Arrow struct schema for a bind_call. Field
@@ -53,6 +89,7 @@ var bindRequestWireSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "resolved_secrets_provided", Type: &arrow.BooleanType{}},
 	{Name: "at_unit", Type: arrow.BinaryTypes.String, Nullable: true},
 	{Name: "at_value", Type: arrow.BinaryTypes.String, Nullable: true},
+	{Name: "copy_from", Type: copyFromContextWireType, Nullable: true},
 }, nil)
 
 // ArrowSchema makes BindRequestWire an ArrowSerializable. The framework then
@@ -529,6 +566,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		AtUnit:          bindParams.AtUnit,
 		AtValue:         bindParams.AtValue,
 		AttachScope:     bindParams.AttachOpaqueData,
+		CopyFrom:        bindParams.CopyFrom,
 	}
 
 	// Build InitRecipe for HTTP state serialization
@@ -978,6 +1016,21 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 	params.ResolvedSecretsProvided = req.ResolvedSecretsProvided
 	params.AtUnit = req.AtUnit
 	params.AtValue = req.AtValue
+
+	if req.CopyFrom != nil {
+		cf := &CopyFromContext{
+			Format:   req.CopyFrom.Format,
+			FilePath: req.CopyFrom.FilePath,
+		}
+		if len(req.CopyFrom.ExpectedSchema) > 0 {
+			schema, err := DeserializeSchema(req.CopyFrom.ExpectedSchema)
+			if err != nil {
+				return nil, fmt.Errorf("deserializing copy_from expected_schema: %w", err)
+			}
+			cf.ExpectedSchema = schema
+		}
+		params.CopyFrom = cf
+	}
 
 	return params, nil
 }
