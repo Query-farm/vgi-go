@@ -9,6 +9,7 @@ package all
 import (
 	"github.com/Query-farm/vgi-go/examples/aggregate"
 	copy_from "github.com/Query-farm/vgi-go/examples/copy_from"
+	copy_to "github.com/Query-farm/vgi-go/examples/copy_to"
 	"github.com/Query-farm/vgi-go/examples/scalar"
 	"github.com/Query-farm/vgi-go/examples/schema_reconcile"
 	"github.com/Query-farm/vgi-go/examples/table"
@@ -25,6 +26,7 @@ func RegisterAll(w *vgi.Worker) {
 	aggregate.RegisterAll(w)
 	registerTableInOuts(w)
 	registerCopyFroms(w)
+	registerCopyTos(w)
 	schema_reconcile.RegisterAll(w)
 }
 
@@ -32,6 +34,14 @@ func registerCopyFroms(w *vgi.Worker) {
 	// Custom COPY ... FROM format reader (advertised via catalog_copy_from_formats
 	// and registered as an ordinary producer-mode table function).
 	w.RegisterCopyFrom(&copy_from.ExampleLinesCopyFromFunction{})
+}
+
+func registerCopyTos(w *vgi.Worker) {
+	// Custom COPY ... TO format writers (advertised via catalog_copy_from_formats
+	// with direction="to" and registered as table-buffering functions reusing the
+	// Sink+Combine machinery). The ordered variant requests a single-thread sink.
+	w.RegisterCopyTo(&copy_to.ExampleLinesCopyToFunction{})
+	w.RegisterCopyTo(&copy_to.ExampleLinesOrderedCopyToFunction{})
 }
 
 func registerScalars(w *vgi.Worker) {

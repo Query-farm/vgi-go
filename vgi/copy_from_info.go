@@ -15,9 +15,9 @@ import (
 
 var copyFromFormatInfoSchema = generated.CopyFromFormatInfoSchema
 
-// SerializeCopyFromFormatInfo serializes one copy-from format record to IPC
-// bytes matching CopyFromFormatInfoSchema (comment, tags, format_name, handler,
-// options, direction, description). The options field carries the IPC-serialized
+// SerializeCopyFromFormatInfo serializes one copy-from/copy-to format record to
+// IPC bytes matching CopyFromFormatInfoSchema (comment, tags, format_name,
+// handler, options, direction, description, ordered). The options field carries the IPC-serialized
 // Arrow argument schema built from the handler's ArgSpecs — the same encoding as
 // FunctionInfo.arguments — so option type/default/doc surface identically to
 // vgi_function_arguments().
@@ -79,6 +79,12 @@ func SerializeCopyFromFormatInfo(rec copyFromFormatRecord) ([]byte, error) {
 	defer descBuilder.Release()
 	descBuilder.Append(rec.description)
 
+	// ordered (bool): COPY ... TO writers that need source order set this; the
+	// C++ extension maps it to a single-thread sink. Always false for FROM.
+	orderedBuilder := array.NewBooleanBuilder(mem)
+	defer orderedBuilder.Release()
+	orderedBuilder.Append(rec.ordered)
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
@@ -87,6 +93,7 @@ func SerializeCopyFromFormatInfo(rec copyFromFormatRecord) ([]byte, error) {
 		optionsBuilder.NewArray(),
 		directionBuilder.NewArray(),
 		descBuilder.NewArray(),
+		orderedBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

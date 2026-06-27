@@ -209,6 +209,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		FunctionType:   recipe.FunctionType,
 		Args:           bindParams.Args,
 		OutputSchema:   processOutputSchema,
+		InputSchema:    bindParams.InputSchema,
 		ProjectionIDs:  recipe.ProjectionIDs,
 		Settings:       bindParams.Settings,
 		Secrets:        bindParams.Secrets,
@@ -218,6 +219,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		AtValue:        bindParams.AtValue,
 		AttachScope:    coldAttachScope(bindParams.AttachOpaqueData),
 		CopyFrom:       bindParams.CopyFrom,
+		CopyTo:         bindParams.CopyTo,
 	}
 
 	// Restore pushdown filters

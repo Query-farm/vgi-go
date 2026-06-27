@@ -39,6 +39,11 @@ type BindParams struct {
 	// COPY-FROM scan (nil otherwise). A CopyFromFunction's OnBind reads its
 	// ExpectedSchema here. Mirrors Python's BindParams.bind_call.copy_from.
 	CopyFrom *CopyFromContext
+	// CopyTo carries the COPY ... TO context when this bind opens a COPY-TO sink
+	// (nil otherwise). Mirrors Python's BindParams.bind_call.copy_to. A
+	// CopyToFunction reads its destination via ProcessParams.CopyTo at
+	// process/combine; OnBind returns an empty output schema.
+	CopyTo *CopyToContext
 	// Auth is the authentication context for the current request.
 	// Always non-nil; unauthenticated requests receive vgirpc.Anonymous().
 	Auth *vgirpc.AuthContext

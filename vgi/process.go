@@ -17,6 +17,10 @@ type ProcessParams struct {
 	Args *Arguments
 	// OutputSchema is the output schema (may be projected).
 	OutputSchema *arrow.Schema
+	// InputSchema is the source/input table schema (nil for table functions
+	// with no input). For a COPY ... TO sink it carries the source columns, so a
+	// CopyToFunction can write a header even when zero rows are buffered.
+	InputSchema *arrow.Schema
 	// ProjectionIDs are the projected column indices (nil = all columns).
 	ProjectionIDs []int32
 	// Settings is a map of DuckDB setting names to their scalar values.
@@ -48,6 +52,11 @@ type ProcessParams struct {
 	// ExpectedSchema here in Process. Mirrors Python's
 	// ProcessParams.init_call.bind_call.copy_from.
 	CopyFrom *CopyFromContext
+	// CopyTo carries the COPY ... TO context when this sink was opened by a
+	// COPY-TO statement (nil otherwise). A CopyToFunction reads Format /
+	// FilePath here in Process (per-shard write) and Combine (terminal write).
+	// Mirrors Python's ProcessParams.init_call.bind_call.copy_to.
+	CopyTo *CopyToContext
 	// CurrentPushdownFilters is the filter state for the *current* Produce
 	// tick. It starts at the init-time pushdown filters and is replaced
 	// whenever DuckDB's dynamic filter tightens (DynamicFilter pushdown).

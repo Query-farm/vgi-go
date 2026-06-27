@@ -77,6 +77,9 @@ type copyFromFormatRecord struct {
 	description string
 	tags        map[string]string
 	argSpecs    []ArgSpec
+	// ordered marks a COPY ... TO writer that needs source order. The C++
+	// extension maps it to a single-thread sink. Always false for FROM formats.
+	ordered bool
 }
 
 // copyFromState is the single-shot read guard for the producer-mode adapter.
