@@ -24,12 +24,15 @@ var shardNS = []byte("copy_to_shard")
 // destination file_path is supplied by the COPY statement, never as an option.
 //
 // null_string has no default (it is required — the worker enforces this);
-// delimiter/header/on_exists carry defaults. doc= must be last in each tag.
+// delimiter/header/header_repeat/on_exists/fail_on_value carry defaults. doc=
+// must be last in each tag.
 type exampleLinesOutArgs struct {
-	NullString string `vgi:"doc=Token written for SQL NULL"`
-	Delimiter  string `vgi:"default=',',doc=Field separator"`
-	Header     bool   `vgi:"default=false,doc=Write a header row of column names"`
-	OnExists   string `vgi:"default=overwrite,doc=Behavior when the destination file already exists"`
+	NullString   string `vgi:"doc=Token written for SQL NULL"`
+	Delimiter    string `vgi:"default=',',doc=Field separator"`
+	Header       bool   `vgi:"default=false,doc=Write a header row of column names"`
+	HeaderRepeat int64  `vgi:"default=1,doc=When header=true, write the header line this many times"`
+	OnExists     string `vgi:"default=overwrite,doc=Behavior when the destination file already exists"`
+	FailOnValue  string `vgi:"default=,doc=If non-empty, fail mid-write when a cell equals this value"`
 }
 
 // ExampleLinesCopyToFunction is a toy delimited-text COPY ... TO writer used by
@@ -90,14 +93,35 @@ func bindOptions(params *vgi.ProcessParams) (exampleLinesOutArgs, error) {
 	default:
 		return args, fmt.Errorf("example_lines_out: invalid on_exists %q (expected 'overwrite' or 'error')", args.OnExists)
 	}
+	if args.HeaderRepeat < 0 || args.HeaderRepeat > 3 {
+		return args, fmt.Errorf("example_lines_out: header_repeat must be between 0 and 3, got %d", args.HeaderRepeat)
+	}
 	return args, nil
 }
 
 // Write buffers one input batch as an IPC blob in execution-scoped storage.
 // state_append is atomic + race-safe across parallel sink threads/workers.
 func (f *ExampleLinesCopyToFunction) Write(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) error {
-	if _, err := bindOptions(params); err != nil {
+	args, err := bindOptions(params)
+	if err != nil {
 		return err
+	}
+	// Mid-sink failure trigger: fail during a process() call when a cell matches
+	// fail_on_value. Exercises the in-flight teardown/recovery path.
+	if args.FailOnValue != "" {
+		nrows := int(batch.NumRows())
+		ncols := int(batch.NumCols())
+		for c := 0; c < ncols; c++ {
+			col := batch.Column(c)
+			for r := 0; r < nrows; r++ {
+				if col.IsNull(r) {
+					continue
+				}
+				if formatCell(col, r, "") == args.FailOnValue {
+					return fmt.Errorf("example_lines_out: fail_on_value hit: %q", args.FailOnValue)
+				}
+			}
+		}
 	}
 	data, err := vgi.SerializeRecordBatch(batch)
 	if err != nil {
@@ -138,14 +162,29 @@ func (f *ExampleLinesCopyToFunction) Close(ctx context.Context, params *vgi.Proc
 	}
 	defer fh.Close()
 
+	// writeHeader emits the column-name line header_repeat times when
+	// header=true (default 1; 0 = none, capped at 3 by bindOptions).
+	writeHeader := func(names []string) error {
+		if !args.Header {
+			return nil
+		}
+		line := strings.Join(names, args.Delimiter)
+		for i := int64(0); i < args.HeaderRepeat; i++ {
+			if _, werr := fmt.Fprintln(fh, line); werr != nil {
+				return werr
+			}
+		}
+		return nil
+	}
+
 	wroteHeader := false
 	for _, e := range entries {
 		batch, derr := vgi.DeserializeRecordBatch(e.Value)
 		if derr != nil {
 			return fmt.Errorf("example_lines_out: reading shard: %w", derr)
 		}
-		if args.Header && !wroteHeader {
-			if _, werr := fmt.Fprintln(fh, strings.Join(schemaNames(batch.Schema()), args.Delimiter)); werr != nil {
+		if !wroteHeader {
+			if werr := writeHeader(schemaNames(batch.Schema())); werr != nil {
 				batch.Release()
 				return werr
 			}
@@ -166,10 +205,10 @@ func (f *ExampleLinesCopyToFunction) Close(ctx context.Context, params *vgi.Proc
 		batch.Release()
 	}
 
-	// Empty COPY with header=true still emits the header row. Take the column
+	// Empty COPY with header=true still emits the header row(s). Take the column
 	// names from the bind's input (source) schema.
-	if args.Header && !wroteHeader && params.InputSchema != nil {
-		if _, werr := fmt.Fprintln(fh, strings.Join(schemaNames(params.InputSchema), args.Delimiter)); werr != nil {
+	if !wroteHeader && params.InputSchema != nil {
+		if werr := writeHeader(schemaNames(params.InputSchema)); werr != nil {
 			return werr
 		}
 	}
