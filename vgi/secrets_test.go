@@ -4,9 +4,9 @@ import "testing"
 
 func mkSecrets() Secrets {
 	return Secrets{
-		"my_s3": {"type": "s3", "key_id": "AAA", "scope": "s3://bucket-a"},
+		"my_s3":   {"type": "s3", "key_id": "AAA", "scope": "s3://bucket-a"},
 		"my_s3_b": {"type": "s3", "key_id": "BBB", "scope": "s3://bucket-b\ns3://bucket-b2"},
-		"my_gcs": {"type": "gcs", "key_id": "G"},
+		"my_gcs":  {"type": "gcs", "key_id": "G"},
 	}
 }
 
