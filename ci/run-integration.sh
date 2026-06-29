@@ -137,12 +137,17 @@ boot_http_worker() {
   # flush). A new session lets it survive until we SIGTERM it ourselves below,
   # where graceful shutdown flushes coverage. setsid execs in place (so $! is the
   # worker); perl is the macOS fallback (no setsid); plain exec is last resort.
+  # Start the worker with its cwd set to $STAGE — the same directory the unittest
+  # runs from, so DuckDB's per-test temp dir (__TEST_DIR__ → duckdb_unittest_tempdir/
+  # <pid>) and the worker resolve the SAME relative path. Without this the http
+  # worker (a separate process started from the repo root) cannot create the
+  # COPY ... TO destination the test hands it as a relative path.
   if command -v setsid >/dev/null 2>&1; then
-    setsid "$exe" --http >"$log" 2>&1 &
+    ( cd "$STAGE" && exec setsid "$exe" --http ) >"$log" 2>&1 &
   elif command -v perl >/dev/null 2>&1; then
-    perl -e 'use POSIX qw(setsid); setsid(); exec @ARGV' "$exe" --http >"$log" 2>&1 &
+    ( cd "$STAGE" && exec perl -e 'use POSIX qw(setsid); setsid(); exec @ARGV' "$exe" --http ) >"$log" 2>&1 &
   else
-    "$exe" --http >"$log" 2>&1 &
+    ( cd "$STAGE" && exec "$exe" --http ) >"$log" 2>&1 &
   fi
   pid=$!
   echo "$pid" >> "$BG_PIDS_FILE"
