@@ -25,9 +25,10 @@ env:
   # reproducibility; bump deliberately and re-validate against the then-current
   # community extension (see ci/README.md).
   VGI_REF: main
-  # The Haybarn release providing the prebuilt haybarn-unittest binary. Must be
-  # ABI-compatible with the community-published vgi extension.
-  HAYBARN_RELEASE: haybarn-v1.5.4-rc1
+  # The Haybarn release providing the prebuilt haybarn-unittest binary is
+  # resolved to the latest release at run time (see the "Resolve latest haybarn
+  # release" step) so the unittest host stays ABI-compatible with the rebuilt
+  # community-published vgi extension, mirroring the vgi-typescript CI.
 
 jobs:
   integration:
@@ -64,6 +65,14 @@ jobs:
 
       - name: Build example workers (coverage-instrumented)
         run: make build COVER=1
+
+      - name: Resolve latest haybarn release
+        run: |
+          REL=$(gh release view --repo Query-farm-haybarn/haybarn --json tagName --jq .tagName)
+          echo "HAYBARN_RELEASE=$REL" >> "$GITHUB_ENV"
+          echo "Latest haybarn release: $REL"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Download haybarn-unittest
         run: |
