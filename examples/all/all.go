@@ -149,6 +149,7 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewProjectedDataFunction())
 	w.RegisterTable(table.NewRepeatValueIntFunction())
 	w.RegisterTable(table.NewRowIdSequenceFunction())
+	w.RegisterTable(table.NewMultiSecretDemoFunction())
 	w.RegisterTable(table.NewRepeatValueStrFunction())
 	w.RegisterTable(table.NewScopedSecretDemoFunction())
 	w.RegisterTable(table.NewSecretDemoFunction())
