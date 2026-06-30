@@ -34,6 +34,8 @@ func registerCopyFroms(w *vgi.Worker) {
 	// Custom COPY ... FROM format reader (advertised via catalog_copy_from_formats
 	// and registered as an ordinary producer-mode table function).
 	w.RegisterCopyFrom(&copy_from.ExampleLinesCopyFromFunction{})
+	// Reader that forwards a CREATE SECRET credential via the secret-bind hook.
+	w.RegisterCopyFrom(&copy_from.SecretLinesCopyFromFunction{})
 }
 
 func registerCopyTos(w *vgi.Worker) {
@@ -42,6 +44,8 @@ func registerCopyTos(w *vgi.Worker) {
 	// Sink+Combine machinery). The ordered variant requests a single-thread sink.
 	w.RegisterCopyTo(&copy_to.ExampleLinesCopyToFunction{})
 	w.RegisterCopyTo(&copy_to.ExampleLinesOrderedCopyToFunction{})
+	// Writer that forwards a CREATE SECRET credential via the secret-bind hook.
+	w.RegisterCopyTo(&copy_to.SecretLinesCopyToFunction{})
 }
 
 func registerScalars(w *vgi.Worker) {

@@ -67,6 +67,19 @@ type CopyFromCommenter interface {
 	CopyFromComment() string
 }
 
+// CopyFromSecretProvider is an optional interface a CopyFromFunction may
+// implement to forward CREATE SECRET credentials for secret-backed cloud sources
+// (S3/GCS/HTTP/…). Mirrors Python's CopyFromFunction.on_secrets.
+//
+// SecretLookups is the COPY-FROM secret-bind hook: it is called during bind (only
+// on the first pass) and returns the secrets to resolve — typically scoped by the
+// source path (params.CopyFrom.FilePath). The framework's two-phase secret bind
+// resolves each lookup from the caller's SecretManager and surfaces the resolved
+// values on params.Secrets at Read time. Returning nil/empty requests nothing.
+type CopyFromSecretProvider interface {
+	SecretLookups(params *BindParams) []SecretLookup
+}
+
 // copyFromFormatRecord is the worker-side record advertised via
 // catalog_copy_from_formats. Mirrors CopyFromFormatInfo on the wire.
 type copyFromFormatRecord struct {
@@ -113,6 +126,13 @@ func (a *copyFromAdapter) OnBind(params *BindParams) (*BindResponse, error) {
 	}
 	if cf.ExpectedSchema == nil {
 		return nil, fmt.Errorf("%s: COPY FROM context is missing the expected target schema", a.inner.Name())
+	}
+	// Forward any requested secrets on the first bind pass so the two-phase secret
+	// bind resolves them (the resolved values reach Read via params.Secrets).
+	if sp, ok := a.inner.(CopyFromSecretProvider); ok && !params.ResolvedSecretsProvided {
+		if lookups := sp.SecretLookups(params); len(lookups) > 0 {
+			return &BindResponse{SecretScopeRequest: lookups}, nil
+		}
 	}
 	return BindSchema(cf.ExpectedSchema)
 }

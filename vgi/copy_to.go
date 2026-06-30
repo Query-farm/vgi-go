@@ -82,6 +82,21 @@ type CopyToCommenter interface {
 	CopyToComment() string
 }
 
+// CopyToSecretProvider is an optional interface a CopyToFunction may implement to
+// forward CREATE SECRET credentials for secret-backed cloud writes
+// (S3/GCS/HTTP/…). Mirrors Python's CopyToFunction.on_secrets.
+//
+// SecretLookups is the COPY-TO secret-bind hook: it is called during bind (only
+// on the first pass, before any secrets are resolved) and returns the secrets to
+// resolve — typically scoped by the destination path (params.CopyTo.FilePath).
+// The framework's two-phase secret bind resolves each lookup from the caller's
+// SecretManager and surfaces the resolved values on params.Secrets at Write/Close
+// time. Returning nil/empty requests nothing, so a writer that never touched
+// credentials is unaffected.
+type CopyToSecretProvider interface {
+	SecretLookups(params *BindParams) []SecretLookup
+}
+
 // copyToAdapter wraps a CopyToFunction as a TableBufferingFunction so it reuses
 // the buffered process/combine machinery. Mirrors Python's CopyToFunction
 // process()/combine() (final methods over write()/close()).
@@ -96,8 +111,16 @@ func (a *copyToAdapter) Metadata() FunctionMetadata { return a.inner.Metadata() 
 func (a *copyToAdapter) ArgumentSpecs() []ArgSpec   { return a.inner.ArgumentSpecs() }
 
 // OnBind: a sink produces no rows — bind to an empty output schema. Mirrors
-// Python's CopyToFunction.on_bind.
+// Python's CopyToFunction.on_bind. If the writer implements CopyToSecretProvider,
+// its requested secret lookups are forwarded on the first bind pass so the
+// two-phase secret bind resolves them (the resolved values reach Write/Close via
+// params.Secrets).
 func (a *copyToAdapter) OnBind(params *BindParams) (*BindResponse, error) {
+	if sp, ok := a.inner.(CopyToSecretProvider); ok && !params.ResolvedSecretsProvided {
+		if lookups := sp.SecretLookups(params); len(lookups) > 0 {
+			return &BindResponse{SecretScopeRequest: lookups}, nil
+		}
+	}
 	return BindSchema(arrow.NewSchema([]arrow.Field{}, nil))
 }
 
