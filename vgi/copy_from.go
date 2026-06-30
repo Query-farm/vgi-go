@@ -77,6 +77,8 @@ type CopyFromCommenter interface {
 // resolves each lookup from the caller's SecretManager and surfaces the resolved
 // values on params.Secrets at Read time. Returning nil/empty requests nothing.
 type CopyFromSecretProvider interface {
+	// SecretLookups returns the secrets to resolve at bind, typically scoped by the
+	// source path (params.CopyFrom.FilePath). Returning nil/empty requests none.
 	SecretLookups(params *BindParams) []SecretLookup
 }
 

@@ -94,6 +94,8 @@ type CopyToCommenter interface {
 // time. Returning nil/empty requests nothing, so a writer that never touched
 // credentials is unaffected.
 type CopyToSecretProvider interface {
+	// SecretLookups returns the secrets to resolve at bind, typically scoped by the
+	// destination path (params.CopyTo.FilePath). Returning nil/empty requests none.
 	SecretLookups(params *BindParams) []SecretLookup
 }
 

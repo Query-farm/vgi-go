@@ -112,9 +112,9 @@ func (f *SecretLinesCopyToFunction) Close(ctx context.Context, params *vgi.Proce
 	if err != nil {
 		return fmt.Errorf("secret_lines_out: creating %q: %w", path, err)
 	}
-	defer fh.Close()
-	if _, err := fmt.Fprintf(fh, "api_key=%s\nrows=%d\n", apiKey, total); err != nil {
-		return err
+	_, werr := fmt.Fprintf(fh, "api_key=%s\nrows=%d\n", apiKey, total)
+	if cerr := fh.Close(); cerr != nil && werr == nil {
+		werr = cerr
 	}
-	return nil
+	return werr
 }
