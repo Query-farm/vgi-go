@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"syscall"
 
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -29,7 +28,12 @@ func (f *CrashOnProcessFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{Description: "Worker SIGKILLs itself during process (test)", Categories: []string{"test", "crash"}}
 }
 func (f *CrashOnProcessFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) ([]byte, error) {
-	_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+	// Hard-kill our own worker. os.Process.Kill is portable (SIGKILL on POSIX,
+	// TerminateProcess on Windows); the old syscall.Kill(getpid, SIGKILL) didn't
+	// build on Windows (syscall.Kill is POSIX-only).
+	if p, err := os.FindProcess(os.Getpid()); err == nil {
+		_ = p.Kill()
+	}
 	return params.ExecutionID, nil // unreachable
 }
 
