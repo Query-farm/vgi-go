@@ -44,4 +44,5 @@ func RegisterAll(w *vgi.Worker) {
 	w.RegisterAggregate(&NestTensorFunction{})
 	w.RegisterAggregate(&StreamingSumFunction{})
 	w.RegisterAggregate(&WindowSumBatchFunction{})
+	w.RegisterAggregate(&SecretTypedSumFunction{})
 }

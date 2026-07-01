@@ -207,4 +207,5 @@ func registerTableInOuts(w *vgi.Worker) {
 	w.RegisterTableInOut(table_in_out.NewSlowCancellableInOutFunction())
 	w.RegisterTableBuffering(&table_in_out.SumAllColumnsFunction{})
 	w.RegisterTableInOut(table_in_out.NewUnnestTensorRowsFunction())
+	w.RegisterTableInOut(table_in_out.NewSecretInOutFunction())
 }

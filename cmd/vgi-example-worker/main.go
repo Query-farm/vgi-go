@@ -286,6 +286,16 @@ func main() {
 		Function: table.NewTenThousandFunction(),
 	})
 
+	// Function-backed table over the secret-using secret_demo function. Its
+	// backing function declares RequiredSecrets and resolves the vgi_example
+	// secret in OnBind; the table schema derives from the static 3-column
+	// key/value/arrow_type output. See secret/secret_function_backed_table.test.
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:     "secret_demo_table",
+		Comment:  "Function-backed table over the secret-using secret_demo function",
+		Function: table.NewSecretDemoFunction(),
+	})
+
 	// Same backing function, but with inlined cardinality on TableInfo so the
 	// per-bind table_function_cardinality RPC is skipped.
 	{
