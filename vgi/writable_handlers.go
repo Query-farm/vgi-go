@@ -269,6 +269,16 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 	if serializedSecretTypes == nil {
 		serializedSecretTypes = [][]byte{}
 	}
+	var serializedAttachCatalogs [][]byte
+	for _, info := range w.attachCatalogs {
+		data, err := SerializeAttachCatalogInfo(info)
+		if err == nil {
+			serializedAttachCatalogs = append(serializedAttachCatalogs, data)
+		}
+	}
+	if serializedAttachCatalogs == nil {
+		serializedAttachCatalogs = [][]byte{}
+	}
 
 	return CatalogAttachResultWire{
 		AttachOpaqueData:         attachOpaqueData,
@@ -280,6 +290,7 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 		DefaultSchema:            "main",
 		Settings:                 serializedSettings,
 		SecretTypes:              serializedSecretTypes,
+		AttachCatalogs:           serializedAttachCatalogs,
 		Tags:                     map[string]string{},
 		SupportsColumnStatistics: false,
 	}, nil
