@@ -345,7 +345,6 @@ type Worker struct {
 	oauthMetadata                 *vgirpc.OAuthResourceMetadata
 	oauthPkce                     *vgirpc.OAuthPkceConfig
 	secretTypes                   []SecretTypeSpec
-	attachCatalogs                []AttachCatalogInfo
 	attachOptions                 []AttachOptionSpec
 	logLevel                      slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
 	logHandler                    slog.Handler // nil means default TextHandler to stderr
@@ -620,16 +619,6 @@ func WithSettings(settings ...SettingSpec) WorkerOption {
 func WithSecretTypes(types ...SecretTypeSpec) WorkerOption {
 	return func(w *Worker) {
 		w.secretTypes = append(w.secretTypes, types...)
-	}
-}
-
-// WithAttachCatalogs advertises companion catalogs (lakehouse federation) that
-// the client should ATTACH when this VGI catalog attaches. Surfaced via
-// catalog_attach.attach_catalogs; the C++ extension attaches each at
-// VGI-attach time.
-func WithAttachCatalogs(catalogs ...AttachCatalogInfo) WorkerOption {
-	return func(w *Worker) {
-		w.attachCatalogs = append(w.attachCatalogs, catalogs...)
 	}
 }
 

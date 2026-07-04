@@ -157,14 +157,6 @@ type ScanBranch struct {
 	// Writable declares this branch as the INSERT target. At most one branch
 	// per table may be writable (the C++ extension enforces this at parse time).
 	Writable bool
-	// SourceCatalog/SourceSchema/SourceTable define a *catalog-table* branch:
-	// when FunctionName is "" and SourceTable is set, the branch scans the base
-	// table SourceCatalog.SourceSchema.SourceTable in a companion catalog
-	// (lakehouse federation) instead of calling a table function. Nil = function
-	// branch.
-	SourceCatalog *string
-	SourceSchema  *string
-	SourceTable   *string
 }
 
 // ScanBranchesResult is the list of physical sources backing a multi-branch
@@ -209,26 +201,11 @@ func SerializeScanBranch(branch *ScanBranch) ([]byte, error) {
 	defer writableBuilder.Release()
 	writableBuilder.Append(branch.Writable)
 
-	// Catalog-table branch fields (nullable strings; nil = function branch).
-	appendNullableString := func(v *string) *array.String {
-		b := array.NewStringBuilder(mem)
-		defer b.Release()
-		if v != nil {
-			b.Append(*v)
-		} else {
-			b.AppendNull()
-		}
-		return b.NewArray().(*array.String)
-	}
-
 	cols := []arrow.Array{
 		fnNameBuilder.NewArray(),
 		argBuilder.NewArray(),
 		filterBuilder.NewArray(),
 		writableBuilder.NewArray(),
-		appendNullableString(branch.SourceCatalog),
-		appendNullableString(branch.SourceSchema),
-		appendNullableString(branch.SourceTable),
 	}
 	defer func() {
 		for _, c := range cols {

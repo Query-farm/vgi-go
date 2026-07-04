@@ -57,7 +57,6 @@ type CatalogAttachResultWire struct {
 	DefaultSchema                 string            `vgirpc:"default_schema"`
 	Settings                      SerializedItems   `vgirpc:"settings"`
 	SecretTypes                   SerializedItems   `vgirpc:"secret_types"`
-	AttachCatalogs                SerializedItems   `vgirpc:"attach_catalogs"`
 	Comment                       *string           `vgirpc:"comment"`
 	Tags                          map[string]string `vgirpc:"tags"`
 	SupportsColumnStatistics      bool              `vgirpc:"supports_column_statistics"`
@@ -878,20 +877,6 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				serializedSecretTypes = [][]byte{}
 			}
 
-			// Serialize companion catalogs (attach_catalogs)
-			var serializedAttachCatalogs [][]byte
-			for _, info := range w.attachCatalogs {
-				data, err := SerializeAttachCatalogInfo(info)
-				if err != nil {
-					LogCatalog.Error("failed to serialize attach catalog", "alias", info.Alias, "err", err)
-					continue
-				}
-				serializedAttachCatalogs = append(serializedAttachCatalogs, data)
-			}
-			if serializedAttachCatalogs == nil {
-				serializedAttachCatalogs = [][]byte{}
-			}
-
 			// Auto-derive time travel support from registered tables.
 			supportsTimeTravel := false
 			if w.catalog != nil {
@@ -990,7 +975,6 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				DefaultSchema:                 "main",
 				Settings:                      serializedSettings,
 				SecretTypes:                   serializedSecretTypes,
-				AttachCatalogs:                serializedAttachCatalogs,
 				Tags:                          tags,
 				SupportsColumnStatistics:      supportsColStats,
 				ResolvedDataVersion:           resolvedData,
