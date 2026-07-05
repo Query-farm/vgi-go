@@ -252,6 +252,34 @@ func parseArgTag(f reflect.StructField, tag string) (ArgSpec, error) {
 				return spec, err
 			}
 			spec.TypeBound = preds
+		case "choices":
+			// Comma-separated allowed values; quote to keep commas
+			// (e.g. choices='a,b,c'). Elements are parsed against the
+			// argument's declared type so the JSON metadata is typed.
+			for _, raw := range strings.Split(val, ",") {
+				raw = strings.TrimSpace(raw)
+				if raw == "" {
+					continue
+				}
+				spec.Choices = append(spec.Choices, parseChoiceValue(spec.ArrowType, raw))
+			}
+		case "ge", "le", "gt", "lt":
+			f, err := strconv.ParseFloat(val, 64)
+			if err != nil {
+				return spec, fmt.Errorf("invalid %s=%q: %w", key, val, err)
+			}
+			switch key {
+			case "ge":
+				spec.Ge = &f
+			case "le":
+				spec.Le = &f
+			case "gt":
+				spec.Gt = &f
+			case "lt":
+				spec.Lt = &f
+			}
+		case "pattern":
+			spec.Pattern = val
 		default:
 			return spec, fmt.Errorf("unknown vgi tag key %q", key)
 		}

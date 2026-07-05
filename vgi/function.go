@@ -317,4 +317,26 @@ type ArgSpec struct {
 	// At bind time, the input schema field type must satisfy at least one predicate
 	// (OR logic). Nil means no type constraint (any type is accepted).
 	TypeBound []TypeBoundPredicate
+
+	// Discovery-facing validation constraints. All optional (nil/zero = absent).
+	// They are surfaced as Arrow field metadata on the argument-spec schema
+	// (vgi_default / vgi_choices / vgi_range / vgi_pattern) and read back by the
+	// C++ vgi extension's vgi_function_arguments() diagnostic. They are advisory
+	// discovery metadata for agents, not enforced on the wire by this library.
+
+	// Choices is an optional closed set of allowed values for this argument.
+	// Surfaced as the vgi_choices field-metadata key (JSON array). Element
+	// values should match the argument's value type. Nil/empty = unrestricted.
+	Choices []any
+	// Ge is an optional inclusive lower bound (value >= Ge). nil = absent.
+	Ge *float64
+	// Le is an optional inclusive upper bound (value <= Le). nil = absent.
+	Le *float64
+	// Gt is an optional exclusive lower bound (value > Gt). nil = absent.
+	Gt *float64
+	// Lt is an optional exclusive upper bound (value < Lt). nil = absent.
+	Lt *float64
+	// Pattern is an optional regex the value must match. Surfaced as the
+	// vgi_pattern field-metadata key (raw). Empty = no pattern constraint.
+	Pattern string
 }

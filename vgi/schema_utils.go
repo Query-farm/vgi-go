@@ -183,6 +183,24 @@ func BuildArgSchema(specs []ArgSpec) *arrow.Schema {
 			meta["vgi_doc"] = spec.Doc
 		}
 
+		// Per-argument constraint metadata for agent discovery. All keys are
+		// presence-only (omitted when the constraint is absent) and UTF-8
+		// value-encoded so the surfaced column type stays uniform regardless of
+		// the argument's value type. Kept byte-for-byte in sync with the C++
+		// reader in the vgi extension (vgi_function_arguments()).
+		if spec.HasDefault {
+			meta["vgi_default"] = encodeDefaultJSON(spec)
+		}
+		if len(spec.Choices) > 0 {
+			meta["vgi_choices"] = encodeChoicesJSON(spec.Choices)
+		}
+		if r := formatRange(spec.Ge, spec.Le, spec.Gt, spec.Lt); r != "" {
+			meta["vgi_range"] = r
+		}
+		if spec.Pattern != "" {
+			meta["vgi_pattern"] = spec.Pattern
+		}
+
 		var fieldMeta arrow.Metadata
 		if len(meta) > 0 {
 			keys := make([]string, 0, len(meta))
