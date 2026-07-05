@@ -321,8 +321,9 @@ type ArgSpec struct {
 	// Discovery-facing validation constraints. All optional (nil/zero = absent).
 	// They are surfaced as Arrow field metadata on the argument-spec schema
 	// (vgi_default / vgi_choices / vgi_range / vgi_pattern) and read back by the
-	// C++ vgi extension's vgi_function_arguments() diagnostic. They are advisory
-	// discovery metadata for agents, not enforced on the wire by this library.
+	// C++ vgi extension's vgi_function_arguments() diagnostic. For const
+	// arguments they are additionally enforced at bind (ValidateArgConstraints):
+	// a violating const value fails the bind with an *ArgumentError.
 
 	// Choices is an optional closed set of allowed values for this argument.
 	// Surfaced as the vgi_choices field-metadata key (JSON array). Element

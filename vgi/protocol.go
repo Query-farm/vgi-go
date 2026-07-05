@@ -415,6 +415,12 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		return BindResponseWire{}, err
 	}
 
+	// Enforce const-argument value constraints (choices/range/pattern) at bind.
+	if err := ValidateArgConstraints(argSpecs, bindParams.Args); err != nil {
+		LogRPC.Debug("bind: arg constraint validation failed", "err", err)
+		return BindResponseWire{}, err
+	}
+
 	var bindResp *BindResponse
 
 	switch f := fn.(type) {

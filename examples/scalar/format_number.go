@@ -11,6 +11,9 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 )
 
+// f64p returns a pointer to a float64 (for optional ArgSpec numeric bounds).
+func f64p(v float64) *float64 { return &v }
+
 // FormatNumberDefaultFunction formats a number with default precision (0 decimals).
 type FormatNumberDefaultFunction struct{}
 
@@ -56,7 +59,7 @@ func (f *FormatNumberPrecisionFunction) Metadata() vgi.FunctionMetadata {
 
 func (f *FormatNumberPrecisionFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "precision", Position: 0, ArrowType: "int64", Doc: "Decimal places", IsConst: true},
+		{Name: "precision", Position: 0, ArrowType: "int64", Doc: "Decimal places", IsConst: true, Ge: f64p(0), Le: f64p(10)},
 		{Name: "value", Position: 1, ArrowType: "double", Doc: "Number to format"},
 	}
 }
@@ -88,7 +91,7 @@ func (f *FormatNumberFullFunction) Metadata() vgi.FunctionMetadata {
 
 func (f *FormatNumberFullFunction) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
-		{Name: "precision", Position: 0, ArrowType: "int64", Doc: "Decimal places", IsConst: true},
+		{Name: "precision", Position: 0, ArrowType: "int64", Doc: "Decimal places", IsConst: true, Ge: f64p(0), Le: f64p(10)},
 		{Name: "prefix", Position: 1, ArrowType: "varchar", Doc: "Prefix string", IsConst: true},
 		{Name: "value", Position: 2, ArrowType: "double", Doc: "Number to format"},
 	}

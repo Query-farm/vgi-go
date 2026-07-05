@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // ptr is a tiny helper for building *float64 bound literals in table tests.
@@ -253,5 +255,63 @@ func TestParseArgTag_Constraints(t *testing.T) {
 	}
 	if v, ok := metaValue(schema.Field(1), "vgi_pattern"); !ok || v != "^[a-z]+$" {
 		t.Errorf("derived vgi_pattern: got %q ok=%v", v, ok)
+	}
+}
+
+func TestValidateConstValue(t *testing.T) {
+	rng := ArgSpec{Name: "precision", Position: 0, IsConst: true, Ge: ptr(0), Le: ptr(10)}
+	if err := validateConstValue(rng, int64(5)); err != nil {
+		t.Fatalf("5 in [0,10] should pass: %v", err)
+	}
+	if err := validateConstValue(rng, int64(99)); err == nil {
+		t.Fatal("99 > le=10 should fail")
+	}
+	if err := validateConstValue(rng, int64(-1)); err == nil {
+		t.Fatal("-1 < ge=0 should fail")
+	}
+
+	choices := ArgSpec{Name: "unit", Position: 0, IsConst: true, Choices: []any{"mm", "cm", "m"}}
+	if err := validateConstValue(choices, "cm"); err != nil {
+		t.Fatalf("valid choice should pass: %v", err)
+	}
+	if err := validateConstValue(choices, "xx"); err == nil {
+		t.Fatal("invalid choice should fail")
+	}
+
+	numChoices := ArgSpec{Name: "mode", Position: 0, IsConst: true, Choices: []any{0, 1, 2}}
+	if err := validateConstValue(numChoices, int64(1)); err != nil {
+		t.Fatalf("numeric choice should pass: %v", err)
+	}
+	if err := validateConstValue(numChoices, int64(9)); err == nil {
+		t.Fatal("numeric choice miss should fail")
+	}
+
+	pat := ArgSpec{Name: "code", Position: 0, IsConst: true, Pattern: "^[A-Z]{2}$"}
+	if err := validateConstValue(pat, "AB"); err != nil {
+		t.Fatalf("matching pattern should pass: %v", err)
+	}
+	if err := validateConstValue(pat, "abc"); err == nil {
+		t.Fatal("non-matching pattern should fail")
+	}
+}
+
+func TestValidateArgConstraints_EndToEnd(t *testing.T) {
+	mk := func(v int64) *Arguments {
+		b := array.NewInt64Builder(memory.DefaultAllocator)
+		defer b.Release()
+		b.Append(v)
+		return &Arguments{Positional: []arrow.Array{b.NewArray()}}
+	}
+	specs := []ArgSpec{{Name: "precision", Position: 0, IsConst: true, Ge: ptr(0), Le: ptr(10)}}
+	if err := ValidateArgConstraints(specs, mk(5)); err != nil {
+		t.Fatalf("5 in [0,10] should pass: %v", err)
+	}
+	if err := ValidateArgConstraints(specs, mk(99)); err == nil {
+		t.Fatal("const 99 should be rejected at bind")
+	}
+	// A non-const arg with the same bounds must NOT be enforced (column data).
+	colSpecs := []ArgSpec{{Name: "value", Position: 0, IsConst: false, Ge: ptr(0), Le: ptr(10)}}
+	if err := ValidateArgConstraints(colSpecs, mk(99)); err != nil {
+		t.Fatalf("non-const arg must not be enforced: %v", err)
 	}
 }
