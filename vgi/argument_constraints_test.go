@@ -315,3 +315,28 @@ func TestValidateArgConstraints_EndToEnd(t *testing.T) {
 		t.Fatalf("non-const arg must not be enforced: %v", err)
 	}
 }
+
+func TestValidateAggregateConstConstraints(t *testing.T) {
+	specs := []ArgSpec{
+		{Name: "value", Position: 0, IsConst: false},
+		{Name: "p", Position: 1, IsConst: true, Ge: ptr(0), Le: ptr(1)},
+	}
+	mk := func(v float64) arrow.Array {
+		b := array.NewFloat64Builder(memory.DefaultAllocator)
+		defer b.Release()
+		b.Append(v)
+		return b.NewArray()
+	}
+	// Const delivered in Positional[constIdx].
+	if err := ValidateAggregateConstConstraints(specs, &Arguments{Positional: []arrow.Array{mk(0.5)}}); err != nil {
+		t.Fatalf("percentile 0.5 in [0,1] should pass: %v", err)
+	}
+	if err := ValidateAggregateConstConstraints(specs, &Arguments{Positional: []arrow.Array{mk(5.0)}}); err == nil {
+		t.Fatal("percentile 5.0 > le=1 should be rejected at aggregate_bind")
+	}
+	// Const delivered as Named["positional_0"].
+	named := &Arguments{Named: map[string]arrow.Array{"positional_0": mk(5.0)}}
+	if err := ValidateAggregateConstConstraints(specs, named); err == nil {
+		t.Fatal("named-delivered percentile 5.0 should be rejected")
+	}
+}

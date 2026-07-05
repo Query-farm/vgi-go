@@ -205,6 +205,12 @@ func (w *Worker) handleAggregateBind(ctx context.Context, callCtx *vgirpc.CallCo
 		}
 	}
 
+	// Enforce declared const-argument constraints (choices/range/pattern) at bind,
+	// matching the scalar/table path (which validates in handleBind).
+	if err := ValidateAggregateConstConstraints(fn.ArgumentSpecs(), args); err != nil {
+		return AggregateBindResponseWire{}, err
+	}
+
 	bp := &AggregateBindParams{
 		Args:        args,
 		InputSchema: inputSchema,

@@ -291,3 +291,46 @@ func choicesContain(choices []any, value any) bool {
 	}
 	return false
 }
+
+// ValidateAggregateConstConstraints enforces const-argument constraints for
+// aggregate functions at aggregate_bind. Unlike the scalar/table bind path,
+// aggregate const arguments are numbered sequentially by DuckDB (positional_0,
+// positional_1, …) rather than remapped to their declared positions, and may
+// arrive either in the positional slice or as named "positional_N" entries — so
+// this walks const specs in declaration order and checks both. A value that
+// violates a declared constraint yields an *ArgumentError.
+func ValidateAggregateConstConstraints(specs []ArgSpec, args *Arguments) error {
+	if args == nil {
+		return nil
+	}
+	constIdx := 0
+	for i := range specs {
+		spec := specs[i]
+		if !spec.IsConst {
+			continue
+		}
+		if specHasValueConstraints(spec) {
+			if col := aggregateConstArg(args, constIdx); col != nil && col.Len() > 0 && !col.IsNull(0) {
+				if value, ok := constScalarValue(col); ok {
+					if err := validateConstValue(spec, value); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		constIdx++
+	}
+	return nil
+}
+
+// aggregateConstArg returns the i-th sequential const argument array — DuckDB
+// delivers it as either a named "positional_i" entry or positional index i.
+func aggregateConstArg(args *Arguments, i int) arrow.Array {
+	if a, ok := args.Named[fmt.Sprintf("positional_%d", i)]; ok {
+		return a
+	}
+	if i < len(args.Positional) {
+		return args.Positional[i]
+	}
+	return nil
+}

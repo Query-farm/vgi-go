@@ -214,7 +214,7 @@ func (PercentileFunction) Metadata() vgi.FunctionMetadata {
 // percentileArgs is the typed argument schema for vgi_percentile().
 type percentileArgs struct {
 	Value float64 `vgi:"pos=0,const=false,doc=Value column"`
-	P     float64 `vgi:"pos=1,doc=Percentile (0-1)"`
+	P     float64 `vgi:"pos=1,doc=Percentile,ge=0,le=1"`
 }
 
 func (PercentileFunction) ArgumentSpecs() []vgi.ArgSpec {
