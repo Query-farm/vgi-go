@@ -253,6 +253,11 @@ func main() {
 			Comment: "Multi-branch: sequence(50) + read_parquet — used by multi_branch_heterogeneous.test",
 		})
 		w.RegisterCatalogTable("data", vgi.CatalogTable{
+			Name:    "multi_branch_iceberg",
+			Columns: nCol,
+			Comment: "Multi-branch: sequence(50) + iceberg_scan — used by multi_branch_iceberg.test",
+		})
+		w.RegisterCatalogTable("data", vgi.CatalogTable{
 			Name:    "multi_branch_nopushdown",
 			Columns: nCol,
 			Comment: "Multi-branch: VGI + read_csv — used by multi_branch_pushdown_incapable.test",
@@ -1069,6 +1074,14 @@ func multiBranchScanBranchesGet(_ []byte, schemaName, name string, _, _ *string)
 		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{
 			seq(50), readParquet("/tmp/vgi_hetero_branch.parquet"),
 		}}, true, nil
+	case "multi_branch_iceberg":
+		return &vgi.ScanBranchesResult{
+			Branches: []vgi.ScanBranch{
+				seq(50),
+				{FunctionName: "iceberg_scan", PositionalArguments: []vgi.ScanArg{{Value: "/tmp/vgi_iceberg_branch", Type: arrow.BinaryTypes.String}}},
+			},
+			RequiredExtensions: []string{"iceberg"},
+		}, true, nil
 	case "multi_branch_nopushdown":
 		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{
 			seq(50),
