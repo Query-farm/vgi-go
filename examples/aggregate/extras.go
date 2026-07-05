@@ -214,7 +214,10 @@ func (PercentileFunction) Metadata() vgi.FunctionMetadata {
 // percentileArgs is the typed argument schema for vgi_percentile().
 type percentileArgs struct {
 	Value float64 `vgi:"pos=0,const=false,doc=Value column"`
-	P     float64 `vgi:"pos=1,doc=Percentile,ge=0,le=1"`
+	// NOTE: percentile is validated by this fixture's own OnBind (NaN/inf/range
+	// with specific messages the shared const_param.test asserts); declaring
+	// framework ge/le would pre-empt those, so it's intentionally omitted.
+	P float64 `vgi:"pos=1,doc=Percentile (0-1)"`
 }
 
 func (PercentileFunction) ArgumentSpecs() []vgi.ArgSpec {
