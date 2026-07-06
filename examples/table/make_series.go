@@ -18,7 +18,7 @@ var makeSeriesOutputSchema = arrow.NewSchema([]arrow.Field{
 
 // Typed argument schemas for each make_series overload.
 type makeSeriesCountArgs struct {
-	Count int64 `vgi:"pos=0,doc=Number of integers"`
+	Count int64 `vgi:"pos=0,ge=0,doc=Number of integers"`
 }
 
 type makeSeriesRangeArgs struct {
@@ -29,7 +29,7 @@ type makeSeriesRangeArgs struct {
 type makeSeriesStepArgs struct {
 	Start int64 `vgi:"pos=0,doc=Start value (inclusive)"`
 	Stop  int64 `vgi:"pos=1,doc=Stop value (exclusive)"`
-	Step  int64 `vgi:"pos=2,doc=Step increment"`
+	Step  int64 `vgi:"pos=2,ge=1,doc=Step increment"`
 }
 
 type makeSeriesCsvArgs struct {
