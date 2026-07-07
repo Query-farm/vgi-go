@@ -74,7 +74,7 @@ HTTP_TEST_TARGETS := $(patsubst $(TEST_DIR)/%.test,test-http/%,$(TEST_FILES))
 # Tests expected to fail over HTTP (currently none)
 HTTP_XFAIL_TESTS :=
 
-.PHONY: build clean fmt vet lint test test-unit test-single test-shm test-http test-all new-worker
+.PHONY: build clean fmt vet lint test test-unit test-single test-shm test-http test-all test-landing new-worker
 
 # COVER=1 builds coverage-instrumented worker binaries (`go build -cover`).
 # The integration suite runs the workers as separate processes, so `go test`
@@ -123,6 +123,12 @@ lint:
 test-unit:
 	go test -race -coverprofile=coverage.out -covermode=atomic ./...
 	@go tool cover -func=coverage.out | tail -1
+
+# Landing-surface conformance: boot the example HTTP worker and run the
+# cross-language landing checker (schema validation + asset marker + column
+# endpoints) against it. Requires Python with the `jsonschema` package.
+test-landing:
+	bash test/landing/run.sh
 
 # Scaffold a new VGI worker module from templates/worker. Usage:
 #   make new-worker NAME=myproj            # creates ./myproj/

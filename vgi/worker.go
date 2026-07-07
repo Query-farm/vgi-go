@@ -1042,15 +1042,40 @@ func (w *Worker) RunHttp(addr string) error {
 			return fmt.Errorf("oauth resource metadata: %w", err)
 		}
 	}
+	oauthActive := false
 	if w.oauthPkce != nil {
 		if err := hs.SetOAuthPkce(*w.oauthPkce); err != nil {
 			return fmt.Errorf("oauth pkce: %w", err)
 		}
-		// SetOAuthPkce flips on the /_oauth/* routes, which are only wired
-		// during route (re)build. Re-init pages now so they register
-		// deterministically rather than lazily on the first request.
-		hs.InitPages()
+		oauthActive = true
 	}
+
+	// Standardized VGI landing surface: the shared static landing.html plus its
+	// versioned describe.json contract and lazy per-object column endpoints. The
+	// shared page reads the _vgi_identity cookie itself, so no server-side HTML
+	// injection is needed — disable the generic vgi-rpc landing page and serve
+	// our own. See describe_json.go.
+	prefix := hs.Prefix()
+	if s.ServerID() == "" {
+		u := uuid.New()
+		s.SetServerID(hex.EncodeToString(u[:])[:12])
+	}
+	serverID := s.ServerID()
+	workerName := w.catalogName
+	if workerName == "" {
+		workerName = "vgi-go worker"
+	}
+	hs.SetEnableLandingPage(false)
+	landingPattern := "GET " + prefix
+	if prefix == "" {
+		landingPattern = "GET /{$}"
+	}
+	hs.Handle(landingPattern, makeLandingHandler(serverID))
+	hs.Handle("GET "+prefix+"/describe.json", w.makeDescribeJSONHandler(workerName, serverID, oauthActive))
+	hs.Handle("GET "+prefix+"/describe/{catalog}/{schema}/{table}", w.makeColumnsHandler())
+	// Pre-render the remaining pages / oauth routes deterministically rather
+	// than lazily on the first request.
+	hs.InitPages()
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {

@@ -50,3 +50,29 @@ jobs:
           name: coverage
           path: coverage.out
           if-no-files-found: warn
+
+  landing-conformance:
+    name: Landing-page conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Language-agnostic checker: boots the Go example HTTP worker and asserts
+      # its landing surface conforms to the contract — describe.json validates
+      # against the vendored describe.schema.json, GET / serves the pinned shared
+      # landing.html (asset marker), and every table/view exposes a valid columns
+      # endpoint. The Python golden is deliberately NOT enforced for Go (see
+      # test/landing/run.sh).
+      - name: Install checker deps
+        run: python -m pip install --upgrade jsonschema
+
+      - name: Run landing conformance
+        run: make test-landing
