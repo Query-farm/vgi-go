@@ -273,12 +273,18 @@ func (w *Worker) buildDescribeSchemas(catalogName string, aliasOnly bool) ([]map
 			continue
 		}
 
-		schemas = append(schemas, map[string]any{
+		schemaObj := map[string]any{
 			"name":      name,
 			"tables":    tables,
 			"views":     views,
 			"functions": functions,
-		})
+		}
+		// Optional per-schema doc: the schema's comment/description. Omit the
+		// key entirely when empty (mirrors the Python reference producer).
+		if si.info != nil && si.info.Comment != "" {
+			schemaObj["doc"] = si.info.Comment
+		}
+		schemas = append(schemas, schemaObj)
 		counts["schemas"]++
 		counts["tables"] += len(tables)
 		counts["views"] += len(views)
