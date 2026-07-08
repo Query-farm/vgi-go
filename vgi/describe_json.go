@@ -26,6 +26,7 @@ package vgi
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"runtime/debug"
 	"sort"
@@ -244,6 +245,27 @@ func (w *Worker) buildDescribeSchemas(catalogName string, aliasOnly bool) ([]map
 
 		functions := w.buildDescribeFunctions(si.functions, catalogName, aliasOnly)
 
+		// Macros fold into the same functions array (a scalar macro is invoked
+		// like a scalar function in SQL, a table macro like a table function).
+		// Like the shared tables/views and unscoped functions, they belong to
+		// the primary catalog only; a secondary (alias) catalog must not inherit
+		// them, so skip them under aliasOnly.
+		if !aliasOnly {
+			functions = append(functions, buildDescribeMacros(si.macros)...)
+			// Re-sort the combined functions+macros by (type, name) so the
+			// document (and the cross-language golden) is stable.
+			sort.SliceStable(functions, func(i, j int) bool {
+				ti, _ := functions[i]["type"].(string)
+				tj, _ := functions[j]["type"].(string)
+				if ti != tj {
+					return ti < tj
+				}
+				ni, _ := functions[i]["name"].(string)
+				nj, _ := functions[j]["name"].(string)
+				return ni < nj
+			})
+		}
+
 		// Drop empty inherited schemas from a secondary catalog: if a schema
 		// contributes no catalog-local functions (and, for alias catalogs, no
 		// tables/views), it isn't part of this catalog's surface.
@@ -370,6 +392,99 @@ func describeFunctionArgs(fi *FunctionInfo) []map[string]any {
 		}
 		if def, ok := fieldMetaOK(f, "vgi_default"); ok {
 			arg["default"] = def
+		}
+		args = append(args, arg)
+	}
+	return args
+}
+
+// buildDescribeMacros renders a schema's macros as function-shaped entries for
+// the describe.json functions array. A scalar macro is invoked exactly like a
+// scalar function in SQL, and a table macro like a table function; VGI catalogs
+// commonly expose their callable "functions" as declarative macros, so they
+// must appear alongside functions on the landing page. Macros carry no returns
+// field (their output type is resolved by DuckDB when the macro expands).
+func buildDescribeMacros(macros []CatalogMacro) []map[string]any {
+	out := make([]map[string]any, 0, len(macros))
+	for i := range macros {
+		cm := &macros[i]
+		out = append(out, map[string]any{
+			"name": cm.Name,
+			"type": describeMacroType(cm),
+			"doc":  cm.Comment,
+			"args": describeMacroArgs(cm),
+		})
+	}
+	return out
+}
+
+// describeMacroType maps a macro to the contract's function type: a table macro
+// lists as "table", every other macro (scalar) as "scalar".
+func describeMacroType(cm *CatalogMacro) string {
+	if cm.MacroType == MacroTypeTable {
+		return "table"
+	}
+	return "scalar"
+}
+
+// describeMacroArgs renders a macro's parameters, in declaration order. Each
+// parameter's type comes from the macro arguments_schema (the type of its typed
+// default when known, else the Arrow null placeholder, which we surface as the
+// literal "ANY"); its description rides as vgi_doc field metadata (the same
+// channel functions use). A defaulted parameter is optional and callable by
+// name in DuckDB, so it is presented as a named arg carrying its JSON-encoded
+// default value.
+func describeMacroArgs(cm *CatalogMacro) []map[string]any {
+	args := []map[string]any{}
+
+	// Default values keyed by parameter name (a 1-row RecordBatch of typed
+	// defaults). Presence marks a parameter as optional/named.
+	defaults := map[string]any{}
+	if len(cm.ParameterDefaultValues) > 0 {
+		if batch, err := DeserializeRecordBatch(cm.ParameterDefaultValues); err == nil {
+			for i, f := range batch.Schema().Fields() {
+				defaults[f.Name] = arrowValueAt(batch.Column(i), 0)
+			}
+			batch.Release()
+		} else {
+			LogRPC.Debug("describe: macro default-values deserialize failed", "macro", cm.Name, "err", err)
+		}
+	}
+
+	// Per-parameter typed fields (+ vgi_doc metadata) from the arguments schema.
+	fieldByName := map[string]arrow.Field{}
+	if raw, err := BuildMacroArgumentsSchema(cm.Parameters, cm.ParameterDefaultValues, cm.ParameterDocs); err == nil && len(raw) > 0 {
+		if sch, err := DeserializeSchema(raw); err == nil {
+			for _, f := range sch.Fields() {
+				fieldByName[f.Name] = f
+			}
+		} else {
+			LogRPC.Debug("describe: macro arguments schema deserialize failed", "macro", cm.Name, "err", err)
+		}
+	}
+
+	for _, name := range cm.Parameters {
+		field, hasField := fieldByName[name]
+		arg := map[string]any{"name": name}
+		// Macro parameters are untyped unless a typed default pins them; show
+		// ANY rather than the Arrow null placeholder.
+		if hasField && field.Type != nil && field.Type.ID() != arrow.NULL {
+			arg["type"] = field.Type.String()
+		} else {
+			arg["type"] = "ANY"
+		}
+		if hasField {
+			if doc := fieldMeta(field, "vgi_doc"); doc != "" {
+				arg["desc"] = doc
+			}
+		}
+		if val, ok := defaults[name]; ok {
+			arg["named"] = true
+			if b, err := json.Marshal(val); err == nil {
+				arg["default"] = string(b)
+			} else {
+				arg["default"] = fmt.Sprintf("%v", val)
+			}
 		}
 		args = append(args, arg)
 	}

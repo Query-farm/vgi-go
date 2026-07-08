@@ -699,6 +699,7 @@ func main() {
 		MacroType:  vgi.MacroTypeScalar,
 		Parameters: []string{"x", "y"},
 		Definition: "x * y",
+		Comment:    "Multiply two values",
 		ParameterDocs: map[string]string{
 			"x": "First factor",
 			"y": "Second factor",
@@ -718,6 +719,7 @@ func main() {
 		Parameters:             []string{"val", "lo", "hi"},
 		ParameterDefaultValues: clampDefaults,
 		Definition:             "GREATEST(lo, LEAST(hi, val))",
+		Comment:                "Clamp a value between lo and hi (defaults: 0..100)",
 		// Per-parameter documentation rides over the wire via the macro
 		// arguments_schema's vgi_doc field metadata (the same channel functions
 		// use for per-argument docs). Optional; undocumented params carry no doc.
@@ -733,6 +735,7 @@ func main() {
 		MacroType:  vgi.MacroTypeTable,
 		Parameters: []string{"n"},
 		Definition: "SELECT * FROM range(n)",
+		Comment:    "Table macro returning range of values",
 		ParameterDocs: map[string]string{
 			"n": "Number of rows to generate",
 		},
