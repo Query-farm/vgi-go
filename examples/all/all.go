@@ -142,6 +142,29 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewPartitionedNoOrderGuaranteeFunction())
 	w.RegisterTable(table.NewProfilingDemoFunction())
 	w.RegisterTable(table.NewSlowCancellableFunction())
+	// Result-cache fixtures (advertise vgi.cache.* on the first emitted batch)
+	// — see examples/table/cache.go and cache_advanced.go.
+	w.RegisterTable(table.NewCacheableNumbersFunction())
+	w.RegisterTable(table.NewCacheNonceFunction())
+	w.RegisterTable(table.NewCacheNoStoreFunction())
+	w.RegisterTable(table.NewCacheScopedTxnFunction())
+	w.RegisterTable(table.NewCacheBigFunction())
+	w.RegisterTable(table.NewCacheRevalidatableFunction())
+	// cache_multicol exists only to back the ex.data.cache_multicol table, so
+	// it stays out of the catalog's function listing (mirrors vgi-python).
+	w.RegisterTableUnlisted(table.NewCacheMultiColFunction())
+	w.RegisterTable(table.NewCacheWhoamiFunction())
+	w.RegisterTable(table.NewCacheVersionedFunction())
+	w.RegisterTable(table.NewCacheProjectionFunction())
+	w.RegisterTable(table.NewCachePoisonFunction())
+	w.RegisterTable(table.NewCacheExternalFailFunction())
+	w.RegisterTable(table.NewCacheBenchFunction())
+	w.RegisterTable(table.NewCacheParallelFunction())
+	w.RegisterTable(table.NewCacheOrderedFunction())
+	w.RegisterTable(table.NewCacheInterleavedFunction())
+	w.RegisterTable(table.NewCacheTypesFunction())
+	w.RegisterTable(table.NewCacheFilteredFunction())
+	w.RegisterTable(table.NewCachePartitionedFunction())
 	// Scope projection-pushdown reproducer functions to the
 	// ``projection_repro`` catalog only — they're invisible to the
 	// ``example`` catalog's function listing (function_registration.test

@@ -221,6 +221,7 @@ func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputColl
 	// DuckDB's dynamic-filter pushdown ships a fresh, tightened filter batch
 	// per tick under the vgi_pushdown_filters key (base64-encoded IPC stream).
 	applyTickFilters(s.params, callCtx.InputMetadata)
+	applyTickValidators(s.params, callCtx.InputMetadata)
 	if s.autoApply != nil || s.AutoProjectIDs != nil {
 		if s.AutoProjectIDs != nil {
 			// Tell OutputCollector to use the full schema for EmitArrays/EmitMap
@@ -251,14 +252,16 @@ func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputColl
 // freshly decoded filter state. Silent on decode errors — the previous filter
 // state is retained (DuckDB falls back to client-side filtering).
 func applyTickFilters(params *ProcessParams, meta arrow.Metadata) {
-	if meta.Len() == 0 {
-		// First tick after init: seed CurrentPushdownFilters from the static
-		// PushdownFilters so handlers see a consistent view.
-		if params.CurrentPushdownFilters == nil && params.PushdownFilters != nil {
-			if pf, err := DeserializeFilters(params.PushdownFilters, params.JoinKeys); err == nil {
-				params.CurrentPushdownFilters = pf
-			}
+	// First tick after init: seed CurrentPushdownFilters from the static
+	// PushdownFilters so handlers see a consistent view. This must not depend on
+	// the tick carrying no metadata at all — over HTTP the first tick also
+	// carries the init request's metadata (cache-revalidation validators).
+	if params.CurrentPushdownFilters == nil && params.PushdownFilters != nil {
+		if pf, err := DeserializeFilters(params.PushdownFilters, params.JoinKeys); err == nil {
+			params.CurrentPushdownFilters = pf
 		}
+	}
+	if meta.Len() == 0 {
 		return
 	}
 	idx := meta.FindKey("vgi_pushdown_filters")
@@ -283,6 +286,25 @@ func applyTickFilters(params *ProcessParams, meta arrow.Metadata) {
 		return
 	}
 	params.CurrentPushdownFilters = pf
+}
+
+// applyTickValidators lifts the conditional-revalidation validators off a
+// tick's custom metadata onto ProcessParams. The client sends them when it
+// holds a stale-but-revalidatable cached result and wants the worker to
+// confirm freshness without recomputing. They arrive once — on the first tick
+// (subprocess) or on the init request (HTTP) — and stay set for the stream.
+func applyTickValidators(params *ProcessParams, meta arrow.Metadata) {
+	if meta.Len() == 0 {
+		return
+	}
+	if idx := meta.FindKey(CacheIfNoneMatchKey); idx >= 0 {
+		v := meta.Values()[idx]
+		params.IfNoneMatch = &v
+	}
+	if idx := meta.FindKey(CacheIfModifiedSinceKey); idx >= 0 {
+		v := meta.Values()[idx]
+		params.IfModifiedSince = &v
+	}
 }
 
 // projectBatch selects only the columns at the given indices from a RecordBatch.

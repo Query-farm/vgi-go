@@ -31,13 +31,85 @@ func PartitionField(name string, typ arrow.DataType, nullable bool) arrow.Field 
 	return arrow.Field{Name: name, Type: typ, Nullable: nullable, Metadata: md}
 }
 
+// EmitOption contributes annotation metadata to an emitted batch. Options are
+// applied in order, so a later option overwrites an earlier one's keys.
+type EmitOption func(map[string]string) error
+
+// WithCacheControl advertises a cacheable result. The cache-control keys are
+// read once per result, off the FIRST data batch of the stream — passing this
+// on a later batch has no effect. Nil is a no-op, so a caller can write
+//
+//	var cc *vgi.CacheControl
+//	if firstBatch { cc = &vgi.CacheControl{Ttl: vgi.Seconds(300)} }
+//	vgi.Emit(out, batch, vgi.WithCacheControl(cc))
+func WithCacheControl(cc *CacheControl) EmitOption {
+	return func(md map[string]string) error {
+		if cc == nil {
+			return nil
+		}
+		if err := cc.Validate(); err != nil {
+			return err
+		}
+		for k, v := range cc.Metadata() {
+			md[k] = v
+		}
+		return nil
+	}
+}
+
+// WithMetadata sets one arbitrary annotation key on the emitted batch.
+func WithMetadata(key, value string) EmitOption {
+	return func(md map[string]string) error {
+		md[key] = value
+		return nil
+	}
+}
+
+// applyEmitOptions folds opts into a fresh metadata map, seeded with base.
+// Returns nil when nothing was contributed, so the caller can emit unannotated.
+func applyEmitOptions(base map[string]string, opts []EmitOption) (map[string]string, error) {
+	md := make(map[string]string, len(base)+len(opts))
+	for k, v := range base {
+		md[k] = v
+	}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(md); err != nil {
+			return nil, err
+		}
+	}
+	if len(md) == 0 {
+		return nil, nil
+	}
+	return md, nil
+}
+
+// Emit emits a batch with the annotation metadata contributed by opts. With no
+// options it is equivalent to out.Emit(batch).
+func Emit(out *vgirpc.OutputCollector, batch arrow.RecordBatch, opts ...EmitOption) error {
+	md, err := applyEmitOptions(nil, opts)
+	if err != nil {
+		return err
+	}
+	if md == nil {
+		return out.Emit(batch)
+	}
+	return out.EmitWithMetadata(batch, md)
+}
+
 // EmitBatchIndex emits a batch tagged with vgi_batch_index. Use it from a
 // table function that declares SupportsBatchIndex. The C++ extension enforces
 // monotonicity and the per-pipeline cap.
-func EmitBatchIndex(out *vgirpc.OutputCollector, batch arrow.RecordBatch, batchIndex int64) error {
-	return out.EmitWithMetadata(batch, map[string]string{
+func EmitBatchIndex(out *vgirpc.OutputCollector, batch arrow.RecordBatch, batchIndex int64, opts ...EmitOption) error {
+	md, err := applyEmitOptions(map[string]string{
 		metaBatchIndex: strconv.FormatInt(batchIndex, 10),
-	})
+	}, opts)
+	if err != nil {
+		return err
+	}
+	return out.EmitWithMetadata(batch, md)
 }
 
 // PartitionValue is the (min, max) pair for one partition column. Values are Go
@@ -54,16 +126,16 @@ type PartitionValue struct {
 // in the emitted batch. Mirrors vgi-python's _merge_partition_values contract:
 // the SINGLE_VALUE distinct-value check, the "requires partition-annotated
 // fields" guard, and the annotated-but-absent error.
-func EmitPartitioned(out *vgirpc.OutputCollector, batch arrow.RecordBatch, partitionFields []arrow.Field, kind PartitionKind, explicit map[string]PartitionValue) error {
+func EmitPartitioned(out *vgirpc.OutputCollector, batch arrow.RecordBatch, partitionFields []arrow.Field, kind PartitionKind, explicit map[string]PartitionValue, opts ...EmitOption) error {
 	if len(partitionFields) == 0 {
 		if len(explicit) > 0 {
 			return fmt.Errorf("EmitPartitioned requires partition-annotated fields, but none were declared")
 		}
-		return out.Emit(batch)
+		return Emit(out, batch, opts...)
 	}
 	// Empty batches carry no partition metadata.
 	if batch.NumRows() == 0 {
-		return out.Emit(batch)
+		return Emit(out, batch, opts...)
 	}
 
 	mem := memory.NewGoAllocator()
@@ -125,7 +197,11 @@ func EmitPartitioned(out *vgirpc.OutputCollector, batch arrow.RecordBatch, parti
 		return err
 	}
 	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
-	return out.EmitWithMetadata(batch, map[string]string{metaPartitionValues: b64})
+	md, err := applyEmitOptions(map[string]string{metaPartitionValues: b64}, opts)
+	if err != nil {
+		return err
+	}
+	return out.EmitWithMetadata(batch, md)
 }
 
 // columnMinMax returns the min, max, and distinct-value count of a non-null

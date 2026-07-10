@@ -765,6 +765,20 @@ func (w *Worker) RegisterTableForCatalog(catalogName string, f TableFunction) {
 	w.catalogFunctionScope[f.Name()] = catalogName
 }
 
+// unlistedCatalogScope pins a function to a catalog no ATTACH can name, so it
+// is hidden from every catalog's function listing. See RegisterTableUnlisted.
+const unlistedCatalogScope = "\x00vgi.unlisted"
+
+// RegisterTableUnlisted registers a table function that is invokable but never
+// appears in any catalog's function listing (duckdb_functions, describe.json).
+// Use it for a function that exists only to back a catalog table: the table's
+// scan resolves it by name, but exposing it as a callable table function too
+// would be redundant surface area.
+func (w *Worker) RegisterTableUnlisted(f TableFunction) {
+	w.tables[f.Name()] = append(w.tables[f.Name()], f)
+	w.catalogFunctionScope[f.Name()] = unlistedCatalogScope
+}
+
 // RegisterTableInOut registers a table-in-out function.
 func (w *Worker) RegisterTableInOut(f TableInOutFunction) {
 	w.tableInOuts[f.Name()] = append(w.tableInOuts[f.Name()], f)

@@ -7,6 +7,7 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 	"strings"
 
@@ -27,7 +28,33 @@ func resolveAuthenticate() (vgirpc.AuthenticateFunc, func()) {
 	if jwtAuth != nil {
 		return jwtAuth, jwtCleanup
 	}
-	return bearerAuth, nil
+	if bearerAuth != nil {
+		return bearerAuth, nil
+	}
+	return optionalTestBearerAuthenticate(), nil
+}
+
+// optionalTestBearerAuthenticate is a test-only OPTIONAL bearer authenticator.
+// It lets the cache identity-isolation test attach the same worker under
+// different principals (alice/bob) while every other test on this shared server
+// stays anonymous: no / blank / unknown bearer resolves to anonymous (the
+// existing behaviour), a known token to its principal. It never returns 401, so
+// no anonymous test breaks. Mirrors vgi-python's _test_fixtures/http_server.py.
+func optionalTestBearerAuthenticate() vgirpc.AuthenticateFunc {
+	validate := vgirpc.BearerAuthenticateStatic(map[string]*vgirpc.AuthContext{
+		"vgi-test-alice": {Principal: "alice", Authenticated: true, Domain: "bearer"},
+		"vgi-test-bob":   {Principal: "bob", Authenticated: true, Domain: "bearer"},
+	})
+	return func(r *http.Request) (*vgirpc.AuthContext, error) {
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			return vgirpc.Anonymous(), nil
+		}
+		ctx, err := validate(r)
+		if err != nil {
+			return vgirpc.Anonymous(), nil
+		}
+		return ctx, nil
+	}
 }
 
 // resolveBearerAuthenticate parses VGI_BEARER_TOKENS into a static bearer

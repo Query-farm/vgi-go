@@ -233,6 +233,56 @@ func main() {
 		},
 	})
 
+	// Result-cache fixtures, exposed as function-backed tables so the
+	// catalog-attached path (SELECT ... FROM ex.data.<name>) exercises the C++
+	// result cache. See examples/table/cache.go.
+	//
+	// NB: cache_bench is intentionally NOT a data Table — it takes a required
+	// positional arg (rows) that a function-backed Table can't supply at bind.
+	// The scaling bench and the disk-streaming guard use the direct path
+	// `vgi_table_function(w, 'cache_bench', [rows])` instead.
+	for _, ct := range []vgi.CatalogTable{
+		{Name: "cacheable_numbers", Function: table.NewCacheableNumbersFunction(),
+			Comment: "Cacheable 10-row result advertising vgi.cache.ttl"},
+		{Name: "cache_nonce", Function: table.NewCacheNonceFunction(),
+			Comment: "One-row cacheable result whose value changes per real invocation"},
+		{Name: "cache_multicol", Function: table.NewCacheMultiColFunction(),
+			Comment: "Multi-column cacheable result (projection-coverage reuse)"},
+		{Name: "cache_no_store", Function: table.NewCacheNoStoreFunction(),
+			Comment: "Advertises vgi.cache.no_store — must never be cached"},
+		{Name: "cache_scoped_txn", Function: table.NewCacheScopedTxnFunction(),
+			Comment: "Advertises vgi.cache.scope=transaction"},
+		{Name: "cache_filtered", Function: table.NewCacheFilteredFunction(),
+			Comment: "Cacheable sequence with static filter pushdown (filter_bytes keying)"},
+		{Name: "cache_big", Function: table.NewCacheBigFunction(),
+			Comment: "Large multi-batch cacheable result (advertises vgi.cache.ttl)"},
+		{Name: "cache_ordered", Function: table.NewCacheOrderedFunction(),
+			Comment: "Multi-worker order-sensitive cacheable result (batch_index; parallel capture, ordered serve)"},
+		{Name: "cache_revalidatable", Function: table.NewCacheRevalidatableFunction(),
+			Comment: "Always-revalidate result (304 not_modified reuses stored bytes)"},
+		{Name: "cache_whoami", Function: table.NewCacheWhoamiFunction(),
+			Comment: "Cacheable result echoing the caller's auth principal (identity-scoped)"},
+		{Name: "cache_projection", Function: table.NewCacheProjectionFunction(),
+			Comment: "Projection-pushdown cacheable result (SELECT a vs b are distinct keys)"},
+		{Name: "cache_poison", Function: table.NewCachePoisonFunction(),
+			Comment: "Cacheable first batch then a mid-stream error (never-partial check)"},
+		{Name: "cache_external_fail", Function: table.NewCacheExternalFailFunction(),
+			Comment: "Cacheable first batch then an unresolvable external-location pointer"},
+	} {
+		w.RegisterCatalogTable("data", ct)
+	}
+
+	// Time-travel + cacheable: AT (VERSION => n) is resolved to the
+	// cache_versioned_scan version argument in the scan-function handler below.
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name: "cache_versioned",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "v", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		}, nil),
+		SupportsTimeTravel: true,
+		Comment:            "Version-specific cacheable rows (AT-keyed cache isolation)",
+	})
+
 	// Multi-branch (scan-branches) tables. Their physical sources are resolved
 	// by multiBranchScanBranchesGet via catalog_table_scan_branches_get.
 	{
@@ -797,6 +847,21 @@ func main() {
 			}
 			return &vgi.ScanFunctionResult{
 				FunctionName: "versioned_data_scan",
+				PositionalArguments: []vgi.ScanArg{
+					{Value: version, Type: arrow.PrimitiveTypes.Int64},
+				},
+			}, nil
+		}
+
+		// cache_versioned: AT → version arg, same as versioned_data but the scan
+		// function advertises cache metadata (for the AT cache-isolation test).
+		if schemaName == "data" && tableName == "cache_versioned" {
+			version, err := table.ResolveVersion(atUnit, atValue)
+			if err != nil {
+				return nil, err
+			}
+			return &vgi.ScanFunctionResult{
+				FunctionName: "cache_versioned_scan",
 				PositionalArguments: []vgi.ScanArg{
 					{Value: version, Type: arrow.PrimitiveTypes.Int64},
 				},

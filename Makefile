@@ -56,6 +56,14 @@ SHM_SIZE_BYTES ?= 268435456
 UNITTEST     := $(VGI_EXT_DIR)/build/$(BUILD_TYPE)/test/unittest
 DEBUG_BIN    := $(VGI_EXT_DIR)/build/debug/test/unittest
 
+# The same runners, addressed from inside $(VGI_EXT_DIR). The sqllogictest
+# runner resolves a test path against its own working directory, so the HTTP
+# lane cds into the extension repo and names tests relative to it — exactly as
+# the stdio `test` target does. Passing an out-of-tree path instead silently
+# matches no test case and exits 0.
+UNITTEST_REL := ./build/$(BUILD_TYPE)/test/unittest
+DEBUG_BIN_REL := ./build/debug/test/unittest
+
 # Absolute path to the worker binaries, passed to the test runner.
 WORKER_PATH                  := $(CURDIR)/$(BINARY)
 VERSIONED_WORKER_PATH        := $(CURDIR)/$(VERSIONED_BINARY)
@@ -71,8 +79,19 @@ TEST_FILES       := $(shell find $(TEST_DIR) -name '*.test' 2>/dev/null)
 TEST_TARGETS     := $(patsubst $(TEST_DIR)/%.test,test/%,$(TEST_FILES))
 HTTP_TEST_TARGETS := $(patsubst $(TEST_DIR)/%.test,test-http/%,$(TEST_FILES))
 
-# Tests expected to fail over HTTP (currently none)
-HTTP_XFAIL_TESTS :=
+# Tests expected to fail over HTTP. Both assert on the error a *bad worker
+# location* produces, which over HTTP is whatever DuckDB's httpfs says about the
+# URL rather than the worker's own "Unknown function" / spawn failure. The
+# reference runner (../vgi/test/run_http_integration.sh) only covers
+# test/sql/integration/*, so it never runs these; the Python worker fails them
+# over HTTP exactly as this one does.
+HTTP_XFAIL_TESTS := vgi_table_function vgi_worker_pool
+
+# The HTTP worker is started with its working directory set to $(VGI_EXT_DIR),
+# the same directory the unittest runner runs from. COPY ... TO writes the file
+# itself, and the test scripts name it with a path relative to that directory
+# (duckdb_unittest_tempdir/...). Over stdio the worker inherits DuckDB's cwd for
+# free; over HTTP it is an independent process, so the cwd has to be set here.
 
 .PHONY: build clean fmt vet lint test test-unit test-single test-shm test-http test-all test-landing new-worker
 
@@ -233,7 +252,7 @@ test-http/%: build
 	fi; \
 	port_fifo=$$(mktemp -u); \
 	mkfifo "$$port_fifo"; \
-	./$(BINARY) --http > "$$port_fifo" 2>/dev/null & \
+	(cd $(VGI_EXT_DIR) && exec $(WORKER_PATH) --http) > "$$port_fifo" 2>/dev/null & \
 	http_pid=$$!; \
 	cleanup() { kill $$http_pid 2>/dev/null; wait $$http_pid 2>/dev/null; rm -f "$$port_fifo"; }; \
 	trap cleanup EXIT; \
@@ -245,24 +264,29 @@ test-http/%: build
 	}; \
 	rm -f "$$port_fifo"; \
 	port=$${port_line#PORT:}; \
-	export VGI_TEST_WORKER="http://localhost:$$port/vgi"; \
+	export VGI_TEST_WORKER="http://127.0.0.1:$$port"; \
 	is_xfail=false; \
 	for xf in $(HTTP_XFAIL_TESTS); do \
 		if [ "$$xf" = "$*" ]; then is_xfail=true; break; fi; \
 	done; \
-	if timeout $(TEST_TIMEOUT) $(UNITTEST) --test-dir $(TEST_DIR) "$$test_file" > /dev/null 2>&1; then \
+	out=$$(cd $(VGI_EXT_DIR) && timeout $(TEST_TIMEOUT) $(UNITTEST_REL) "test/sql/$*.test" 2>&1); \
+	rc=$$?; \
+	if [ $$rc -eq 0 ] && printf '%s' "$$out" | grep -q "All tests were skipped"; then \
+		echo "SKIP  $* [http]"; \
+		printf '%s\n' "$$out" | grep -A2 "Skipped tests for the following reasons" | tail -n +2; \
+	elif [ $$rc -eq 0 ]; then \
 		if $$is_xfail; then \
 			echo "XPASS $* [http] (expected failure now passes — remove from HTTP_XFAIL_TESTS)"; \
 		else \
 			echo "PASS  $* [http]"; \
 		fi; \
 	else \
-		rc=$$?; \
 		if $$is_xfail; then \
 			echo "XFAIL $* [http] (expected failure)"; \
 		else \
 			echo "FAIL  $* [http] (release, rc=$$rc) — rerunning with debug binary..."; \
-			timeout $(TEST_TIMEOUT) $(DEBUG_BIN) --test-dir $(TEST_DIR) -s "$$test_file" 2>&1 || true; \
+			printf '%s\n' "$$out" | tail -40; \
+			(cd $(VGI_EXT_DIR) && timeout $(TEST_TIMEOUT) $(DEBUG_BIN_REL) -s "test/sql/$*.test" 2>&1) || true; \
 			kill $$http_pid 2>/dev/null; wait $$http_pid 2>/dev/null; \
 			exit 1; \
 		fi; \

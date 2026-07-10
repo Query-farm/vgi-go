@@ -77,6 +77,17 @@ type ProcessParams struct {
 	// table_buffering_process call when the function declares
 	// RequiresInputBatchIndex. Nil otherwise.
 	BatchIndex *int64
+	// IfNoneMatch is the conditional-revalidation validator carrying the
+	// client's stored ETag. It is set when the client holds a
+	// stale-but-revalidatable cached result and asks the worker to confirm
+	// freshness cheaply. A function that advertised CacheControl.Revalidatable
+	// compares it against its current validator and, when unchanged, emits a
+	// 0-row batch tagged CacheControl{NotModified: true} instead of
+	// re-streaming. Nil on a normal call.
+	IfNoneMatch *string
+	// IfModifiedSince is the conditional-revalidation validator carrying the
+	// client's stored Last-Modified. Companion to IfNoneMatch. Nil otherwise.
+	IfModifiedSince *string
 	// clientLog forwards an in-band log message to the client (surfaced in
 	// duckdb_logs() with type='VGI'). Set by the framework on the unary
 	// table-buffering RPCs, which have no streaming OutputCollector. Nil when
