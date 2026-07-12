@@ -191,7 +191,7 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewProductsScanFunction())
 	w.RegisterTable(table.NewProjectsScanFunction())
 	// rff_* scan functions back the Tables exercised by the
-	// required_field_filter_paths_*.test sqllogictest matrix.
+	// required_filters_*.test sqllogictest matrix.
 	w.RegisterTable(table.NewRffSimpleScanFunction())
 	w.RegisterTable(table.NewRffStructScanFunction())
 	w.RegisterTable(table.NewRffNestedScanFunction())

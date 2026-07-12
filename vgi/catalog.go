@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -1775,6 +1776,43 @@ func resolveColumnGroupIndices(columns *arrow.Schema, groups [][]string) [][]int
 	return result
 }
 
+// validateRequiredFilters checks a table's CNF required-filter groups. Each
+// OR-group must be non-empty and contain no empty strings, and the leading
+// dotted segment of every path must name a real column on the table. Returns
+// nil when groups is empty (the no-enforcement fast path) or columns is nil.
+func validateRequiredFilters(tableName string, columns *arrow.Schema, groups [][]string) error {
+	if len(groups) == 0 {
+		return nil
+	}
+	columnNames := map[string]struct{}{}
+	if columns != nil {
+		for i := 0; i < columns.NumFields(); i++ {
+			columnNames[columns.Field(i).Name] = struct{}{}
+		}
+	}
+	for _, group := range groups {
+		if len(group) == 0 {
+			return fmt.Errorf("table %q: required_filters must not contain empty groups", tableName)
+		}
+		for _, path := range group {
+			if path == "" {
+				return fmt.Errorf("table %q: required_filters must not contain empty strings", tableName)
+			}
+			if columns == nil {
+				continue
+			}
+			head := path
+			if idx := strings.IndexByte(path, '.'); idx >= 0 {
+				head = path[:idx]
+			}
+			if _, ok := columnNames[head]; !ok {
+				return fmt.Errorf("table %q: required_filters path %q references unknown column %q", tableName, path, head)
+			}
+		}
+	}
+	return nil
+}
+
 // serializeCatalogTable converts a CatalogTable into serialized TableInfo bytes.
 func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]byte, error) {
 	// Resolve columns: if Function is set but Columns is nil, derive via OnBind
@@ -1824,6 +1862,14 @@ func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]b
 	unique := resolveColumnGroupIndices(columns, ct.Unique)
 	primaryKey := resolveColumnGroupIndices(columns, ct.PrimaryKey)
 
+	// Validate required_filters (CNF): each OR-group must be non-empty and
+	// contain no empty strings, and the leading dotted segment of each path
+	// must be a real column on this table. Mirrors vgi-python's descriptor
+	// validation; struct-subfield validity is left to DuckDB's binder.
+	if err := validateRequiredFilters(ct.Name, columns, ct.RequiredFilters); err != nil {
+		return nil, err
+	}
+
 	// Serialize FOREIGN KEY constraints
 	var foreignKeys [][]byte
 	for _, fk := range ct.ForeignKey {
@@ -1848,7 +1894,7 @@ func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]b
 		SupportsColumnStatistics: len(ct.Statistics) > 0,
 		CardinalityEstimate:      ct.CardinalityEstimate,
 		CardinalityMax:           ct.CardinalityMax,
-		RequiredFieldFilterPaths: ct.RequiredFieldFilterPaths,
+		RequiredFilters:          ct.RequiredFilters,
 	}
 
 	// Inline the scan function for function-backed tables so the C++ extension

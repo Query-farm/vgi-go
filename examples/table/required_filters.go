@@ -14,10 +14,10 @@ import (
 )
 
 // Scan functions backing the rff_* Tables exercised by the
-// required_field_filter_paths_*.test sqllogictest matrix. They mirror
+// required_filters_*.test sqllogictest matrix. They mirror
 // vgi-python's vgi/_test_fixtures/table/required_filters.py.
 //
-// The C++ VGI optimizer extension enforces Table.required_field_filter_paths
+// The C++ VGI optimizer extension enforces Table.required_filters
 // at bind/optimize time — rejecting any scan that lacks the declared WHERE
 // filters before a single worker byte is read. Once a scan passes that check,
 // DuckDB applies the actual filter itself, so these functions simply emit the
@@ -40,7 +40,7 @@ func (f *RffSimpleScanFunction) Name() string { return "rff_simple_scan" }
 
 func (f *RffSimpleScanFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description: "rff_simple — flat columns (a, b) for required_field_filter_paths tests",
+		Description: "rff_simple — flat columns (a, b) for required_filters tests",
 		Stability:   vgi.StabilityConsistent,
 		Categories:  []string{"generator", "testing"},
 	}
@@ -90,7 +90,7 @@ func (f *RffNoneScanFunction) Name() string { return "rff_none_scan" }
 
 func (f *RffNoneScanFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description: "rff_none — control table with no required_field_filter_paths",
+		Description: "rff_none — control table with no required_filters",
 		Stability:   vgi.StabilityConsistent,
 		Categories:  []string{"generator", "testing"},
 	}
@@ -145,7 +145,7 @@ func (f *RffStructScanFunction) Name() string { return "rff_struct_scan" }
 
 func (f *RffStructScanFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description: "rff_struct — STRUCT(s.a, s.b) + other for required_field_filter_paths tests",
+		Description: "rff_struct — STRUCT(s.a, s.b) + other for required_filters tests",
 		Stability:   vgi.StabilityConsistent,
 		Categories:  []string{"generator", "testing"},
 	}
@@ -216,7 +216,7 @@ func (f *RffNestedScanFunction) Name() string { return "rff_nested_scan" }
 
 func (f *RffNestedScanFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description: "rff_nested — nested STRUCT(wrapper.mid.leaf) for required_field_filter_paths tests",
+		Description: "rff_nested — nested STRUCT(wrapper.mid.leaf) for required_filters tests",
 		Stability:   vgi.StabilityConsistent,
 		Categories:  []string{"generator", "testing"},
 	}
@@ -339,7 +339,7 @@ func NewRffMultiScanFunction() vgi.TableFunction {
 // Because of the virtual rowid column this fixture needs projection_pushdown:
 // under projection the emitted batch must match the *projected* output schema,
 // so it builds only the requested columns. See
-// required_field_filter_paths_rowid.test.
+// required_filters_rowid.test.
 // ---------------------------------------------------------------------------
 
 // rffRowidMetadata marks the row_id virtual column (hidden from SELECT *).

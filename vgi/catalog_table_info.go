@@ -57,14 +57,20 @@ type TableInfo struct {
 	// bind_data and skips the per-scan bind RPC.
 	BindResult []byte
 
-	// RequiredFieldFilterPaths lists dotted-path column references that MUST
-	// appear in a WHERE expression for any scan of this table (top-level names
-	// like "country" or struct subfields like "bbox.xmin"). Empty (default)
-	// means no enforcement. The C++ extension's optimizer pass consults this
-	// list at bind time and throws BinderException listing any unsatisfied
-	// paths. Satisfaction is prefix-based — a filter on a parent path satisfies
-	// every required child path.
-	RequiredFieldFilterPaths []string
+	// RequiredFilters is the required WHERE-filter set in conjunctive normal
+	// form (CNF): an AND (outer list) of OR-groups (inner lists) of dotted-path
+	// column references that MUST appear in a WHERE expression for any scan of
+	// this table. A group is satisfied when any one of its member paths has a
+	// filter; every group must be satisfied. So [["accession_number"],
+	// ["ticker","cik"]] means "accession_number AND one of (ticker, cik)".
+	// Paths are top-level names ("country") or struct subfields ("bbox.xmin").
+	// Empty (default) means no enforcement. The C++ extension's optimizer pass
+	// consults this at bind time and throws BinderException listing any
+	// unsatisfied groups. Satisfaction is prefix-based — a filter on a parent
+	// path satisfies every required child path.
+	//
+	// This is the trailing field of the TableInfo wire schema.
+	RequiredFilters [][]string
 }
 
 var tableInfoSchema = generated.TableInfoSchema
@@ -240,14 +246,19 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		cardMaxBuilder.AppendNull()
 	}
 
-	// required_field_filter_paths (non-null list of string)
-	rffpBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
-	defer rffpBuilder.Release()
-	rffpBuilder.Append(true)
-	if len(info.RequiredFieldFilterPaths) > 0 {
-		vb := rffpBuilder.ValueBuilder().(*array.StringBuilder)
-		for _, p := range info.RequiredFieldFilterPaths {
-			vb.Append(p)
+	// required_filters (non-null list of list of string) — CNF: outer list is
+	// an AND of OR-groups, each inner list an OR of dotted-path references.
+	rfBuilder := array.NewListBuilder(mem, arrow.ListOf(arrow.BinaryTypes.String))
+	defer rfBuilder.Release()
+	rfBuilder.Append(true)
+	if len(info.RequiredFilters) > 0 {
+		innerListBuilder := rfBuilder.ValueBuilder().(*array.ListBuilder)
+		for _, group := range info.RequiredFilters {
+			innerListBuilder.Append(true)
+			innerVB := innerListBuilder.ValueBuilder().(*array.StringBuilder)
+			for _, p := range group {
+				innerVB.Append(p)
+			}
 		}
 	}
 
@@ -275,7 +286,7 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		cardMaxBuilder.NewArray(),
 		columnStatsArr,
 		bindResultArr,
-		rffpBuilder.NewArray(),
+		rfBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

@@ -603,50 +603,60 @@ func main() {
 		},
 		StatisticsCacheMaxAgeSeconds: &statsTTL3600,
 	})
-	// required_field_filter_paths fixtures — back the
-	// required_field_filter_paths_*.test sqllogictest matrix. The C++ optimizer
-	// extension enforces the declared paths at bind time.
+	// required_filters fixtures — back the required_filters_*.test
+	// sqllogictest matrix. The C++ optimizer extension enforces the declared
+	// CNF groups at bind time. Each group is an OR of member paths; every group
+	// must be satisfied. Prior flat single-path requirements become singleton
+	// groups to preserve their AND meaning.
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:                     "rff_simple",
-		Comment:                  "rff_simple — requires a filter referencing column 'a'.",
-		Columns:                  table.RffSimpleSchema,
-		RequiredFieldFilterPaths: []string{"a"},
+		Name:            "rff_simple",
+		Comment:         "rff_simple — requires a filter referencing column 'a'.",
+		Columns:         table.RffSimpleSchema,
+		RequiredFilters: [][]string{{"a"}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:                     "rff_struct",
-		Comment:                  "rff_struct — requires filters on both struct subfields s.a and s.b.",
-		Columns:                  table.RffStructSchema,
-		RequiredFieldFilterPaths: []string{"s.a", "s.b"},
+		Name:            "rff_struct",
+		Comment:         "rff_struct — requires filters on both struct subfields s.a and s.b.",
+		Columns:         table.RffStructSchema,
+		RequiredFilters: [][]string{{"s.a"}, {"s.b"}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:                     "rff_nested",
-		Comment:                  "rff_nested — requires a filter on the 3-deep nested path wrapper.mid.leaf.",
-		Columns:                  table.RffNestedSchema,
-		RequiredFieldFilterPaths: []string{"wrapper.mid.leaf"},
+		Name:            "rff_nested",
+		Comment:         "rff_nested — requires a filter on the 3-deep nested path wrapper.mid.leaf.",
+		Columns:         table.RffNestedSchema,
+		RequiredFilters: [][]string{{"wrapper.mid.leaf"}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:                     "rff_multi",
-		Comment:                  "rff_multi — mixed top-level + struct subfield requirements.",
-		Columns:                  table.RffMultiSchema,
-		RequiredFieldFilterPaths: []string{"top", "s.a"},
+		Name:            "rff_multi",
+		Comment:         "rff_multi — mixed top-level + struct subfield requirements (top AND s.a).",
+		Columns:         table.RffMultiSchema,
+		RequiredFilters: [][]string{{"top"}, {"s.a"}},
+	})
+	// rff_or — genuine OR-group: a single CNF group satisfied by a filter on
+	// EITHER a or b (i.e. [["a","b"]] means "one of (a, b)").
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:            "rff_or",
+		Comment:         "rff_or — requires a filter on either column a OR column b (single OR-group).",
+		Columns:         table.RffNoneSchema,
+		RequiredFilters: [][]string{{"a", "b"}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:    "rff_none",
-		Comment: "rff_none — control table with no required_field_filter_paths (opt-out fast path).",
+		Comment: "rff_none — control table with no required_filters (opt-out fast path).",
 		Columns: table.RffNoneSchema,
 	})
 	// rff_rowid — row_id virtual column + required bbox.* filters. The rowid
 	// table_filter is keyed by a sentinel >> column count, which the optimizer
-	// must skip. See required_field_filter_paths_rowid.test.
+	// must skip. See required_filters_rowid.test.
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:                     "rff_rowid",
-		Comment:                  "rff_rowid — row_id virtual column + required bbox.* filters.",
-		Columns:                  table.RffRowidSchema,
-		RequiredFieldFilterPaths: []string{"bbox.xmin", "bbox.xmax", "bbox.ymin", "bbox.ymax"},
+		Name:            "rff_rowid",
+		Comment:         "rff_rowid — row_id virtual column + required bbox.* filters.",
+		Columns:         table.RffRowidSchema,
+		RequiredFilters: [][]string{{"bbox.xmin"}, {"bbox.xmax"}, {"bbox.ymin"}, {"bbox.ymax"}},
 	})
 	// rff_parquet / rff_hive / rff_hive_mixed — native read_parquet delegation
 	// with bbox.* required filters (mirrors Overture transportation.segment).
-	// See required_field_filter_paths_native.test.
+	// See required_filters_native.test.
 	rffBboxType := arrow.StructOf(
 		arrow.Field{Name: "xmin", Type: arrow.PrimitiveTypes.Float32},
 		arrow.Field{Name: "ymin", Type: arrow.PrimitiveTypes.Float32},
@@ -660,7 +670,7 @@ func main() {
 			{Name: "bbox", Type: rffBboxType},
 			{Name: "other", Type: arrow.PrimitiveTypes.Int64},
 		}, nil),
-		RequiredFieldFilterPaths: []string{"bbox.xmin", "bbox.xmax", "bbox.ymin", "bbox.ymax"},
+		RequiredFilters: [][]string{{"bbox.xmin"}, {"bbox.xmax"}, {"bbox.ymin"}, {"bbox.ymax"}},
 	})
 	rffHiveColumns := arrow.NewSchema([]arrow.Field{
 		{Name: "id", Type: arrow.BinaryTypes.String},
@@ -671,16 +681,16 @@ func main() {
 		{Name: "type", Type: arrow.BinaryTypes.String},
 	}, nil)
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:                     "rff_hive",
-		Comment:                  "rff_hive — native read_parquet over Hive glob with bbox.* required filters.",
-		Columns:                  rffHiveColumns,
-		RequiredFieldFilterPaths: []string{"bbox.xmin", "bbox.xmax", "bbox.ymin", "bbox.ymax"},
+		Name:            "rff_hive",
+		Comment:         "rff_hive — native read_parquet over Hive glob with bbox.* required filters.",
+		Columns:         rffHiveColumns,
+		RequiredFilters: [][]string{{"bbox.xmin"}, {"bbox.xmax"}, {"bbox.ymin"}, {"bbox.ymax"}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:                     "rff_hive_mixed",
-		Comment:                  "rff_hive_mixed — native read_parquet, top-level 'id' + bbox.* required filters.",
-		Columns:                  rffHiveColumns,
-		RequiredFieldFilterPaths: []string{"id", "bbox.xmin", "bbox.xmax", "bbox.ymin", "bbox.ymax"},
+		Name:            "rff_hive_mixed",
+		Comment:         "rff_hive_mixed — native read_parquet, top-level 'id' + bbox.* required filters.",
+		Columns:         rffHiveColumns,
+		RequiredFilters: [][]string{{"id"}, {"bbox.xmin"}, {"bbox.xmax"}, {"bbox.ymin"}, {"bbox.ymax"}},
 	})
 	// filter_echo_table — catalog table echoing pushed-down filters, backs
 	// filter_pushdown_through_view.test.
@@ -945,6 +955,10 @@ func main() {
 			case "rff_multi":
 				return &vgi.ScanFunctionResult{FunctionName: "rff_multi_scan"}, nil
 			case "rff_none":
+				return &vgi.ScanFunctionResult{FunctionName: "rff_none_scan"}, nil
+			case "rff_or":
+				// rff_or reuses the (a, b) rff_none dataset; only its
+				// required_filters (a single OR-group) differ.
 				return &vgi.ScanFunctionResult{FunctionName: "rff_none_scan"}, nil
 			case "rff_rowid":
 				return &vgi.ScanFunctionResult{FunctionName: "rff_rowid_scan"}, nil
