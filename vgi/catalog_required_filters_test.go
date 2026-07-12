@@ -27,7 +27,7 @@ func readRequiredFilters(t *testing.T, info *TableInfo) [][]string {
 	if !reader.Next() {
 		t.Fatal("expected one record batch")
 	}
-	rec := reader.Record()
+	rec := reader.RecordBatch()
 
 	field := rec.Schema().Field(rec.Schema().NumFields() - 1)
 	if field.Name != "required_filters" {
