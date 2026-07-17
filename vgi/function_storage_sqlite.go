@@ -3,12 +3,14 @@
 package vgi
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	_ "modernc.org/sqlite"
 )
@@ -252,34 +254,37 @@ func (s *sqliteStorage) stateGetOne(scope, ns, key []byte) ([]byte, error) {
 // stateDrain reads and deletes every (key, value) in (scope, ns), ordered by
 // key, in one transaction.
 func (s *sqliteStorage) stateDrain(scope, ns []byte) ([][2][]byte, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return nil, err
-	}
-	rows, err := tx.Query(
-		`SELECT key, value FROM function_state WHERE scope_id = ? AND ns = ? ORDER BY key`,
+	// One atomic DELETE ... RETURNING instead of a deferred transaction
+	// (SELECT then DELETE): the deferred form takes a read snapshot at the
+	// SELECT and upgrades to a write lock at the DELETE — if another worker
+	// process committed a write in between (e.g. a per-batch WorkerPut on a
+	// parallel substream), SQLite fails the upgrade immediately with
+	// SQLITE_BUSY_SNAPSHOT (517), which busy_timeout does NOT retry. A single
+	// write statement takes the write lock up front, so contention surfaces as
+	// plain SQLITE_BUSY and waits out the busy_timeout. RETURNING carries no
+	// ORDER BY, so restore the by-key order in Go (keys are big-endian, so a
+	// bytewise sort matches the SQL BLOB ordering).
+	rows, err := s.db.Query(
+		`DELETE FROM function_state WHERE scope_id = ? AND ns = ? RETURNING key, value`,
 		scope, ns,
 	)
 	if err != nil {
-		_ = tx.Rollback()
 		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
 	var out [][2][]byte
 	for rows.Next() {
 		var k, v []byte
 		if err := rows.Scan(&k, &v); err != nil {
-			_ = rows.Close()
-			_ = tx.Rollback()
 			return nil, err
 		}
 		out = append(out, [2][]byte{k, v})
 	}
-	rows.Close()
-	if _, err := tx.Exec(`DELETE FROM function_state WHERE scope_id = ? AND ns = ?`, scope, ns); err != nil {
-		_ = tx.Rollback()
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return out, tx.Commit()
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i][0], out[j][0]) < 0 })
+	return out, nil
 }
 
 // stateScan returns every (key, value) in (scope, ns), ordered by key.
