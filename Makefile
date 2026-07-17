@@ -87,27 +87,7 @@ HTTP_TEST_TARGETS := $(patsubst $(TEST_DIR)/%.test,test-http/%,$(TEST_FILES))
 # reference runner (../vgi/test/run_http_integration.sh) only covers
 # test/sql/integration/*, so it never runs these; the Python worker fails them
 # over HTTP exactly as this one does.
-#
-# The three integration/* entries are blocked on a vgi-rpc-go gap: the HTTP
-# exchange flush (vgirpc/http_stream.go handleExchangeCall) drops the
-# vgi_rpc.stream_state#b64 continuation token whenever the DATA batch carries
-# its own custom metadata — it writes EITHER the user metadata OR the token,
-# never merged (Python's server merges: _app_stream.py merge_data_metadata).
-# Any exchange stream whose emits carry metadata (cache-control, parent_row
-# provenance) therefore loses its state token after the first chunk, and the
-# extension sees "returned end-of-stream mid-exchange" on the second input
-# chunk. Single-chunk streams are unaffected (exchange_streaming/_revalidate/
-# _buffered, blended, per_value_lateral all PASS); only the multi-chunk
-# metadata-carrying streams fail:
-#   * cache/exchange_lateral      — 20000-row LATERAL cached_double
-#   * cache/per_value_concurrent  — 20000-row LATERAL + scalar cached fixtures
-#   * table_in_out/lateral_batch  — 5000-row blended_explode parent_rows fan-out
-# Remove these (XPASS will flag them) once vgi-rpc-go merges the state token
-# into a metadata-carrying data batch on the HTTP exchange path.
-HTTP_XFAIL_TESTS := vgi_table_function vgi_worker_pool \
-	integration/cache/exchange_lateral \
-	integration/cache/per_value_concurrent \
-	integration/table_in_out/lateral_batch
+HTTP_XFAIL_TESTS := vgi_table_function vgi_worker_pool
 
 # The HTTP worker is started with its working directory set to $(VGI_EXT_DIR),
 # the same directory the unittest runner runs from. COPY ... TO writes the file
