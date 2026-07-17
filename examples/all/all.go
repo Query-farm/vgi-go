@@ -245,6 +245,15 @@ func registerTableInOuts(w *vgi.Worker) {
 	w.RegisterTableInOut(table_in_out.NewBlendedExplodeFunction())
 	w.RegisterTableInOut(table_in_out.NewProjectableBlendedFunction())
 	w.RegisterTableInOut(table_in_out.NewHostileProvenanceFunction())
+	// Exchange-mode result-cache fixtures (cache/exchange_*.test): cached_double
+	// (blended LATERAL cache), cached_echo (classic streaming cache),
+	// cached_sum_all (buffered cache), and the two always-revalidate (304)
+	// fixtures (cache/exchange_revalidate.test).
+	w.RegisterTableInOut(table_in_out.NewCachedDoubleFunction())
+	w.RegisterTableInOut(table_in_out.NewCachedEchoFunction())
+	w.RegisterTableInOut(table_in_out.NewCachedRevalidatingEchoFunction())
+	w.RegisterTableInOut(table_in_out.NewCachedRevalidatingDoubleFunction())
+	w.RegisterTableBuffering(&table_in_out.CachedSumAllColumnsFunction{})
 	w.RegisterTableInOut(table_in_out.NewExceptionFinalizeFunction())
 	w.RegisterTableInOut(table_in_out.NewExceptionProcessFunction())
 	w.RegisterTableInOut(table_in_out.NewFilterBySettingFunction())

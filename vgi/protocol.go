@@ -341,6 +341,19 @@ type TableInOutExchangeState struct {
 // the resulting batches to the output collector.
 func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
 	s.params.Auth = callCtx.Auth
+	// Conditional-revalidation validators (exchange-mode result cache): the
+	// client holds a stale cached result for THIS input unit and asks the
+	// worker to confirm freshness cheaply. Surfaced on params so Process can
+	// answer with a 0-row CacheControl{NotModified: true} batch instead of
+	// recomputing. They ride the input batch's custom metadata (attached by
+	// the C++ WriteInputBatch) — parity with the producer tick path. The pipe
+	// transports surface that metadata on callCtx.InputMetadata; the HTTP
+	// exchange path does not, so also read it off the batch itself (the IPC
+	// reader preserves it as a RecordBatchWithMetadata).
+	applyTickValidators(s.params, callCtx.InputMetadata)
+	if bwm, ok := input.(arrow.RecordBatchWithMetadata); ok {
+		applyTickValidators(s.params, bwm.Metadata())
+	}
 	// Projection pushdown: a function declaring projection_pushdown emits a
 	// full-width batch but its output schema is narrowed to the projected
 	// columns. Select those columns by name before the (filter) auto-apply and
@@ -386,6 +399,12 @@ type FinalizeProducerState struct {
 	BatchIPC [][]byte            // exported, serialized finalize batch IPC bytes
 	BatchIdx int                 // exported, current emission position
 	batches  []arrow.RecordBatch // transient (deserialized from BatchIPC)
+	// CacheMeta, when non-nil, is attached to every emitted finalize batch.
+	// Set from FunctionMetadata.CacheControl so a table-buffering function can
+	// advertise vgi.cache.* on its finalize output for the exchange-mode
+	// result cache (the C++ side latches the first batch's keys). Exported so
+	// it survives the HTTP state-token round-trip.
+	CacheMeta map[string]string
 }
 
 // Produce emits the next buffered finalize batch to the output collector, finishing
@@ -398,6 +417,9 @@ func (s *FinalizeProducerState) Produce(ctx context.Context, out *vgirpc.OutputC
 	batch := s.batches[s.BatchIdx]
 	s.batches[s.BatchIdx] = nil // release reference after emission
 	s.BatchIdx++
+	if s.CacheMeta != nil {
+		return out.EmitWithMetadata(batch, s.CacheMeta)
+	}
 	return out.Emit(batch)
 }
 

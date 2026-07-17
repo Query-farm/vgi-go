@@ -192,9 +192,19 @@ func (w *Worker) initTableBuffering(ctx context.Context, fn TableBufferingFuncti
 			}
 			batchIPC = append(batchIPC, data)
 		}
+		// Result-cache opt-in: a buffering function declaring
+		// Metadata().CacheControl advertises its vgi.cache.* keys on every
+		// finalize batch, backing the exchange-mode buffered result cache.
+		var cacheMeta map[string]string
+		if cc := fn.Metadata().CacheControl; cc != nil {
+			if err := cc.Validate(); err != nil {
+				return nil, err
+			}
+			cacheMeta = cc.Metadata()
+		}
 		return &vgirpc.StreamResult{
 			OutputSchema: outputSchema,
-			State:        &FinalizeProducerState{Recipe: *recipe, BatchIPC: batchIPC, batches: batches},
+			State:        &FinalizeProducerState{Recipe: *recipe, BatchIPC: batchIPC, batches: batches, CacheMeta: cacheMeta},
 			Header:       header,
 		}, nil
 	}
