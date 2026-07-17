@@ -229,6 +229,15 @@ func registerTableInOuts(w *vgi.Worker) {
 	// substream_partial_sum: per-substream partial sum at finalize (parallel
 	// streaming finalize, Phase A/A4 — see table_in_out/parallel_finalize.test).
 	w.RegisterTableInOut(table_in_out.NewSubstreamPartialSumFunction())
+	// Blended ("UNNEST-style") fixtures — positional args ARE the per-row input
+	// columns; one registration serves literal / column / LATERAL (see
+	// table_in_out/blended.test). geo_encode is arity-overloaded (2 + 3
+	// positional columns); row_sum is the VARARGS fixture; blended_drop the
+	// 1->0 scan-mode edge case.
+	w.RegisterTableInOut(table_in_out.NewGeoEncodeFunction())
+	w.RegisterTableInOut(table_in_out.NewGeoEncode3Function())
+	w.RegisterTableInOut(table_in_out.NewRowSumFunction())
+	w.RegisterTableInOut(table_in_out.NewBlendedDropFunction())
 	w.RegisterTableInOut(table_in_out.NewExceptionFinalizeFunction())
 	w.RegisterTableInOut(table_in_out.NewExceptionProcessFunction())
 	w.RegisterTableInOut(table_in_out.NewFilterBySettingFunction())

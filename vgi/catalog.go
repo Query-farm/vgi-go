@@ -586,6 +586,10 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs()) // table-in-out registers as "table"
 			fi.HasFinalize = meta.HasFinalize
+			// Blended ("UNNEST-style"): positional args ARE the per-row input
+			// columns — the C++ extension reads this to register the function
+			// with real-typed args serving literal / column / LATERAL shapes.
+			fi.InputFromArgs = meta.InputFromArgs
 			mainSchema.functions = append(mainSchema.functions, fi)
 		}
 	}

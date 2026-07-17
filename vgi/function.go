@@ -280,6 +280,18 @@ type FunctionMetadata struct {
 	SourceOrderDependent    bool
 	SinkOrderDependent      bool
 	RequiresInputBatchIndex bool
+	// InputFromArgs marks a blended ("UNNEST-style") table-in-out function: the
+	// function's positional args ARE its per-row input columns (real typed
+	// args, no synthetic TABLE placeholder), so ONE registration serves
+	// f(52, 13) (literal -> 1 input row), FROM t, f(t.x, t.y) (columns ->
+	// streaming), and LATERAL f(t.x, t.y). A blended function is map-shaped and
+	// per-row: it must NOT set HasFinalize (DuckDB forbids FinalExecute under
+	// correlated LATERAL, one of the call shapes blended must serve), must not
+	// declare a "table"-typed arg, and must not take a positional const arg.
+	// The worker reads the positional args from the input batch (by declared
+	// name for fixed args, positionally for varargs); named args stay bind-time
+	// scalars on ProcessParams.Args. Mirrors vgi-python's RowTransformFunction.
+	InputFromArgs bool
 }
 
 // DefaultMetadata returns metadata with default values.

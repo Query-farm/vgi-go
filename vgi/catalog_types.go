@@ -52,8 +52,14 @@ type FunctionInfo struct {
 	SourceOrderDependent    bool
 	SinkOrderDependent      bool
 	RequiresInputBatchIndex bool
-	RequiredSettings        []string
-	RequiredSecrets         []SecretRequirement
+	// InputFromArgs marks a blended ("UNNEST-style") table-in-out function: its
+	// positional args ARE the per-row input columns (real typed args, no TABLE
+	// placeholder), so one registration serves literal / column / LATERAL call
+	// shapes. The C++ extension reads it to enter the in-out registration branch
+	// with real-typed args and drive the literal single-row scan-mode.
+	InputFromArgs    bool
+	RequiredSettings []string
+	RequiredSecrets  []SecretRequirement
 }
 
 var dictType = &arrow.DictionaryType{
@@ -319,6 +325,11 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	defer ribiBuilder.Release()
 	ribiBuilder.Append(info.RequiresInputBatchIndex)
 
+	// input_from_args
+	ifaBuilder := array.NewBooleanBuilder(mem)
+	defer ifaBuilder.Release()
+	ifaBuilder.Append(info.InputFromArgs)
+
 	// required_settings
 	reqSettingsBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
 	defer reqSettingsBuilder.Release()
@@ -378,6 +389,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		sodBuilder.NewArray(),
 		sinkodBuilder.NewArray(),
 		ribiBuilder.NewArray(),
+		ifaBuilder.NewArray(),
 		reqSettingsBuilder.NewArray(),
 		rsListBuilder.NewArray(),
 	}
