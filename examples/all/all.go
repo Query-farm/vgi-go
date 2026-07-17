@@ -54,6 +54,10 @@ func registerScalars(w *vgi.Worker) {
 	w.RegisterScalar(&scalar.AnyMixedStrFunction{})
 	w.RegisterScalar(&scalar.BernoulliFunction{})
 	w.RegisterScalar(&scalar.BinaryPacketFunction{})
+	// Cacheable scalar fixtures (per-value memoization — scalar/per_value*.test).
+	w.RegisterScalar(&scalar.CachedAddConstScalarFunction{})
+	w.RegisterScalar(&scalar.CachedDoubleScalarFunction{})
+	w.RegisterScalar(&scalar.CachedLabelScalarFunction{})
 	w.RegisterScalar(scalar.NewConcatValuesInt())
 	w.RegisterScalar(scalar.NewConcatValuesStr())
 	w.RegisterScalar(&scalar.ConditionalMessageFunction{})

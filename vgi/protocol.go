@@ -206,6 +206,16 @@ func (s *ScalarExchangeState) Exchange(ctx context.Context, input arrow.RecordBa
 	if err != nil {
 		return err
 	}
+	// Result-cache opt-in: a scalar declaring Metadata().CacheControl rides its
+	// vgi.cache.* keys on the emit path's per-batch custom metadata (NOT the
+	// fixed IPC schema), so the extension can memoize the output per distinct
+	// input value. Non-cacheable scalars emit unannotated (unchanged).
+	if cc := s.fn.Metadata().CacheControl; cc != nil {
+		if err := cc.Validate(); err != nil {
+			return err
+		}
+		return out.EmitWithMetadata(result, cc.Metadata())
+	}
 	return out.Emit(result)
 }
 
