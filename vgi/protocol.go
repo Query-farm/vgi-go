@@ -148,22 +148,30 @@ type BindResponseWire struct {
 
 // InitRequestWire is the wire format for init requests.
 type InitRequestWire struct {
-	BindCall              BindRequestWire `vgirpc:"bind_call"`
-	OutputSchema          []byte          `vgirpc:"output_schema"`
-	BindOpaqueData        *[]byte         `vgirpc:"bind_opaque_data"`
-	ProjectionIDs         *[]int32        `vgirpc:"projection_ids"`
-	PushdownFilters       *[]byte         `vgirpc:"pushdown_filters"`
-	JoinKeys              *[][]byte       `vgirpc:"join_keys"`
-	Phase                 *string         `vgirpc:"phase,enum"`
-	ExecutionID           *[]byte         `vgirpc:"execution_id"`
-	InitOpaqueData        *[]byte         `vgirpc:"init_opaque_data"`
-	OrderByColumnName     *string         `vgirpc:"order_by_column_name"`
-	OrderByDirection      *string         `vgirpc:"order_by_direction,enum"`
-	OrderByNullOrder      *string         `vgirpc:"order_by_null_order,enum"`
-	OrderByLimit          *int64          `vgirpc:"order_by_limit"`
-	TablesamplePercentage *float64        `vgirpc:"tablesample_percentage"`
-	TablesampleSeed       *int64          `vgirpc:"tablesample_seed"`
-	FinalizeStateID       *[]byte         `vgirpc:"finalize_state_id"`
+	BindCall        BindRequestWire `vgirpc:"bind_call"`
+	OutputSchema    []byte          `vgirpc:"output_schema"`
+	BindOpaqueData  *[]byte         `vgirpc:"bind_opaque_data"`
+	ProjectionIDs   *[]int32        `vgirpc:"projection_ids"`
+	PushdownFilters *[]byte         `vgirpc:"pushdown_filters"`
+	JoinKeys        *[][]byte       `vgirpc:"join_keys"`
+	Phase           *string         `vgirpc:"phase,enum"`
+	ExecutionID     *[]byte         `vgirpc:"execution_id"`
+	InitOpaqueData  *[]byte         `vgirpc:"init_opaque_data"`
+	// SubstreamID is the stable, CLIENT-minted per-substream id for parallel
+	// streaming table-in-out functions. The extension threads it on every init
+	// of one substream (INPUT + FINALIZE), so a worker can key that substream's
+	// accumulated state even when an HTTP load balancer spreads the substream's
+	// requests across backends (unlike the worker-minted execution_id). Nil when
+	// the client did not supply one (serial path, non-table-in-out functions,
+	// old clients). Mirrors vgi-python's InitRequest.substream_id.
+	SubstreamID           *[]byte  `vgirpc:"substream_id"`
+	OrderByColumnName     *string  `vgirpc:"order_by_column_name"`
+	OrderByDirection      *string  `vgirpc:"order_by_direction,enum"`
+	OrderByNullOrder      *string  `vgirpc:"order_by_null_order,enum"`
+	OrderByLimit          *int64   `vgirpc:"order_by_limit"`
+	TablesamplePercentage *float64 `vgirpc:"tablesample_percentage"`
+	TablesampleSeed       *int64   `vgirpc:"tablesample_seed"`
+	FinalizeStateID       *[]byte  `vgirpc:"finalize_state_id"`
 }
 
 // GlobalInitResponseWire is the wire format for global init responses.
@@ -635,6 +643,9 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		CopyFrom:        bindParams.CopyFrom,
 		CopyTo:          bindParams.CopyTo,
 	}
+	if req.SubstreamID != nil {
+		processParams.SubstreamID = *req.SubstreamID
+	}
 
 	// Build InitRecipe for HTTP state serialization
 	recipe := InitRecipe{
@@ -648,6 +659,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		InitOpaqueData:  initParams.InitOpaqueData,
 		Phase:           phase,
 		IsSecondary:     initParams.IsSecondary,
+		SubstreamID:     processParams.SubstreamID,
 	}
 	if req.PushdownFilters != nil {
 		recipe.PushdownFilterIPC = *req.PushdownFilters

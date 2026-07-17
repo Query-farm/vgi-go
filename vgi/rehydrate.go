@@ -214,6 +214,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		Settings:       bindParams.Settings,
 		Secrets:        bindParams.Secrets,
 		ExecutionID:    recipe.ExecutionID,
+		SubstreamID:    recipe.SubstreamID,
 		InitOpaqueData: recipe.InitOpaqueData,
 		AtUnit:         bindParams.AtUnit,
 		AtValue:        bindParams.AtValue,

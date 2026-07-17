@@ -221,8 +221,14 @@ func registerTableInOuts(w *vgi.Worker) {
 	w.RegisterTableBuffering(&table_in_out.EchoBufferingFunction{})
 	w.RegisterTableBuffering(&table_in_out.BufferEmitWideFunction{})
 	w.RegisterTableInOut(table_in_out.NewEchoWitnessFunction())
-	w.RegisterTableInOut(table_in_out.NewDistributedSumFunction())
+	// sum_all_columns_simple_distributed: a global cross-substream combine
+	// belongs on the buffered Sink+Combine+Source path (migrated from the
+	// streaming table-in-out finish(states) model — see distributed_sum.go).
+	w.RegisterTableBuffering(&table_in_out.DistributedSumFunction{})
 	w.RegisterTableInOut(table_in_out.NewEchoFunction())
+	// substream_partial_sum: per-substream partial sum at finalize (parallel
+	// streaming finalize, Phase A/A4 — see table_in_out/parallel_finalize.test).
+	w.RegisterTableInOut(table_in_out.NewSubstreamPartialSumFunction())
 	w.RegisterTableInOut(table_in_out.NewExceptionFinalizeFunction())
 	w.RegisterTableInOut(table_in_out.NewExceptionProcessFunction())
 	w.RegisterTableInOut(table_in_out.NewFilterBySettingFunction())

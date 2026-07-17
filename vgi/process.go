@@ -29,6 +29,15 @@ type ProcessParams struct {
 	Secrets Secrets
 	// ExecutionID is the execution identifier.
 	ExecutionID []byte
+	// SubstreamID is the stable client-minted id for this streaming
+	// table-in-out substream. Present (identical across init / every Process /
+	// finalize) when the client fanned this function out across per-substream
+	// workers; use it to key per-substream accumulated state in shared storage
+	// so a finalize that lands on a different HTTP backend than the Process
+	// calls still finds it. Nil for the serial path, non-table-in-out
+	// functions, or an old client that did not supply one. Mirrors vgi-python's
+	// ProcessParams.substream_id.
+	SubstreamID []byte
 	// AttachScope is the per-ATTACH plaintext (the catalog's attach_opaque_data
 	// with the framework UUID stripped). Stable across the queries of one ATTACH
 	// session; used to scope persistent state via Storage.AttachStore(scope).

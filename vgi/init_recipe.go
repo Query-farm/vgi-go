@@ -19,6 +19,10 @@ type InitRecipe struct {
 	PushdownFilterIPC []byte
 	Phase             Phase
 	IsSecondary       bool
+	// SubstreamID is the client-minted per-substream id folded into the recipe
+	// (and so into the HTTP state token) so every rehydrated tick of one
+	// substream sees the same id. Nil when the client did not supply one.
+	SubstreamID []byte
 	// ShardKey is the per-attach Durable Object routing key (att-<hex uuid>),
 	// derived once at init from the unwrapped attach UUID and carried through
 	// serialization so a rehydrated process/finalize turn routes storage to the
