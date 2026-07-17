@@ -5,6 +5,7 @@ package vgi
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"strconv"
 
@@ -20,6 +21,11 @@ import (
 const (
 	metaBatchIndex      = "vgi_batch_index"
 	metaPartitionValues = "vgi_partition_values#b64"
+	// metaParentRow carries per-output-row provenance for the batched
+	// correlated LATERAL operator: a base64-encoded raw little-endian int32[]
+	// (NOT Arrow IPC) with one input-row index per emitted output row. Mirrors
+	// vgi-python's vgi_rpc.parent_row#b64 carrier.
+	metaParentRow = "vgi_rpc.parent_row#b64"
 	// partitionColumnKey marks a schema field as a partition column.
 	partitionColumnKey = "vgi.partition_column"
 )
@@ -105,6 +111,48 @@ func Emit(out *vgirpc.OutputCollector, batch arrow.RecordBatch, opts ...EmitOpti
 func EmitBatchIndex(out *vgirpc.OutputCollector, batch arrow.RecordBatch, batchIndex int64, opts ...EmitOption) error {
 	md, err := applyEmitOptions(map[string]string{
 		metaBatchIndex: strconv.FormatInt(batchIndex, 10),
+	}, opts)
+	if err != nil {
+		return err
+	}
+	return out.EmitWithMetadata(batch, md)
+}
+
+// EmitParentRows emits a batch declaring, per output row, which input row
+// produced it — the provenance map for the **batched correlated LATERAL**
+// operator (a blended function under FROM t, f(t.x) / LATERAL f(t.x)): the C++
+// extension ships a whole input chunk to the worker in ONE exchange and reads
+// ONE output batch, then maps each output row back to the input row that
+// produced it via this array — so a 1->N fan-out or 1->0 filter can be batched
+// instead of driven row-by-row.
+//
+// parentRows[i] is the 0-based index (into the input batch) of the row that
+// produced output row i. Encoded as a raw little-endian int32 array (NOT Arrow
+// IPC), base64-encoded, under vgi_rpc.parent_row#b64 — the C++ side
+// reinterprets the bytes directly. Absent metadata means an identity 1->1 map
+// (the common case: the extension assumes it, and requires output rows ==
+// input rows).
+//
+// Contract: len(parentRows) MUST equal batch.NumRows() (a mismatch is a worker
+// bug that would corrupt the stamping). Values are range-checked against the
+// input width on the C++ side (which knows it authoritatively). Mirrors
+// vgi-python's out.emit(..., parent_rows=...).
+func EmitParentRows(out *vgirpc.OutputCollector, batch arrow.RecordBatch, parentRows []int32, opts ...EmitOption) error {
+	if int64(len(parentRows)) != batch.NumRows() {
+		return fmt.Errorf(
+			"EmitParentRows length %d != batch.NumRows %d; parentRows must carry exactly one input-row index per emitted output row",
+			len(parentRows), batch.NumRows())
+	}
+	if batch.NumRows() == 0 {
+		// Nothing to map; skip the base64+pack for an empty emit.
+		return Emit(out, batch, opts...)
+	}
+	raw := make([]byte, 4*len(parentRows))
+	for i, v := range parentRows {
+		binary.LittleEndian.PutUint32(raw[i*4:], uint32(v))
+	}
+	md, err := applyEmitOptions(map[string]string{
+		metaParentRow: base64.StdEncoding.EncodeToString(raw),
 	}, opts)
 	if err != nil {
 		return err

@@ -238,6 +238,13 @@ func registerTableInOuts(w *vgi.Worker) {
 	w.RegisterTableInOut(table_in_out.NewGeoEncode3Function())
 	w.RegisterTableInOut(table_in_out.NewRowSumFunction())
 	w.RegisterTableInOut(table_in_out.NewBlendedDropFunction())
+	// Batched correlated-LATERAL fixtures (table_in_out/lateral_batch.test):
+	// blended_explode carries per-output-row vgi_rpc.parent_row provenance,
+	// projectable_blended exercises the projection fallback, and
+	// hostile_provenance emits malformed provenance the extension must reject.
+	w.RegisterTableInOut(table_in_out.NewBlendedExplodeFunction())
+	w.RegisterTableInOut(table_in_out.NewProjectableBlendedFunction())
+	w.RegisterTableInOut(table_in_out.NewHostileProvenanceFunction())
 	w.RegisterTableInOut(table_in_out.NewExceptionFinalizeFunction())
 	w.RegisterTableInOut(table_in_out.NewExceptionProcessFunction())
 	w.RegisterTableInOut(table_in_out.NewFilterBySettingFunction())
