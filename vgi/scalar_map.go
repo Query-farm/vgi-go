@@ -42,11 +42,18 @@ func MapColumn[T any, B ArrayBuilder[T]](
 	defer builder.Release()
 	builder.Reserve(n)
 
-	for i := 0; i < n; i++ {
-		if col.IsNull(i) {
-			builder.AppendNull()
-		} else {
+	if col.NullN() == 0 {
+		// No nulls in this batch: skip the per-row null probe entirely.
+		for i := 0; i < n; i++ {
 			builder.Append(transform(col, i))
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			if col.IsNull(i) {
+				builder.AppendNull()
+			} else {
+				builder.Append(transform(col, i))
+			}
 		}
 	}
 
@@ -105,18 +112,34 @@ func MapColumns[T any, B ArrayBuilder[T]](
 	defer builder.Release()
 	builder.Reserve(n)
 
-	for i := 0; i < n; i++ {
-		isNull := false
-		for _, c := range cols {
-			if c.IsNull(i) {
-				isNull = true
-				break
-			}
+	anyNullable := false
+	for _, c := range cols {
+		if c.NullN() > 0 {
+			anyNullable = true
+			break
 		}
-		if isNull {
-			builder.AppendNull()
-		} else {
+	}
+
+	if !anyNullable {
+		// No column carries a null in this batch: skip the per-row, per-column
+		// null probe entirely.
+		for i := 0; i < n; i++ {
 			builder.Append(transform(cols, i))
+		}
+	} else {
+		for i := 0; i < n; i++ {
+			isNull := false
+			for _, c := range cols {
+				if c.IsNull(i) {
+					isNull = true
+					break
+				}
+			}
+			if isNull {
+				builder.AppendNull()
+			} else {
+				builder.Append(transform(cols, i))
+			}
 		}
 	}
 

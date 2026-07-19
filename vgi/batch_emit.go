@@ -13,7 +13,6 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // Per-batch output annotation metadata keys. These mirror vgi-python and are
@@ -74,6 +73,11 @@ func WithMetadata(key, value string) EmitOption {
 // applyEmitOptions folds opts into a fresh metadata map, seeded with base.
 // Returns nil when nothing was contributed, so the caller can emit unannotated.
 func applyEmitOptions(base map[string]string, opts []EmitOption) (map[string]string, error) {
+	if len(base) == 0 && len(opts) == 0 {
+		// Common case (plain Emit with no options): nothing to fold, so skip the
+		// throwaway map allocation entirely.
+		return nil, nil
+	}
 	md := make(map[string]string, len(base)+len(opts))
 	for k, v := range base {
 		md[k] = v
@@ -186,7 +190,7 @@ func EmitPartitioned(out *vgirpc.OutputCollector, batch arrow.RecordBatch, parti
 		return Emit(out, batch, opts...)
 	}
 
-	mem := memory.NewGoAllocator()
+	mem := defaultAllocator
 	builders := make([]array.Builder, len(partitionFields))
 	releaseBuilders := func() {
 		for _, b := range builders {
@@ -207,14 +211,14 @@ func EmitPartitioned(out *vgirpc.OutputCollector, batch arrow.RecordBatch, parti
 				releaseBuilders()
 				return fmt.Errorf("partition column %q is partition-annotated but absent from emitted batch; pass partition_values", f.Name)
 			}
-			mn, mx, distinct, err := columnMinMax(batch.Column(idx[0]))
+			mn, mx, moreThanOne, err := columnMinMax(batch.Column(idx[0]))
 			if err != nil {
 				releaseBuilders()
 				return fmt.Errorf("partition column %q: %w", f.Name, err)
 			}
-			if kind == PartitionKindSingleValuePartitions && distinct > 1 {
+			if kind == PartitionKindSingleValuePartitions && moreThanOne {
 				releaseBuilders()
-				return fmt.Errorf("SINGLE_VALUE_PARTITIONS function emitted a chunk with %d distinct values in partition column %q (expected exactly 1)", distinct, f.Name)
+				return fmt.Errorf("SINGLE_VALUE_PARTITIONS function emitted a chunk with more than one distinct value in partition column %q (expected exactly 1)", f.Name)
 			}
 			minV, maxV = mn, mx
 		}
@@ -252,11 +256,13 @@ func EmitPartitioned(out *vgirpc.OutputCollector, batch arrow.RecordBatch, parti
 	return out.EmitWithMetadata(batch, md)
 }
 
-// columnMinMax returns the min, max, and distinct-value count of a non-null
-// Arrow column. Supports the scalar types used by partition columns.
-func columnMinMax(col arrow.Array) (min, max any, distinct int, err error) {
+// columnMinMax returns the min and max of a non-null Arrow column, plus whether
+// the column carries more than one distinct value. Supports the scalar types
+// used by partition columns. moreThanOne is exactly (min != max) over the
+// non-null values, so no per-row set is needed to detect a SINGLE_VALUE
+// violation.
+func columnMinMax(col arrow.Array) (min, max any, moreThanOne bool, err error) {
 	n := col.Len()
-	seen := map[any]struct{}{}
 	switch c := col.(type) {
 	case *array.Int64:
 		var lo, hi int64
@@ -266,7 +272,6 @@ func columnMinMax(col arrow.Array) (min, max any, distinct int, err error) {
 				continue
 			}
 			v := c.Value(i)
-			seen[v] = struct{}{}
 			if first || v < lo {
 				lo = v
 			}
@@ -275,7 +280,7 @@ func columnMinMax(col arrow.Array) (min, max any, distinct int, err error) {
 			}
 			first = false
 		}
-		min, max = lo, hi
+		min, max, moreThanOne = lo, hi, lo != hi
 	case *array.Int32:
 		var lo, hi int32
 		first := true
@@ -284,7 +289,6 @@ func columnMinMax(col arrow.Array) (min, max any, distinct int, err error) {
 				continue
 			}
 			v := c.Value(i)
-			seen[v] = struct{}{}
 			if first || v < lo {
 				lo = v
 			}
@@ -293,7 +297,7 @@ func columnMinMax(col arrow.Array) (min, max any, distinct int, err error) {
 			}
 			first = false
 		}
-		min, max = lo, hi
+		min, max, moreThanOne = lo, hi, lo != hi
 	case *array.Float64:
 		var lo, hi float64
 		first := true
@@ -302,7 +306,6 @@ func columnMinMax(col arrow.Array) (min, max any, distinct int, err error) {
 				continue
 			}
 			v := c.Value(i)
-			seen[v] = struct{}{}
 			if first || v < lo {
 				lo = v
 			}
@@ -311,7 +314,7 @@ func columnMinMax(col arrow.Array) (min, max any, distinct int, err error) {
 			}
 			first = false
 		}
-		min, max = lo, hi
+		min, max, moreThanOne = lo, hi, lo != hi
 	case *array.String:
 		var lo, hi string
 		first := true
@@ -320,7 +323,6 @@ func columnMinMax(col arrow.Array) (min, max any, distinct int, err error) {
 				continue
 			}
 			v := c.Value(i)
-			seen[v] = struct{}{}
 			if first || v < lo {
 				lo = v
 			}
@@ -329,9 +331,9 @@ func columnMinMax(col arrow.Array) (min, max any, distinct int, err error) {
 			}
 			first = false
 		}
-		min, max = lo, hi
+		min, max, moreThanOne = lo, hi, lo != hi
 	default:
-		return nil, nil, 0, fmt.Errorf("unsupported partition column type %T", col)
+		return nil, nil, false, fmt.Errorf("unsupported partition column type %T", col)
 	}
-	return min, max, len(seen), nil
+	return min, max, moreThanOne, nil
 }

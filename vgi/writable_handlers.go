@@ -452,6 +452,7 @@ func buildColumnFromValues(mem memory.Allocator, f arrow.Field, rows []map[strin
 	case arrow.INT64:
 		b := array.NewInt64Builder(mem)
 		defer b.Release()
+		b.Reserve(len(rows))
 		for _, r := range rows {
 			v, ok := r[f.Name]
 			if !ok || v == nil {
@@ -464,6 +465,7 @@ func buildColumnFromValues(mem memory.Allocator, f arrow.Field, rows []map[strin
 	case arrow.INT32:
 		b := array.NewInt32Builder(mem)
 		defer b.Release()
+		b.Reserve(len(rows))
 		for _, r := range rows {
 			v, ok := r[f.Name]
 			if !ok || v == nil {
@@ -476,6 +478,7 @@ func buildColumnFromValues(mem memory.Allocator, f arrow.Field, rows []map[strin
 	case arrow.FLOAT64:
 		b := array.NewFloat64Builder(mem)
 		defer b.Release()
+		b.Reserve(len(rows))
 		for _, r := range rows {
 			v, ok := r[f.Name]
 			if !ok || v == nil {
@@ -488,6 +491,7 @@ func buildColumnFromValues(mem memory.Allocator, f arrow.Field, rows []map[strin
 	case arrow.STRING:
 		b := array.NewStringBuilder(mem)
 		defer b.Release()
+		b.Reserve(len(rows))
 		for _, r := range rows {
 			v, ok := r[f.Name]
 			if !ok || v == nil {
@@ -500,6 +504,7 @@ func buildColumnFromValues(mem memory.Allocator, f arrow.Field, rows []map[strin
 	case arrow.BOOL:
 		b := array.NewBooleanBuilder(mem)
 		defer b.Release()
+		b.Reserve(len(rows))
 		for _, r := range rows {
 			v, ok := r[f.Name]
 			if !ok || v == nil {
@@ -512,6 +517,7 @@ func buildColumnFromValues(mem memory.Allocator, f arrow.Field, rows []map[strin
 	case arrow.BINARY:
 		b := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
 		defer b.Release()
+		b.Reserve(len(rows))
 		for _, r := range rows {
 			v, ok := r[f.Name]
 			if !ok || v == nil {
@@ -581,47 +587,60 @@ func batchToRows(batch arrow.RecordBatch) ([]map[string]interface{}, error) {
 	n := int(batch.NumRows())
 	out := make([]map[string]interface{}, n)
 	schema := batch.Schema()
+	ncols := int(batch.NumCols())
 	for i := 0; i < n; i++ {
-		out[i] = map[string]interface{}{}
+		out[i] = make(map[string]interface{}, ncols)
 	}
-	for c := 0; c < int(batch.NumCols()); c++ {
+	for c := 0; c < ncols; c++ {
 		name := schema.Field(c).Name
 		col := batch.Column(c)
+		valueAt := arrowValueAccessor(col) // resolve the type switch once per column
 		for i := 0; i < n; i++ {
 			if col.IsNull(i) {
 				out[i][name] = nil
 				continue
 			}
-			out[i][name] = arrowValueAt(col, i)
+			out[i][name] = valueAt(i)
 		}
 	}
 	return out, nil
 }
 
+// arrowValueAt extracts one cell as a Go scalar. For per-cell loops over a
+// whole column, resolve arrowValueAccessor once instead (this convenience form
+// re-runs the type switch on every call).
 func arrowValueAt(col arrow.Array, i int) interface{} {
+	return arrowValueAccessor(col)(i)
+}
+
+// arrowValueAccessor resolves the concrete column type once and returns a
+// per-row extractor, hoisting the type switch out of per-row loops. Unsupported
+// types yield an accessor that returns nil (mirrors arrowValueAt's default).
+func arrowValueAccessor(col arrow.Array) func(i int) interface{} {
 	switch a := col.(type) {
 	case *array.Int64:
-		return a.Value(i)
+		return func(i int) interface{} { return a.Value(i) }
 	case *array.Int32:
-		return int64(a.Value(i))
+		return func(i int) interface{} { return int64(a.Value(i)) }
 	case *array.Int16:
-		return int64(a.Value(i))
+		return func(i int) interface{} { return int64(a.Value(i)) }
 	case *array.Int8:
-		return int64(a.Value(i))
+		return func(i int) interface{} { return int64(a.Value(i)) }
 	case *array.Uint64:
-		return int64(a.Value(i))
+		return func(i int) interface{} { return int64(a.Value(i)) }
 	case *array.Uint32:
-		return int64(a.Value(i))
+		return func(i int) interface{} { return int64(a.Value(i)) }
 	case *array.Float64:
-		return a.Value(i)
+		return func(i int) interface{} { return a.Value(i) }
 	case *array.Float32:
-		return float64(a.Value(i))
+		return func(i int) interface{} { return float64(a.Value(i)) }
 	case *array.String:
-		return a.Value(i)
+		return func(i int) interface{} { return a.Value(i) }
 	case *array.Boolean:
-		return a.Value(i)
+		return func(i int) interface{} { return a.Value(i) }
 	case *array.Binary:
-		return append([]byte{}, a.Value(i)...)
+		return func(i int) interface{} { return append([]byte{}, a.Value(i)...) }
+	default:
+		return func(int) interface{} { return nil }
 	}
-	return nil
 }

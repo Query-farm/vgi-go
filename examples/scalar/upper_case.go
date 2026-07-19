@@ -35,8 +35,9 @@ func (f *UpperCaseFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, e
 }
 
 func (f *UpperCaseFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+	get := vgi.StringAccessor(batch.Column(0)) // hoist the type switch out of the row loop
 	return vgi.MapColumn(params, batch, 0, array.NewStringBuilder,
-		func(col arrow.Array, i int) string {
-			return strings.ToUpper(vgi.GetStringValue(col, i))
+		func(_ arrow.Array, i int) string {
+			return strings.ToUpper(get(i))
 		})
 }

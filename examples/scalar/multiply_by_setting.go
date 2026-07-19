@@ -53,8 +53,9 @@ func (f *MultiplyBySettingFunction) Process(ctx context.Context, params *vgi.Pro
 		}
 	}
 
+	get := vgi.Int64Accessor(batch.Column(0)) // hoist the type switch out of the row loop
 	return vgi.MapColumn(params, batch, 0, array.NewInt64Builder,
-		func(col arrow.Array, i int) int64 {
-			return vgi.GetInt64Value(col, i) * multiplier
+		func(_ arrow.Array, i int) int64 {
+			return get(i) * multiplier
 		})
 }

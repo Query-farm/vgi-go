@@ -179,6 +179,27 @@ type writableMutateState struct {
 	SchemaName string
 	TableName  string
 	Count      int64
+
+	// catalog memoizes the resolved writable catalog for the life of the
+	// mutation (one DML statement). findWritableTable does a locked SQLite
+	// QueryRow + schema-IPC deserialize + gob decode; without this cache every
+	// input batch would repeat it. Unexported so gob ignores it on the HTTP
+	// continuation round-trip (it re-resolves after rehydration).
+	catalog *WritableCatalog
+}
+
+// resolveCatalog returns the writable catalog owning this mutation's table,
+// resolving it once and caching it on the state.
+func (st *writableMutateState) resolveCatalog(w *Worker) (*WritableCatalog, error) {
+	if st.catalog != nil {
+		return st.catalog, nil
+	}
+	c, _, err := w.findWritableTable(st.SchemaName, st.TableName)
+	if err != nil {
+		return nil, err
+	}
+	st.catalog = c
+	return c, nil
 }
 
 func writableArgs(args *Arguments) (string, string) {
@@ -239,7 +260,7 @@ func (f *writableInsertFn) NewState(p *ProcessParams) (interface{}, error) {
 // row count.
 func (f *writableInsertFn) Process(ctx context.Context, p *ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	st := state.(*writableMutateState)
-	c, _, err := f.w.findWritableTable(st.SchemaName, st.TableName)
+	c, err := st.resolveCatalog(f.w)
 	if err != nil {
 		return err
 	}
@@ -298,7 +319,7 @@ func (f *writableUpdateFn) NewState(p *ProcessParams) (interface{}, error) {
 // updated row count.
 func (f *writableUpdateFn) Process(ctx context.Context, p *ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	st := state.(*writableMutateState)
-	c, _, err := f.w.findWritableTable(st.SchemaName, st.TableName)
+	c, err := st.resolveCatalog(f.w)
 	if err != nil {
 		return err
 	}
@@ -358,7 +379,7 @@ func (f *writableDeleteFn) NewState(p *ProcessParams) (interface{}, error) {
 // batch and emits the deleted row count.
 func (f *writableDeleteFn) Process(ctx context.Context, p *ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	st := state.(*writableMutateState)
-	c, _, err := f.w.findWritableTable(st.SchemaName, st.TableName)
+	c, err := st.resolveCatalog(f.w)
 	if err != nil {
 		return err
 	}

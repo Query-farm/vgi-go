@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
@@ -71,9 +72,30 @@ func (w *Worker) registerTableBufferingRPCs(s *vgirpc.Server) {
 		s, "table_buffering_destructor", w.handleTableBufferingDestructor)
 }
 
-// loadBufferingParams cold-loads the InitRecipe persisted at sink init and
-// rebuilds the (function, ProcessParams) pair for a process/combine RPC.
+// bufferingParamsEntry caches the decoded (function, ProcessParams template)
+// for one buffering execution. The InitRecipe is written once at sink init and
+// never changes, so the decode + rebuild is invariant across the execution's
+// process/combine RPCs. Each call gets a shallow copy of params so the per-call
+// fields (Auth/AttachScope/clientLog/BatchIndex) never race; the shared maps and
+// Storage are read-only during Process.
+type bufferingParamsEntry struct {
+	fn     TableBufferingFunction
+	params ProcessParams // template — copied per call
+}
+
+// loadBufferingParams returns the (function, ProcessParams) pair for a
+// process/combine RPC. It caches the decoded template per execution_id so only
+// the first call pays the storage scan + gob decode + schema/arg re-parse; every
+// later batch of the same execution gets a cheap shallow copy. The cache is
+// evicted by the destructor RPC (end-of-query cleanup).
 func (w *Worker) loadBufferingParams(executionID []byte, shardKey string) (TableBufferingFunction, *ProcessParams, error) {
+	key := hex.EncodeToString(executionID)
+	if v, ok := w.bufferingParams.Load(key); ok {
+		e := v.(*bufferingParamsEntry)
+		p := e.params // shallow copy; caller mutates only its own scalar fields
+		return e.fn, &p, nil
+	}
+
 	storage, err := w.getOrCreateStorage(context.Background(), executionID, shardKey)
 	if err != nil {
 		return nil, nil, err
@@ -97,7 +119,9 @@ func (w *Worker) loadBufferingParams(executionID []byte, shardKey string) (Table
 	if !ok {
 		return nil, nil, fmt.Errorf("table-buffering: function %q is not a TableBufferingFunction", recipe.FunctionName)
 	}
-	return bf, params, nil
+	w.bufferingParams.Store(key, &bufferingParamsEntry{fn: bf, params: *params})
+	p := *params // return a copy distinct from the cached template
+	return bf, &p, nil
 }
 
 func (w *Worker) handleTableBufferingProcess(ctx context.Context, cc *vgirpc.CallContext, req TableBufferingProcessRequestWire) (TableBufferingProcessResponseWire, error) {
@@ -149,6 +173,7 @@ func (w *Worker) handleTableBufferingCombine(ctx context.Context, cc *vgirpc.Cal
 func (w *Worker) handleTableBufferingDestructor(ctx context.Context, cc *vgirpc.CallContext, req TableBufferingDestructorRequestWire) (TableBufferingDestructorResponseWire, error) {
 	// Best-effort cleanup: clear all execution-scoped state. Never errors.
 	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, cc)
+	w.bufferingParams.Delete(hex.EncodeToString(req.ExecutionID))
 	storage, err := w.getOrCreateStorage(ctx, req.ExecutionID, shardKey)
 	if err == nil {
 		_ = storage.StateLogClear()

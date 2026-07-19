@@ -323,6 +323,7 @@ type Worker struct {
 	// ATTACHes of the same alias are isolated). Keyed by catalog name.
 	catalogAliasInfos             map[string]CatalogInfo
 	storages                      sync.Map // map[hex execution ID string]*ExecutionStorage
+	bufferingParams               sync.Map // map[hex execution ID string]*bufferingParamsEntry
 	fsOnce                        sync.Once
 	fs                            FunctionStorage
 	fsErr                         error

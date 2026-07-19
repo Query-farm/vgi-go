@@ -44,9 +44,10 @@ func (f *ScaleBySettingFunction) Process(ctx context.Context, params *vgi.Proces
 		}
 	}
 
+	get := vgi.Float64Accessor(batch.Column(0)) // hoist the type switch out of the row loop
 	return vgi.MapColumn(params, batch, 0, array.NewFloat64Builder,
-		func(col arrow.Array, i int) float64 {
-			return vgi.GetFloat64Value(col, i) * scale
+		func(_ arrow.Array, i int) float64 {
+			return get(i) * scale
 		})
 }
 

@@ -351,8 +351,12 @@ func (s *writableStore) rowsAppend(catalog, schemaName, tableName string, rows [
 		return 0, err
 	}
 	defer stmt.Close()
+	// One buffer reused across rows: Exec copies the blob synchronously before
+	// the next iteration, and a fresh gob.Encoder per row keeps each blob
+	// independently decodable (rowsScan decodes each with its own decoder).
+	var buf bytes.Buffer
 	for i, r := range rows {
-		var buf bytes.Buffer
+		buf.Reset()
 		if err := gob.NewEncoder(&buf).Encode(r); err != nil {
 			tx.Rollback()
 			return 0, err
@@ -438,6 +442,7 @@ func (s *writableStore) rowsUpdate(catalog, schemaName, tableName string, update
 	}
 	defer saveStmt.Close()
 	count := int64(0)
+	var buf bytes.Buffer // reused across rows; see rowsAppend for why this is safe
 	for _, u := range updates {
 		ridV, ok := u[rowIDFieldName]
 		if !ok {
@@ -467,7 +472,7 @@ func (s *writableStore) rowsUpdate(catalog, schemaName, tableName string, update
 			}
 			existing[k] = v
 		}
-		var buf bytes.Buffer
+		buf.Reset()
 		if err := gob.NewEncoder(&buf).Encode(existing); err != nil {
 			tx.Rollback()
 			return 0, err

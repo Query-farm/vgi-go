@@ -85,6 +85,7 @@ func NumericDispatch(
 		decType := outputType.(*arrow.Decimal128Type)
 		decBuilder := array.NewDecimal128Builder(mem, decType)
 		defer decBuilder.Release()
+		decBuilder.Reserve(n)
 
 		// Detect the "double" pattern: one input column whose type matches the
 		// output exactly modulo the +1 precision bump we applied. In that case
@@ -156,6 +157,7 @@ func numericBuild[T any, B ArrayBuilder[T]](
 	transform func([]arrow.Array, int) T,
 ) arrow.Array {
 	defer builder.Release()
+	builder.Reserve(n)
 	for i := 0; i < n; i++ {
 		if anyNull(i) {
 			builder.AppendNull()

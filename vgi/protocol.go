@@ -196,6 +196,13 @@ type ScalarExchangeState struct {
 	Recipe InitRecipe     // exported, serialized
 	fn     ScalarFunction // transient
 	params *ProcessParams // transient
+
+	// cacheMetaResolved memoizes the result-cache annotation for this stream.
+	// Metadata()/CacheControl.Metadata() are invariant across batches, so we
+	// resolve them once on the first Exchange and reuse the map (nil for a
+	// non-cacheable scalar). Transient: recomputed after rehydration.
+	cacheMetaResolved bool              // transient
+	cacheMeta         map[string]string // transient
 }
 
 // Exchange processes one input batch through the scalar function and emits the
@@ -209,12 +216,19 @@ func (s *ScalarExchangeState) Exchange(ctx context.Context, input arrow.RecordBa
 	// Result-cache opt-in: a scalar declaring Metadata().CacheControl rides its
 	// vgi.cache.* keys on the emit path's per-batch custom metadata (NOT the
 	// fixed IPC schema), so the extension can memoize the output per distinct
-	// input value. Non-cacheable scalars emit unannotated (unchanged).
-	if cc := s.fn.Metadata().CacheControl; cc != nil {
-		if err := cc.Validate(); err != nil {
-			return err
+	// input value. Non-cacheable scalars emit unannotated (unchanged). The
+	// annotation is invariant across batches, so resolve it once per stream.
+	if !s.cacheMetaResolved {
+		if cc := s.fn.Metadata().CacheControl; cc != nil {
+			if err := cc.Validate(); err != nil {
+				return err
+			}
+			s.cacheMeta = cc.Metadata()
 		}
-		return out.EmitWithMetadata(result, cc.Metadata())
+		s.cacheMetaResolved = true
+	}
+	if s.cacheMeta != nil {
+		return out.EmitWithMetadata(result, s.cacheMeta)
 	}
 	return out.Emit(result)
 }
