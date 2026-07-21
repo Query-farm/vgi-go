@@ -94,6 +94,10 @@ func registerScalars(w *vgi.Worker) {
 	w.RegisterScalar(scalar.NewSumValues())
 	w.RegisterScalar(&scalar.UnnestTensorFunction{})
 	w.RegisterScalar(&scalar.UpperCaseFunction{})
+	w.RegisterScalar(&scalar.PassthruFunction{})
+	w.RegisterScalar(&scalar.CollatzStepsFunction{})
+	w.RegisterScalar(&scalar.Sha256HexFunction{})
+	w.RegisterScalar(scalar.NewHashRounds())
 	w.RegisterScalar(&scalar.WhoAmIFunction{})
 }
 
