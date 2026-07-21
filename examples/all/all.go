@@ -173,6 +173,10 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewCacheTypesFunction())
 	w.RegisterTable(table.NewCacheFilteredFunction())
 	w.RegisterTable(table.NewCachePartitionedFunction())
+	w.RegisterTable(table.NewCachePartitionScopeFunction())
+	w.RegisterTable(table.NewCachePartitionParallelFunction())
+	w.RegisterTable(table.NewCachePartitionMultiColFunction())
+	w.RegisterTable(table.NewCachePartitionProjFunction())
 	// Scope projection-pushdown reproducer functions to the
 	// ``projection_repro`` catalog only — they're invisible to the
 	// ``example`` catalog's function listing (function_registration.test

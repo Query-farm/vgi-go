@@ -44,6 +44,7 @@ const (
 	CacheNotModifiedKey          = "vgi.cache.not_modified"
 	CacheIfNoneMatchKey          = "vgi.cache.if_none_match"
 	CacheIfModifiedSinceKey      = "vgi.cache.if_modified_since"
+	CachePartitionScopeKey       = "vgi.cache.partition_scope"
 )
 
 // Reuse-scope values for CacheControl.Scope.
@@ -94,6 +95,13 @@ type CacheControl struct {
 	// a conditional request to assert the client's stored payload is still
 	// fresh (the client reuses it instead of re-streaming).
 	NotModified bool
+	// PartitionScope opts in to per-PARTITION caching. Only meaningful for a
+	// SINGLE_VALUE_PARTITIONS table function: the client ADDITIONALLY stores
+	// the result split by partition value (one entry per distinct partition
+	// tuple), so a later =/IN-filtered scan on the partition column(s) serves
+	// the requested partitions from cache without calling the worker. The
+	// whole-scan entry is still stored, so this is purely additive.
+	PartitionScope bool
 }
 
 // Seconds returns a pointer to n, for the duration fields of CacheControl.
@@ -155,6 +163,9 @@ func (c *CacheControl) Metadata() map[string]string {
 	}
 	if c.NotModified {
 		md[CacheNotModifiedKey] = "1"
+	}
+	if c.PartitionScope {
+		md[CachePartitionScopeKey] = "1"
 	}
 	return md
 }
