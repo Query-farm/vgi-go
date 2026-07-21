@@ -42,7 +42,7 @@ func (*PassthruFunction) Process(_ context.Context, params *vgi.ProcessParams, b
 		func(_ arrow.Array, i int) string { return get(i) })
 }
 
-// CollatzStepsFunction: number of Collatz (3n+1) steps for each integer.
+// CollatzStepsFunction returns the number of Collatz (3n+1) steps for each integer.
 type CollatzStepsFunction struct{}
 
 func (*CollatzStepsFunction) Name() string { return "collatz_steps" }
@@ -80,7 +80,7 @@ func (*CollatzStepsFunction) Process(_ context.Context, params *vgi.ProcessParam
 		})
 }
 
-// Sha256HexFunction: lowercase hex SHA-256 of each UTF-8 string.
+// Sha256HexFunction returns the lowercase hex SHA-256 of each UTF-8 string.
 type Sha256HexFunction struct{}
 
 func (*Sha256HexFunction) Name() string { return "sha256_hex" }
@@ -106,7 +106,7 @@ func (*Sha256HexFunction) Process(_ context.Context, params *vgi.ProcessParams, 
 		})
 }
 
-// HashRoundsFunction: apply SHA-256 `rounds` times (const compute knob).
+// HashRoundsFunction applies SHA-256 `rounds` times (a const compute knob).
 type HashRoundsFunction struct{}
 
 type hashRoundsArgs struct {
