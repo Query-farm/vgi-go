@@ -72,6 +72,13 @@ func contentEtag(batch arrow.RecordBatch) string {
 // FROM t, cached_double(t.x) and the correlated form LATERAL cached_double(t.x)
 // (routed through the batched LATERAL operator's per-chunk memoization).
 // Advertises a ttl on every output batch (the C++ side latches the first).
+//
+// It also advertises vgi.cache.per_value so the per-VALUE memo tier is exercised
+// by the per_value_* tests. That is a TEST choice asking for behaviour this
+// function would not want in production: x*2 is far too cheap to memoize per
+// value (a per-value serve runs ~50x the cost of a worker call for a map this
+// trivial). The fixture opts in so the tier has coverage, not because the
+// economics work here.
 type CachedDoubleFunction struct{}
 
 var _ vgi.TypedTableInOutFunc[struct{}] = (*CachedDoubleFunction)(nil)
@@ -80,7 +87,7 @@ func (f *CachedDoubleFunction) Name() string { return "cached_double" }
 
 func (f *CachedDoubleFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description:   "Cacheable blended map x -> x*2 (advertises vgi.cache.ttl)",
+		Description:   "Cacheable blended map x -> x*2 (advertises vgi.cache.ttl + per_value)",
 		Stability:     vgi.StabilityConsistent,
 		Categories:    []string{"blended", "cache", "test"},
 		InputFromArgs: true,
@@ -107,7 +114,7 @@ func (f *CachedDoubleFunction) NewState(params *vgi.ProcessParams) (*struct{}, e
 
 func (f *CachedDoubleFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *struct{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	result := doubledBatch(batch)
-	return vgi.Emit(out, result, vgi.WithCacheControl(&vgi.CacheControl{Ttl: vgi.Seconds(300)}))
+	return vgi.Emit(out, result, vgi.WithCacheControl(&vgi.CacheControl{Ttl: vgi.Seconds(300), PerValue: true}))
 }
 
 func (f *CachedDoubleFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *struct{}) ([]arrow.RecordBatch, error) {

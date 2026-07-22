@@ -45,6 +45,7 @@ const (
 	CacheIfNoneMatchKey          = "vgi.cache.if_none_match"
 	CacheIfModifiedSinceKey      = "vgi.cache.if_modified_since"
 	CachePartitionScopeKey       = "vgi.cache.partition_scope"
+	CachePerValueKey             = "vgi.cache.per_value"
 )
 
 // Reuse-scope values for CacheControl.Scope.
@@ -102,6 +103,27 @@ type CacheControl struct {
 	// the requested partitions from cache without calling the worker. The
 	// whole-scan entry is still stored, so this is purely additive.
 	PartitionScope bool
+	// PerValue opts in to per-VALUE memoization. Only meaningful for an
+	// exchange-mode MAP — a scalar, or a blended table-in-out called through a
+	// correlated LATERAL: the client ADDITIONALLY memoizes each distinct input
+	// tuple's output keyed on that tuple, so the same value is served without
+	// calling the worker on a later chunk or a later query.
+	//
+	// It defaults to false, and that default is deliberate — leave it off
+	// unless one call to this function is genuinely expensive. A per-value
+	// serve is not free: the client pays a key probe, a decode and a result
+	// assembly step for every distinct value, and that only pays back when it
+	// costs LESS than the worker call it replaces. For a cheap map (arithmetic,
+	// a string tweak) it is a large net loss — roughly 50x slower than simply
+	// calling the worker. Only the function author knows which side of that
+	// line a call falls on, which is why this is an explicit advertisement
+	// rather than something the engine infers.
+	//
+	// Turn it on when a single call is heavy and repeats across rows: a model
+	// inference, a geocode, a rate-limited HTTP fetch, an expensive parse.
+	// Independent of the freshness keys — a result can be whole-result
+	// cacheable (Ttl/Expires) without per-value memoization paying off.
+	PerValue bool
 }
 
 // Seconds returns a pointer to n, for the duration fields of CacheControl.
@@ -166,6 +188,9 @@ func (c *CacheControl) Metadata() map[string]string {
 	}
 	if c.PartitionScope {
 		md[CachePartitionScopeKey] = "1"
+	}
+	if c.PerValue {
+		md[CachePerValueKey] = "1"
 	}
 	return md
 }

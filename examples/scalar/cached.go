@@ -5,6 +5,12 @@
 // cache/per_value_*.test). Each declares FunctionMetadata.CacheControl, which
 // the framework rides as vgi.cache.* keys on every output batch's custom
 // metadata so the extension can memoize the output per distinct input value.
+//
+// Per-value memoization is an explicit opt-in (vgi.cache.per_value), and these
+// fixtures set it as a TEST choice, not as production advice: the maps here are
+// far too cheap to memoize per value — the probe plus decode costs more than the
+// call it replaces. They opt in so the tier has coverage.
+//
 // Pure, deterministic scalars only. Mirrors vgi-python's
 // CachedDoubleScalarFunction / CachedAddConstScalarFunction /
 // CachedLabelScalarFunction.
@@ -47,10 +53,10 @@ func (f *CachedDoubleScalarFunction) Name() string { return "cached_double_scala
 
 func (f *CachedDoubleScalarFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description:  "Doubles a BIGINT value (advertises vgi.cache.ttl for per-value memo)",
+		Description:  "Doubles a BIGINT value (advertises vgi.cache.ttl + per_value for per-value memo)",
 		Stability:    vgi.StabilityConsistent,
 		ReturnType:   arrow.PrimitiveTypes.Int64,
-		CacheControl: &vgi.CacheControl{Ttl: vgi.Seconds(300)},
+		CacheControl: &vgi.CacheControl{Ttl: vgi.Seconds(300), PerValue: true},
 	}
 }
 
@@ -98,10 +104,10 @@ func (f *CachedAddConstScalarFunction) Name() string { return "cached_add_const"
 
 func (f *CachedAddConstScalarFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description:  "value + const addend (advertises vgi.cache.ttl)",
+		Description:  "value + const addend (advertises vgi.cache.ttl + per_value)",
 		Stability:    vgi.StabilityConsistent,
 		ReturnType:   arrow.PrimitiveTypes.Int64,
-		CacheControl: &vgi.CacheControl{Ttl: vgi.Seconds(300)},
+		CacheControl: &vgi.CacheControl{Ttl: vgi.Seconds(300), PerValue: true},
 	}
 }
 
@@ -155,11 +161,11 @@ func (f *CachedLabelScalarFunction) Name() string { return "cached_label" }
 
 func (f *CachedLabelScalarFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description:  "value -> 'lbl-<value>' or NULL for negatives (advertises vgi.cache.ttl)",
+		Description:  "value -> 'lbl-<value>' or NULL for negatives (advertises vgi.cache.ttl + per_value)",
 		Stability:    vgi.StabilityConsistent,
 		NullHandling: vgi.NullHandlingSpecial,
 		ReturnType:   arrow.BinaryTypes.String,
-		CacheControl: &vgi.CacheControl{Ttl: vgi.Seconds(300)},
+		CacheControl: &vgi.CacheControl{Ttl: vgi.Seconds(300), PerValue: true},
 	}
 }
 

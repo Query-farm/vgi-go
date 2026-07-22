@@ -215,8 +215,10 @@ func (s *ScalarExchangeState) Exchange(ctx context.Context, input arrow.RecordBa
 	}
 	// Result-cache opt-in: a scalar declaring Metadata().CacheControl rides its
 	// vgi.cache.* keys on the emit path's per-batch custom metadata (NOT the
-	// fixed IPC schema), so the extension can memoize the output per distinct
-	// input value. Non-cacheable scalars emit unannotated (unchanged). The
+	// fixed IPC schema). Memoizing the output per distinct input value is a
+	// further opt-in within those keys (CacheControl.PerValue ->
+	// vgi.cache.per_value); the extension's per-value tier is off without it.
+	// Non-cacheable scalars emit unannotated (unchanged). The
 	// annotation is invariant across batches, so resolve it once per stream.
 	if !s.cacheMetaResolved {
 		if cc := s.fn.Metadata().CacheControl; cc != nil {

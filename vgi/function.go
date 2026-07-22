@@ -294,9 +294,11 @@ type FunctionMetadata struct {
 	InputFromArgs bool
 	// CacheControl opts the function into the extension's result cache: when
 	// set, its vgi.cache.* metadata is attached by the framework to every
-	// output batch of a SCALAR function (per-value memoization on the C++
-	// side) and to every finalize batch of a TABLE-BUFFERING function (the
-	// exchange-mode buffered result cache). A pure, deterministic function
+	// output batch of a SCALAR function and to every finalize batch of a
+	// TABLE-BUFFERING function (the exchange-mode buffered result cache).
+	// Per-VALUE memoization of a scalar is a SEPARATE opt-in on top of this —
+	// set CacheControl.PerValue, and only when one call is more expensive than
+	// a cache probe plus a decode (see that field). A pure, deterministic function
 	// only — advertising this on a non-pure function serves stale rows.
 	// Streaming table(-in-out) functions attach cache control per-emit instead
 	// (vgi.WithCacheControl). Mirrors vgi-python's ScalarFunction.CACHE_CONTROL
