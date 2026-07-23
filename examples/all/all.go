@@ -170,6 +170,11 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewCacheVersionedFunction())
 	w.RegisterTable(table.NewCacheProjectionFunction())
 	w.RegisterTable(table.NewCachePoisonFunction())
+	// test_same_name_cached — one cacheable producer name homed in BOTH main and
+	// data, each tagging its row with its own schema; the result-cache member of
+	// the schema-disambiguation family (cache/same_name_schemas.test).
+	w.RegisterTable(table.NewSameNameCachedFunction("main"))
+	w.RegisterTableInSchema("data", table.NewSameNameCachedFunction("data"))
 	w.RegisterTable(table.NewCacheExternalFailFunction())
 	w.RegisterTable(table.NewCacheBenchFunction())
 	w.RegisterTable(table.NewCacheParallelFunction())
