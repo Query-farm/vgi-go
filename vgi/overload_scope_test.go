@@ -188,3 +188,75 @@ func withSchema(lk functionLookup, schema string) functionLookup {
 	lk.Schema = schema
 	return lk
 }
+
+// scopedAgg is a minimal aggregate whose Name() is supplied at construction, so
+// two instances can deliberately collide on one name across schemas/catalogs.
+type scopedAgg struct {
+	name string
+	tag  string
+}
+
+func (f *scopedAgg) Name() string               { return f.name }
+func (f *scopedAgg) Metadata() FunctionMetadata { return FunctionMetadata{Description: f.tag} }
+func (f *scopedAgg) ArgumentSpecs() []ArgSpec {
+	return []ArgSpec{{Name: "value", Position: 0, ArrowType: "int64"}}
+}
+func (f *scopedAgg) OnBind(*AggregateBindParams) (*BindResponse, error) { return nil, nil }
+func (f *scopedAgg) NewState(*AggregateProcessParams) interface{}       { return nil }
+func (f *scopedAgg) Update(map[int64]interface{}, *Int64Slice, []arrow.Array, *AggregateProcessParams) error {
+	return nil
+}
+func (f *scopedAgg) Combine(_, _ interface{}, _ *AggregateProcessParams) (interface{}, error) {
+	return nil, nil
+}
+func (f *scopedAgg) Finalize([]int64, map[int64]interface{}, *AggregateProcessParams) (arrow.RecordBatch, error) {
+	return nil, nil
+}
+
+// aggTag resolves an aggregate by (name, schema, catalog) and reports its tag.
+func aggTag(t *testing.T, w *Worker, name, schema, catalog string) string {
+	t.Helper()
+	fn, err := w.resolveAggregate(name, schema, catalog)
+	if err != nil {
+		t.Fatalf("resolveAggregate(%q, %q, %q): %v", name, schema, catalog, err)
+	}
+	return fn.(*scopedAgg).tag
+}
+
+// An aggregate name declared in two schemas of one catalog must resolve on the
+// schema the caller named — the runtime half of the 1.2.0 gap, since every
+// aggregate RPC re-resolves by name.
+func TestResolveAggregateBySchema(t *testing.T) {
+	w := NewWorker(WithCatalogName("example"))
+	w.RegisterAggregate(&scopedAgg{name: "agg", tag: "main"})
+	w.RegisterAggregateInSchema("data", &scopedAgg{name: "agg", tag: "data"})
+
+	if got := aggTag(t, w, "agg", "main", "example"); got != "main" {
+		t.Errorf("schema main: got %q, want main", got)
+	}
+	if got := aggTag(t, w, "agg", "data", "example"); got != "data" {
+		t.Errorf("schema data: got %q, want data", got)
+	}
+}
+
+// A caller that names no schema must not get an arbitrary winner when the
+// aggregate name spans schemas.
+func TestResolveAggregateCrossSchemaAmbiguity(t *testing.T) {
+	w := NewWorker(WithCatalogName("example"))
+	w.RegisterAggregate(&scopedAgg{name: "agg", tag: "main"})
+	w.RegisterAggregateInSchema("data", &scopedAgg{name: "agg", tag: "data"})
+
+	if _, err := w.resolveAggregate("agg", "", "example"); err == nil {
+		t.Fatal("resolveAggregate: want a cross-schema ambiguity error")
+	}
+}
+
+// A schema-less aggregate call still resolves when the name is unique.
+func TestResolveAggregateSchemalessUnique(t *testing.T) {
+	w := NewWorker(WithCatalogName("example"))
+	w.RegisterAggregate(&scopedAgg{name: "agg", tag: "only"})
+
+	if got := aggTag(t, w, "agg", "", "example"); got != "only" {
+		t.Errorf("schemaless unique: got %q, want only", got)
+	}
+}

@@ -367,22 +367,120 @@ func schemasOf(cands []candidate) []string {
 	return out
 }
 
+// scopeToHome narrows candidates to the registrations the caller could possibly
+// mean, by their recorded home:
+//
+//   - Catalog: a call arriving through catalog X can only reach functions homed
+//     in X. This is what lets one worker process serve two catalogs that each
+//     declare the same function name.
+//   - Schema: a schema-qualified call is exact — only functions declared in that
+//     schema survive, so a name registered in two schemas resolves to the one
+//     the caller named instead of colliding. Naming a schema that does not hold
+//     the function reports where it does live rather than the generic
+//     unknown-function list.
+//
+// A caller that names no schema keeps every candidate; the caller decides
+// whether a surviving cross-schema tie is an error (see crossSchemaAmbiguity).
+func (w *Worker) scopeToHome(cands []candidate, name, schema, catalog string) ([]candidate, error) {
+	if catalog != "" {
+		var inCatalog []candidate
+		for _, c := range cands {
+			if c.origin.catalog == catalog {
+				inCatalog = append(inCatalog, c)
+			}
+		}
+		if len(inCatalog) == 0 {
+			return nil, &vgirpc.RpcError{
+				Type:    "ValueError",
+				Message: fmt.Sprintf("Function '%s' is not available in catalog '%s'", name, catalog),
+			}
+		}
+		cands = inCatalog
+	}
+
+	if lowered := strings.ToLower(schema); lowered != "" {
+		var inSchema []candidate
+		for _, c := range cands {
+			if c.origin.schema == lowered {
+				inSchema = append(inSchema, c)
+			}
+		}
+		if len(inSchema) == 0 {
+			return nil, &vgirpc.RpcError{
+				Type: "ValueError",
+				Message: fmt.Sprintf("Function '%s' is not registered in schema '%s'. It is available in: %v",
+					name, schema, schemasOf(cands)),
+			}
+		}
+		cands = inSchema
+	}
+
+	return cands, nil
+}
+
+// crossSchemaAmbiguity reports the error for an unqualified call whose surviving
+// candidates span several schemas — the caller named no schema and there is no
+// non-arbitrary winner. Returns nil when the call is unambiguous.
+func crossSchemaAmbiguity(cands []candidate, name, schema string) error {
+	if schema != "" || len(cands) < 2 {
+		return nil
+	}
+	schemas := schemasOf(cands)
+	if len(schemas) < 2 {
+		return nil
+	}
+	return &vgirpc.RpcError{
+		Type: "ValueError",
+		Message: fmt.Sprintf("Ambiguous function call '%s': declared in more than one schema (%v) — "+
+			"qualify the call with a schema to disambiguate", name, schemas),
+	}
+}
+
+// resolveAggregate resolves an aggregate RPC to a single registered
+// implementation.
+//
+// Every aggregate RPC (bind / update / combine / finalize / destructor, the four
+// window calls, the three streaming calls) re-resolves the function by name:
+// they are stateless unary requests with no bound connection, so the request is
+// the only carrier of identity. Before protocol 1.2.0 none of them carried a
+// schema, so an aggregate name declared in two schemas ran whichever the by-name
+// lookup found first — bind could resolve correctly and update/finalize then
+// return the other schema's answer.
+//
+// Aggregates do not disambiguate by argument signature (overloads of one
+// aggregate share state semantics, so any of them drives dispatch); the home is
+// the whole of the resolution.
+func (w *Worker) resolveAggregate(name, schema, catalog string) (AggregateFunction, error) {
+	var cands []candidate
+	cands = collect(w, w.aggregates, kindAggregate, name, cands)
+	if len(cands) == 0 {
+		return nil, &vgirpc.RpcError{
+			Type:    "ValueError",
+			Message: fmt.Sprintf("aggregate function %q is not registered", name),
+		}
+	}
+	cands, err := w.scopeToHome(cands, name, schema, catalog)
+	if err != nil {
+		return nil, err
+	}
+	if err := crossSchemaAmbiguity(cands, name, schema); err != nil {
+		return nil, err
+	}
+	fn, ok := cands[0].fn.(AggregateFunction)
+	if !ok {
+		return nil, &vgirpc.RpcError{
+			Type:    "ValueError",
+			Message: fmt.Sprintf("function %q is not an AggregateFunction", name),
+		}
+	}
+	return fn, nil
+}
+
 // resolveFunction resolves a call to a single registered implementation.
 //
-// Scoping runs before overload resolution, narrowing "every registration of
-// this name" to "the registrations the caller could possibly mean":
-//
-//   - Catalog: a call arriving through catalog X can only reach functions
-//     registered catalog-wide or scoped to X. This is what lets one worker
-//     process serve two catalogs that each declare the same function name.
-//   - Schema: a schema-qualified call is exact — only functions declared in
-//     that schema are candidates, so a name registered in two schemas
-//     dispatches to the one the caller named instead of colliding. Naming a
-//     schema that does not hold the function reports where it does live.
-//
-// Only then do argument signatures pick between same-schema overloads. A caller
-// that named no schema and left a tie spanning several schemas gets an
-// ambiguity error listing them, rather than an arbitrary winner.
+// Scoping by home (see scopeToHome) runs first, narrowing "every registration of
+// this name" to "the registrations the caller could possibly mean". Only then do
+// argument signatures pick between same-schema overloads.
 func (w *Worker) resolveFunction(lk functionLookup) (interface{}, error) {
 	cands := w.candidatesFor(lk.Name, lk.Type)
 	if len(cands) == 0 {
@@ -392,51 +490,17 @@ func (w *Worker) resolveFunction(lk functionLookup) (interface{}, error) {
 		}
 	}
 
-	if lk.Catalog != "" {
-		var inCatalog []candidate
-		for _, c := range cands {
-			if c.origin.catalog == lk.Catalog {
-				inCatalog = append(inCatalog, c)
-			}
-		}
-		if len(inCatalog) == 0 {
-			return nil, &vgirpc.RpcError{
-				Type:    "ValueError",
-				Message: fmt.Sprintf("Function '%s' is not available in catalog '%s'", lk.Name, lk.Catalog),
-			}
-		}
-		cands = inCatalog
-	}
-
-	if schema := strings.ToLower(lk.Schema); schema != "" {
-		var inSchema []candidate
-		for _, c := range cands {
-			if c.origin.schema == schema {
-				inSchema = append(inSchema, c)
-			}
-		}
-		if len(inSchema) == 0 {
-			return nil, &vgirpc.RpcError{
-				Type: "ValueError",
-				Message: fmt.Sprintf("Function '%s' is not registered in schema '%s'. It is available in: %v",
-					lk.Name, lk.Schema, schemasOf(cands)),
-			}
-		}
-		cands = inSchema
+	cands, err := w.scopeToHome(cands, lk.Name, lk.Schema, lk.Catalog)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(cands) == 1 {
 		return cands[0].fn, nil
 	}
 
-	if lk.Schema == "" {
-		if schemas := schemasOf(cands); len(schemas) > 1 {
-			return nil, &vgirpc.RpcError{
-				Type: "ValueError",
-				Message: fmt.Sprintf("Ambiguous function call '%s': declared in more than one schema (%v) — "+
-					"qualify the call with a schema to disambiguate", lk.Name, schemas),
-			}
-		}
+	if err := crossSchemaAmbiguity(cands, lk.Name, lk.Schema); err != nil {
+		return nil, err
 	}
 
 	impls := make([]interface{}, 0, len(cands))

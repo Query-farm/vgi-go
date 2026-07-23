@@ -55,6 +55,22 @@ func (w *Worker) catalogOfAttach(attachOpaqueData []byte) string {
 	return w.catalogName
 }
 
+// catalogOfAttachPtr names the catalog for a request that carries the attach
+// value as an optional wire field (the unary aggregate / table-buffering RPCs).
+// It opens the envelope down to the catalog's own plaintext first, then applies
+// catalogOfAttach. Returns the worker's own catalog when there is no attachment
+// or it cannot be opened — the same single-home rule the bind path uses.
+func (w *Worker) catalogOfAttachPtr(attachOpaqueData *[]byte, cc *vgirpc.CallContext) string {
+	if attachOpaqueData == nil {
+		return w.catalogName
+	}
+	plain, err := w.openAttach(*attachOpaqueData, cc)
+	if err != nil {
+		return w.catalogName
+	}
+	return w.catalogOfAttach(plain)
+}
+
 // SerializedItems is a list of Arrow-IPC-encoded items sent over the wire.
 type SerializedItems = [][]byte
 

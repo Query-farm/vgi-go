@@ -26,6 +26,11 @@ type TableBufferingProcessRequestWire struct {
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 	TransactionID    *[]byte `vgirpc:"transaction_id"`
 	BatchIndex       *int64  `vgirpc:"batch_index"`
+	// SchemaName is the catalog schema that declares the function. A name is
+	// unique only within a schema, so this is what lets the worker resolve
+	// (schema, name) on a request that re-resolves by name; nil when the caller
+	// names no schema. Protocol 1.2.0.
+	SchemaName *string `vgirpc:"schema_name"`
 }
 
 // TableBufferingProcessResponseWire returns the worker-chosen state_id.
@@ -40,6 +45,11 @@ type TableBufferingCombineRequestWire struct {
 	StateIDs         [][]byte `vgirpc:"state_ids"`
 	AttachOpaqueData *[]byte  `vgirpc:"attach_opaque_data"`
 	TransactionID    *[]byte  `vgirpc:"transaction_id"`
+	// SchemaName is the catalog schema that declares the function. A name is
+	// unique only within a schema, so this is what lets the worker resolve
+	// (schema, name) on a request that re-resolves by name; nil when the caller
+	// names no schema. Protocol 1.2.0.
+	SchemaName *string `vgirpc:"schema_name"`
 }
 
 // TableBufferingCombineResponseWire returns the finalize partition keys.
@@ -53,6 +63,11 @@ type TableBufferingDestructorRequestWire struct {
 	ExecutionID      []byte  `vgirpc:"execution_id"`
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
 	TransactionID    *[]byte `vgirpc:"transaction_id"`
+	// SchemaName is the catalog schema that declares the function. A name is
+	// unique only within a schema, so this is what lets the worker resolve
+	// (schema, name) on a request that re-resolves by name; nil when the caller
+	// names no schema. Protocol 1.2.0.
+	SchemaName *string `vgirpc:"schema_name"`
 }
 
 // TableBufferingDestructorResponseWire is an empty ack.
