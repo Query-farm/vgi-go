@@ -7,25 +7,23 @@
 package main
 
 import (
-	"flag"
 	"log"
+	"os"
 
 	"github.com/Query-farm/vgi-go/examples/simple_writable"
-	"github.com/Query-farm/vgi-go/internal/covflush"
+	"github.com/Query-farm/vgi-go/internal/workercli"
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-go/vgi/storage/resolve"
 )
 
 func main() {
-	httpMode := flag.Bool("http", false, "Run as HTTP server instead of stdio")
-	logFlags := vgi.RegisterLoggingFlags(flag.CommandLine)
-	flag.Parse()
-	if err := logFlags.Apply(); err != nil {
-		log.Fatalf("logging flags: %v", err)
+	// Transport flags (--http / --unix / --tcp / --idle-timeout) + logging.
+	// --unix is what the launcher lane needs: `launch:<binary>` makes the C++
+	// launcher spawn this worker with --unix <path> and wait for UNIX:<path>.
+	cli := workercli.Register()
+	if err := cli.Parse(os.Args[1:]); err != nil {
+		log.Fatal(err)
 	}
-
-	// Flush coverage on SIGTERM (+ periodic) during integration coverage runs.
-	covflush.Start()
 
 	// Per-attach row storage uses AttachStore, which needs a FunctionStorage
 	// backend (SQLite by default; honors VGI_WORKER_SHARED_STORAGE).
@@ -38,11 +36,7 @@ func main() {
 	w := vgi.NewWorker(opts...)
 	simple_writable.Register(w)
 
-	if *httpMode {
-		if err := w.RunHttp("127.0.0.1:0"); err != nil {
-			log.Fatal(err)
-		}
-	} else {
-		w.RunStdio()
+	if err := cli.Serve(w); err != nil {
+		log.Fatal(err)
 	}
 }

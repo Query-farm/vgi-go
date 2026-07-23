@@ -231,16 +231,29 @@ test-shm: build
 # and cleans up. Tests in HTTP_XFAIL_TESTS are expected to fail.
 test-http: build $(HTTP_TEST_TARGETS)
 
-# Run the launcher (AF_UNIX 'launch:' transport) integration tests. The worker
-# is wrapped in a launch: LOCATION so the extension spawns it directly with
-# --unix/--idle-timeout appended; VGI_REQUIRE_LAUNCHER_TRANSPORT un-skips the
-# launcher-only test group.
+# Run the full integration suite over the launcher (AF_UNIX 'launch:')
+# transport. EVERY worker is wrapped in a launch: LOCATION so the extension
+# spawns it through the launcher with --unix/--idle-timeout appended (a worker
+# left unprefixed would silently run over stdio here);
+# VGI_REQUIRE_LAUNCHER_TRANSPORT additionally un-skips the launcher-only test
+# group. Mirrors the vgi Makefile's test_launcher — the point is that the
+# launcher path yields identical query results to the subprocess path, which
+# only a full-suite run demonstrates.
+#
+# The crash tests (table_in_out/table_buffering_{worker_crash,pool_recovery})
+# self-skip here: they require VGI_TEST_DEDICATED_WORKER, which must not be set
+# under a shared-worker transport — crash_on_process SIGKILLs the one launcher
+# worker serving the whole run.
 test-launcher: build
 	cd $(VGI_EXT_DIR) && \
 	    VGI_SYNC_INIT_GLOBAL=1 \
 	    VGI_REQUIRE_LAUNCHER_TRANSPORT=1 \
 	    VGI_TEST_WORKER="launch:$(WORKER_PATH)" \
-	    $(UNITTEST) "test/sql/integration/launcher/*"
+	    VGI_VERSIONED_WORKER="launch:$(VERSIONED_WORKER_PATH)" \
+	    VGI_VERSIONED_TABLES_WORKER="launch:$(VERSIONED_TABLES_WORKER_PATH)" \
+	    VGI_ATTACH_OPTIONS_WORKER="launch:$(ATTACH_OPTIONS_WORKER_PATH)" \
+	    VGI_SIMPLE_WRITABLE_WORKER="launch:$(SIMPLE_WRITABLE_WORKER_PATH)" \
+	    $(UNITTEST) "test/*" "~test/sql/integration/writable/*"
 
 # Run stdio, stdio+shm, HTTP, and launcher tests.
 test-all: test test-shm test-http test-launcher
