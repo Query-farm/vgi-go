@@ -316,3 +316,108 @@ func (f *HostileProvenanceFunction) Finalize(ctx context.Context, params *vgi.Pr
 func NewHostileProvenanceFunction() vgi.TableInOutFunction {
 	return vgi.AsTableInOutFunction[struct{}](&HostileProvenanceFunction{})
 }
+
+// ---------------------------------------------------------------------------
+// cached_explode(n) — per-value cacheable 1->N fan-out with interleaved output
+// ---------------------------------------------------------------------------
+
+// CachedExplodeFunction is a cacheable blended 1->N fan-out advertising
+// vgi.cache.per_value.
+//
+// Same shape as blended_explode (emit 0..n-1 per input row, with per-output-row
+// provenance) but it opts into the per-value memo tier, so it exercises the
+// columnar arena + its SQLite disk backend at the cardinalities the 1:1
+// cached_double cannot reach: n=0 is a NEGATIVE MEMO (a length-0 slot), n>1 a
+// 1:N slot whose rows must survive the d-major store gather, the
+// [cached|fresh] partial splice, and (for disk) the per-slot Arrow-IPC round
+// trip. Deterministic (emits 0..n-1) so tests assert exact values and
+// equivalence with per-value off.
+//
+// A test choice, not production advice — memoizing a trivial fan-out is a net
+// loss; the point is to cover the arena's 1:N and negative-memo paths
+// deterministically. Mirrors vgi-python's CachedExplodeFunction.
+type CachedExplodeFunction struct{}
+
+var _ vgi.TypedTableInOutFunc[struct{}] = (*CachedExplodeFunction)(nil)
+
+func (f *CachedExplodeFunction) Name() string { return "cached_explode" }
+
+func (f *CachedExplodeFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description:   "Cacheable blended 1->N fan-out (per_value) — 1:0 / 1:1 / 1:N by input",
+		Stability:     vgi.StabilityConsistent,
+		Categories:    []string{"blended", "cache", "test"},
+		InputFromArgs: true,
+	}
+}
+
+func (f *CachedExplodeFunction) ArgumentSpecs() []vgi.ArgSpec {
+	return []vgi.ArgSpec{
+		{Name: "n", Position: 0, ArrowType: "int64", Doc: "Fan-out count: emit rows 0..n-1 for this input row"},
+	}
+}
+
+func (f *CachedExplodeFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+	return &vgi.BindResponse{
+		OutputSchema: arrow.NewSchema([]arrow.Field{
+			{Name: "i", Type: arrow.PrimitiveTypes.Int64},
+		}, nil),
+	}, nil
+}
+
+func (f *CachedExplodeFunction) NewState(params *vgi.ProcessParams) (*struct{}, error) {
+	return &struct{}{}, nil
+}
+
+func (f *CachedExplodeFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *struct{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
+	col := batch.Column(0)
+	rows := int(batch.NumRows())
+	counts := make([]int64, rows)
+	maxCount := int64(0)
+	for row := 0; row < rows; row++ {
+		if col.IsNull(row) {
+			continue
+		}
+		if fan := vgi.GetInt64Value(col, row); fan > 0 {
+			counts[row] = fan
+			if fan > maxCount {
+				maxCount = fan
+			}
+		}
+	}
+	// INTERLEAVE parents round-robin (round k emits value k for every parent
+	// with n>k), so within one chunk the output rows for a given parent are
+	// NON-contiguous (e.g. parents [1,2,3] -> row parents [0,1,2, 1,2, 2]).
+	// This deliberately stresses the per-value store's rows_by_d gather + the
+	// serve-time expansion: a gather assuming each parent's rows form a
+	// contiguous run would corrupt the result.
+	var outVals []int64
+	var parentRows []int32
+	for k := int64(0); k < maxCount; k++ {
+		for row := 0; row < rows; row++ {
+			if counts[row] > k {
+				outVals = append(outVals, k)
+				parentRows = append(parentRows, int32(row))
+			}
+		}
+	}
+	mem := memory.NewGoAllocator()
+	b := array.NewInt64Builder(mem)
+	defer b.Release()
+	b.AppendValues(outVals, nil)
+	arr := b.NewArray()
+	defer arr.Release()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "i", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	outBatch := array.NewRecordBatch(schema, []arrow.Array{arr}, int64(len(outVals)))
+	return vgi.EmitParentRows(out, outBatch, parentRows,
+		vgi.WithCacheControl(&vgi.CacheControl{Ttl: vgi.Seconds(300), PerValue: true}))
+}
+
+func (f *CachedExplodeFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *struct{}) ([]arrow.RecordBatch, error) {
+	return nil, nil
+}
+
+// NewCachedExplodeFunction creates a CachedExplodeFunction wrapped for registration.
+func NewCachedExplodeFunction() vgi.TableInOutFunction {
+	return vgi.AsTableInOutFunction[struct{}](&CachedExplodeFunction{})
+}

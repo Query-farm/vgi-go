@@ -89,6 +89,30 @@ SELECT demo.add_ints(2, 3); -- => 5
 `LOCATION` also accepts `http://…`/`https://…` for an HTTP worker, or a
 `launch:` command for the AF_UNIX transport.
 
+### Schemas and catalogs
+
+Every registered function has exactly one home: a `(catalog, schema)` pair.
+A plain `Register*` call homes it in the worker's own catalog and default schema
+(`main`); registration can name either dimension instead:
+
+```go
+w.RegisterScalar(&MainImpl{})                     // demo.main.collide
+w.RegisterScalarInSchema("data", &DataImpl{})     // demo.data.collide
+w.RegisterScalarForCatalog("other", &OtherImpl{}) // other.main.collide
+```
+
+A function name is not a unique key, so both the catalog listing and bind
+dispatch resolve the whole `(catalog, schema, name)` triple, exactly — there is
+no "visible everywhere" tier. `demo.data.collide(x)` reaches the `data`
+implementation and never the `main` one, and a call arriving through catalog
+`other` reaches only what `other` owns. Same-name registrations *within* one
+schema stay overloads, resolved by argument signature as before.
+
+The one bind that legitimately names no schema is a COPY handler's: COPY formats
+are advertised at catalog level, not inside a schema. Such a bind resolves by
+name within the catalog, and errors naming the schemas involved if that name is
+declared in more than one.
+
 ## Function shapes
 
 | Shape                   | Interface                                        | Use case                              |
@@ -179,6 +203,7 @@ examples/table/                 # table example functions
 examples/table_in_out/          # table-in-out + buffering examples
 examples/aggregate/             # aggregate examples
 examples/schema_reconcile/      # catalog-handlers fixture
+examples/twin_catalogs/         # two catalogs, one worker, colliding names
 examples/all/                   # RegisterAll(w) helper
 cmd/vgi-example-worker/         # fixture worker (used by integration tests)
 cmd/vgi-example-versioned-worker/

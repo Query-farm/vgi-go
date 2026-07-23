@@ -18,6 +18,7 @@ import (
 	"github.com/Query-farm/vgi-go/examples/narrow_bind"
 	"github.com/Query-farm/vgi-go/examples/schema_reconcile"
 	"github.com/Query-farm/vgi-go/examples/table"
+	"github.com/Query-farm/vgi-go/examples/twin_catalogs"
 	"github.com/Query-farm/vgi-go/internal/covflush"
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-go/vgi/storage/resolve"
@@ -106,7 +107,11 @@ func main() {
 		}),
 		// Cross-language reproducer catalogs share this binary; ATTACH
 		// against any of these names succeeds (functions are catalog-agnostic).
-		vgi.WithCatalogAliases("projection_repro", "schema_reconcile", narrow_bind.CatalogName),
+		// twin_a / twin_b collide on schema *and* function name; only the
+		// attached catalog tells their implementations apart (see
+		// examples/twin_catalogs).
+		vgi.WithCatalogAliases("projection_repro", "schema_reconcile", narrow_bind.CatalogName,
+			twin_catalogs.CatalogA, twin_catalogs.CatalogB),
 		// The accumulate fixture catalog is discoverable (data version 2.0.0)
 		// and isolated per ATTACH (random scope); its functions are registered
 		// catalog-scoped below so they don't leak into the example catalog.
@@ -205,6 +210,10 @@ func main() {
 	// the example catalog and preserves its function inventory).
 	accumulate.Register(w)
 
+	// Register the two colliding twin catalogs (catalog-scoped): one worker
+	// process, two catalogs, one function name declared in both.
+	twin_catalogs.Register(w)
+
 	// Register the narrow_bind reproducer fixture (catalog-scoped). Its
 	// scan functions back the mismatch/consistent tables advertised by the
 	// composed catalog handlers above.
@@ -239,8 +248,8 @@ func main() {
 	//
 	// NB: cache_bench is intentionally NOT a data Table — it takes a required
 	// positional arg (rows) that a function-backed Table can't supply at bind.
-	// The scaling bench and the disk-streaming guard use the direct path
-	// `vgi_table_function(w, 'cache_bench', [rows])` instead.
+	// The scaling bench and the disk-streaming guard call it as a schema-
+	// qualified table function instead (`ex.main.cache_bench(rows)`).
 	for _, ct := range []vgi.CatalogTable{
 		{Name: "cacheable_numbers", Function: table.NewCacheableNumbersFunction(),
 			Comment: "Cacheable 10-row result advertising vgi.cache.ttl"},

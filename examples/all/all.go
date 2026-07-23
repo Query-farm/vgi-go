@@ -87,6 +87,11 @@ func registerScalars(w *vgi.Worker) {
 	w.RegisterScalar(&scalar.RandomBytesFunction{})
 	w.RegisterScalar(&scalar.RandomIntFunction{})
 	w.RegisterScalar(&scalar.ReturnSecretValueFunction{})
+	// Schema-disambiguation probe: one function name declared in two schemas of
+	// the same catalog. A schema-qualified call must reach the implementation
+	// the schema names, so each returns its own schema as a tag.
+	w.RegisterScalar(&scalar.SameNameMainFunction{})
+	w.RegisterScalarInSchema("data", &scalar.SameNameDataFunction{})
 	w.RegisterScalar(&scalar.ScaleBySettingFunction{})
 	w.RegisterScalar(&scalar.SecretFieldFunction{})
 	w.RegisterScalar(&scalar.SmartFormatWidthFunction{})
@@ -169,7 +174,6 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewCacheBenchFunction())
 	w.RegisterTable(table.NewCacheParallelFunction())
 	w.RegisterTable(table.NewCacheOrderedFunction())
-	w.RegisterTable(table.NewCacheInterleavedFunction())
 	w.RegisterTable(table.NewCacheTypesFunction())
 	w.RegisterTable(table.NewCacheFilteredFunction())
 	w.RegisterTable(table.NewCachePartitionedFunction())
@@ -262,6 +266,10 @@ func registerTableInOuts(w *vgi.Worker) {
 	// cached_sum_all (buffered cache), and the two always-revalidate (304)
 	// fixtures (cache/exchange_revalidate.test).
 	w.RegisterTableInOut(table_in_out.NewCachedDoubleFunction())
+	// cached_explode is the per-VALUE memo fixture: 1:0 / 1:1 / 1:N by input,
+	// emitted with interleaved parents (cache/per_value_multi_batch.test,
+	// cache/per_value_negative_memo.test).
+	w.RegisterTableInOut(table_in_out.NewCachedExplodeFunction())
 	w.RegisterTableInOut(table_in_out.NewCachedEchoFunction())
 	w.RegisterTableInOut(table_in_out.NewCachedRevalidatingEchoFunction())
 	w.RegisterTableInOut(table_in_out.NewCachedRevalidatingDoubleFunction())

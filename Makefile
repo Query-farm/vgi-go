@@ -81,13 +81,13 @@ HTTP_TEST_TARGETS := $(patsubst $(TEST_DIR)/%.test,test-http/%,$(TEST_FILES))
 
 # Tests expected to fail over HTTP.
 #
-# vgi_table_function / vgi_worker_pool assert on the error a *bad worker
-# location* produces, which over HTTP is whatever DuckDB's httpfs says about the
-# URL rather than the worker's own "Unknown function" / spawn failure. The
-# reference runner (../vgi/test/run_http_integration.sh) only covers
-# test/sql/integration/*, so it never runs these; the Python worker fails them
-# over HTTP exactly as this one does.
-HTTP_XFAIL_TESTS := vgi_table_function vgi_worker_pool
+# vgi_worker_pool asserts on the error a *bad worker location* produces, which
+# over HTTP is whatever DuckDB's httpfs says about the URL rather than the
+# worker's own "Unknown function" / spawn failure. The reference runner
+# (../vgi/test/run_http_integration.sh) only covers test/sql/integration/*, so
+# it never runs these; the Python worker fails them over HTTP exactly as this
+# one does.
+HTTP_XFAIL_TESTS := vgi_worker_pool
 
 # The HTTP worker is started with its working directory set to $(VGI_EXT_DIR),
 # the same directory the unittest runner runs from. COPY ... TO writes the file

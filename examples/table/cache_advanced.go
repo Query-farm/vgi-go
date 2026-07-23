@@ -56,9 +56,9 @@ func unpackPartition(b []byte) (pid, start, end int64) {
 
 type cacheBenchArgs struct {
 	// Positional (unlike the other cache fixtures' named-with-default args) so
-	// the direct path vgi_table_function(w, 'cache_bench', [rows]) actually
-	// honors the requested row count — the scaling bench and the flat-RAM guard
-	// need a result whose size they control.
+	// a direct call — `ex.main.cache_bench(rows)` — actually honors the
+	// requested row count; the scaling bench and the flat-RAM guard need a
+	// result whose size they control.
 	Rows int64 `vgi:"pos=0,ge=0,doc=Number of rows to generate"`
 }
 
@@ -242,7 +242,7 @@ func NewCacheParallelFunction() vgi.TableFunction {
 }
 
 // ---------------------------------------------------------------------------
-// cache_ordered / cache_interleaved — batch_index reassembly on serve
+// cache_ordered — batch_index reassembly on serve
 // ---------------------------------------------------------------------------
 
 // cacheOrderedState is a per-worker cursor, a one-shot advertise flag, and the
@@ -257,8 +257,7 @@ type cacheOrderedState struct {
 }
 
 // emitOrderedBatch pops a partition when the cursor is spent, then emits one
-// batch_index-tagged batch of the global row indices. Shared by cache_ordered
-// and cache_interleaved, which differ only in the order OnInit enqueues chunks.
+// batch_index-tagged batch of the global row indices.
 func emitOrderedBatch(params *vgi.ProcessParams, state *cacheOrderedState, out *vgirpc.OutputCollector, batchSize int64) error {
 	if !state.HasChunk || state.CurrentIdx >= state.CurrentEnd {
 		if params.Storage == nil {
@@ -291,19 +290,13 @@ func emitOrderedBatch(params *vgi.ProcessParams, state *cacheOrderedState, out *
 }
 
 // pushPartitionChunks enqueues (partition_id, start, end) chunks covering
-// [0, rows). When reverse is set the highest partition id is popped first, so
-// emission order deliberately disagrees with batch_index order.
-func pushPartitionChunks(params *vgi.InitParams, rows, chunk int64, reverse bool) error {
+// [0, rows), in ascending partition order.
+func pushPartitionChunks(params *vgi.InitParams, rows, chunk int64) error {
 	var items [][]byte
 	pid := int64(0)
 	for start := int64(0); start < rows; start += chunk {
 		items = append(items, packPartition(pid, start, min(start+chunk, rows)))
 		pid++
-	}
-	if reverse {
-		for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
-			items[i], items[j] = items[j], items[i]
-		}
 	}
 	if params.Storage == nil {
 		return nil
@@ -316,8 +309,7 @@ const cacheOrderedBatchSize = 256
 type cacheOrderedArgs struct {
 	// Named-with-default (not positional) so this can back a catalog data Table
 	// — the parallel + order-sensitive capture path only exists on the catalog
-	// scan (the direct vgi_table_function() path serializes FIXED_ORDER to one
-	// thread).
+	// table scan.
 	Rows      int64 `vgi:"default=200000,ge=0,doc=Total number of rows to generate"`
 	ChunkSize int64 `vgi:"default=1000,ge=1,doc=Rows per partition"`
 }
@@ -363,7 +355,7 @@ func (f *CacheOrderedFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitRe
 	if err := vgi.BindArgs(params.Args, &args); err != nil {
 		return nil, err
 	}
-	if err := pushPartitionChunks(params, args.Rows, args.ChunkSize, false); err != nil {
+	if err := pushPartitionChunks(params, args.Rows, args.ChunkSize); err != nil {
 		return nil, err
 	}
 	return &vgi.GlobalInitResponse{}, nil
@@ -379,79 +371,6 @@ func (f *CacheOrderedFunction) Process(ctx context.Context, params *vgi.ProcessP
 
 func NewCacheOrderedFunction() vgi.TableFunction {
 	return vgi.AsTableFunction[cacheOrderedState](&CacheOrderedFunction{})
-}
-
-const cacheInterleavedBatchSize = 2048
-
-type cacheInterleavedArgs struct {
-	Rows int64 `vgi:"pos=0,ge=0,doc=Total number of rows to generate"`
-	// A chunk spans many batches (chunk / BATCH_SIZE) so the serve reassembly is
-	// tested across batch boundaries, not a single already-sorted batch.
-	ChunkSize int64 `vgi:"default=20000,ge=1,doc=Rows per partition"`
-}
-
-// CacheInterleavedFunction is a batch_index-tagged cacheable sequence emitted
-// OUT OF ORDER, so the cache serve must genuinely reorder it.
-//
-// Partitions are enqueued in descending order (highest n first) but each batch
-// is tagged with batch_index = partition_id and n is the global row index. So:
-//
-//   - the live (uncached) scan returns rows in emission (descending-block)
-//     order — NOT monotonic;
-//   - a cached serve flattens + stable-sorts by batch_index, producing strictly
-//     0,1,…,N-1.
-//
-// The gap between the two proves the replay sort genuinely reorders real
-// multi-batch output rather than a trivially-already-sorted single batch.
-type CacheInterleavedFunction struct{}
-
-var _ vgi.TypedTableFunc[cacheOrderedState] = (*CacheInterleavedFunction)(nil)
-
-func (f *CacheInterleavedFunction) Name() string { return "cache_interleaved" }
-
-func (f *CacheInterleavedFunction) Metadata() vgi.FunctionMetadata {
-	return vgi.FunctionMetadata{
-		Description:        "Parallel batch_index-tagged cacheable sequence; cache serve reassembles order",
-		Categories:         []string{"generator", "cache", "testing"},
-		Tags:               map[string]string{"category": "cache", "type": "interleaved"},
-		SupportsBatchIndex: true,
-		Examples: []vgi.CatalogExample{
-			{SQL: "SELECT count(*) FROM cache_interleaved(100000)", Description: "Parallel batch_index reassembly on cache serve"},
-		},
-	}
-}
-
-func (f *CacheInterleavedFunction) ArgumentSpecs() []vgi.ArgSpec {
-	return vgi.DeriveArgSpecs(cacheInterleavedArgs{})
-}
-
-func (f *CacheInterleavedFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
-	return vgi.BindSchema(cacheSingleInt64Schema)
-}
-
-// OnInit enqueues chunks in DESCENDING partition order so emission order differs
-// from batch_index order.
-func (f *CacheInterleavedFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
-	var args cacheInterleavedArgs
-	if err := vgi.BindArgs(params.Args, &args); err != nil {
-		return nil, err
-	}
-	if err := pushPartitionChunks(params, args.Rows, args.ChunkSize, true); err != nil {
-		return nil, err
-	}
-	return &vgi.GlobalInitResponse{}, nil
-}
-
-func (f *CacheInterleavedFunction) NewState(params *vgi.ProcessParams) (*cacheOrderedState, error) {
-	return &cacheOrderedState{}, nil
-}
-
-func (f *CacheInterleavedFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *cacheOrderedState, out *vgirpc.OutputCollector) error {
-	return emitOrderedBatch(params, state, out, cacheInterleavedBatchSize)
-}
-
-func NewCacheInterleavedFunction() vgi.TableFunction {
-	return vgi.AsTableFunction[cacheOrderedState](&CacheInterleavedFunction{})
 }
 
 // ---------------------------------------------------------------------------
@@ -595,7 +514,7 @@ func NewCacheTypesFunction() vgi.TableFunction {
 
 type cacheFilteredArgs struct {
 	// Named-with-default so it can back a catalog data Table: filter pushdown is
-	// wired on the catalog scan path, not the direct vgi_table_function path.
+	// wired on the catalog table-scan path.
 	Rows int64 `vgi:"default=100,ge=0,doc=Total number of rows to generate"`
 }
 
