@@ -265,6 +265,14 @@ func registerTableInOuts(w *vgi.Worker) {
 	// (blended LATERAL cache), cached_echo (classic streaming cache),
 	// cached_sum_all (buffered cache), and the two always-revalidate (304)
 	// fixtures (cache/exchange_revalidate.test).
+	// Schema-disambiguation probes for the two exchange-mode shapes: one name
+	// per shape declared in two schemas of the same catalog. Both bind through
+	// VgiTableInOutBind, and the buffered pair additionally re-resolves on the
+	// unary process/combine RPCs.
+	w.RegisterTableInOut(table_in_out.NewSameNameTransformFunction("main"))
+	w.RegisterTableInOutInSchema("data", table_in_out.NewSameNameTransformFunction("data"))
+	w.RegisterTableBuffering(table_in_out.NewSameNameBufferedFunction("main"))
+	w.RegisterTableBufferingInSchema("data", table_in_out.NewSameNameBufferedFunction("data"))
 	w.RegisterTableInOut(table_in_out.NewCachedDoubleFunction())
 	// cached_explode is the per-VALUE memo fixture: 1:0 / 1:1 / 1:N by input,
 	// emitted with interleaved parents (cache/per_value_multi_batch.test,

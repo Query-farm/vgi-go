@@ -24,6 +24,7 @@ func init() {
 	gob.Register(&NestTensorState{})
 	gob.Register(&StreamingSumState{})
 	gob.Register(&WindowSumBatchState{})
+	gob.Register(&SameNameAggState{})
 }
 
 // RegisterAll registers every example aggregate on the worker.
@@ -45,4 +46,9 @@ func RegisterAll(w *vgi.Worker) {
 	w.RegisterAggregate(&StreamingSumFunction{})
 	w.RegisterAggregate(&WindowSumBatchFunction{})
 	w.RegisterAggregate(&SecretTypedSumFunction{})
+	// Schema-disambiguation probe: one aggregate name declared in two schemas of
+	// the same catalog. Every aggregate RPC re-resolves by name, so this is the
+	// widest surface of the three same-name families.
+	w.RegisterAggregate(NewSameNameAggFunction("main"))
+	w.RegisterAggregateInSchema("data", NewSameNameAggFunction("data"))
 }

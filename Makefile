@@ -244,6 +244,13 @@ test-http: build $(HTTP_TEST_TARGETS)
 # self-skip here: they require VGI_TEST_DEDICATED_WORKER, which must not be set
 # under a shared-worker transport — crash_on_process SIGKILLs the one launcher
 # worker serving the whole run.
+#
+# vgi_worker_pool.test is excluded: it asserts subprocess-pool PID reuse, which
+# the AF_UNIX launcher transport structurally cannot satisfy (the C++ launcher
+# owns the process, not the subprocess pool). It is an HTTP_XFAIL for the same
+# reason, and ci/run-integration.sh's launch lane never stages it either (its
+# SUITE_GLOB is test/sql/integration/* only). Excluding it here keeps `make
+# test-launcher` matching what CI actually runs.
 test-launcher: build
 	cd $(VGI_EXT_DIR) && \
 	    VGI_SYNC_INIT_GLOBAL=1 \
@@ -253,7 +260,7 @@ test-launcher: build
 	    VGI_VERSIONED_TABLES_WORKER="launch:$(VERSIONED_TABLES_WORKER_PATH)" \
 	    VGI_ATTACH_OPTIONS_WORKER="launch:$(ATTACH_OPTIONS_WORKER_PATH)" \
 	    VGI_SIMPLE_WRITABLE_WORKER="launch:$(SIMPLE_WRITABLE_WORKER_PATH)" \
-	    $(UNITTEST) "test/*" "~test/sql/integration/writable/*"
+	    $(UNITTEST) "test/*" "~test/sql/integration/writable/*" "~test/sql/vgi_worker_pool.test"
 
 # Run stdio, stdio+shm, HTTP, and launcher tests.
 test-all: test test-shm test-http test-launcher
