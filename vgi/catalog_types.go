@@ -60,6 +60,14 @@ type FunctionInfo struct {
 	InputFromArgs    bool
 	RequiredSettings []string
 	RequiredSecrets  []SecretRequirement
+
+	// catalogHome is the single catalog that owns this registration. It lives
+	// on the entry rather than in a name-keyed map because two catalogs served
+	// by one worker may each declare their own implementation of one name.
+	catalogHome string
+	// unlisted hides the entry from every function listing without changing its
+	// home (it exists to back a catalog table).
+	unlisted bool
 }
 
 var dictType = &arrow.DictionaryType{

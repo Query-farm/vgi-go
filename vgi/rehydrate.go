@@ -183,8 +183,18 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		return nil, nil, err
 	}
 
-	// Resolve function with overload-aware resolution
-	fn, err := w.resolveFunctionWithOverload(recipe.FunctionName, recipe.FunctionType, bindParams.Args, bindParams.InputSchema)
+	// Resolve the function. The recipe replays the original bind_call, so the
+	// schema the caller named survives the state-token round trip. The attach
+	// value is still raw here (no call context to open it with), so the catalog
+	// name comes off the same UUID-stripped plaintext OnBind saw.
+	fn, err := w.resolveFunction(functionLookup{
+		Name:        recipe.FunctionName,
+		Type:        recipe.FunctionType,
+		Schema:      bindParams.SchemaName,
+		Catalog:     w.catalogOfAttach(coldAttachScope(bindParams.AttachOpaqueData)),
+		Args:        bindParams.Args,
+		InputSchema: bindParams.InputSchema,
+	})
 	if err != nil {
 		return nil, nil, err
 	}

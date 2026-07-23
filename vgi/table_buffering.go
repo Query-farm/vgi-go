@@ -50,9 +50,18 @@ type TableBufferingFunctionWithCardinality interface {
 	Cardinality(params *BindParams) (*TableCardinality, error)
 }
 
-// RegisterTableBuffering registers a table-buffering function.
+// RegisterTableBuffering registers a table-buffering function in the catalog's
+// default schema.
 func (w *Worker) RegisterTableBuffering(f TableBufferingFunction) {
+	w.RegisterTableBufferingInSchema(defaultFunctionSchema, f)
+}
+
+// RegisterTableBufferingInSchema registers a table-buffering function in a
+// named catalog schema. See RegisterScalarInSchema for why the schema is part
+// of the identity.
+func (w *Worker) RegisterTableBufferingInSchema(schemaName string, f TableBufferingFunction) {
 	w.tableBufferings[f.Name()] = append(w.tableBufferings[f.Name()], f)
+	w.recordOrigin(kindTableBuffering, f.Name(), funcOrigin{schema: schemaName})
 }
 
 // RegisterTableBufferingForCatalog registers a table-buffering function scoped
@@ -60,5 +69,5 @@ func (w *Worker) RegisterTableBuffering(f TableBufferingFunction) {
 // RegisterTableForCatalog for the rationale.
 func (w *Worker) RegisterTableBufferingForCatalog(catalogName string, f TableBufferingFunction) {
 	w.tableBufferings[f.Name()] = append(w.tableBufferings[f.Name()], f)
-	w.catalogFunctionScope[f.Name()] = catalogName
+	w.recordOrigin(kindTableBuffering, f.Name(), funcOrigin{catalog: catalogName})
 }

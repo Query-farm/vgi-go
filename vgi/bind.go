@@ -11,6 +11,10 @@ import (
 type BindParams struct {
 	// FunctionName is the name of the function being bound.
 	FunctionName string
+	// SchemaName is the catalog schema that owns the function being bound.
+	// Empty when the caller named no schema (COPY handler binds, which are
+	// advertised at catalog level rather than inside a schema).
+	SchemaName string
 	// FunctionType is the type of the function.
 	FunctionType FunctionType
 	// Args are the parsed function arguments.

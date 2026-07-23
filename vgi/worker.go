@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -312,11 +313,14 @@ type Worker struct {
 	// publish multiple cross-language reproducer catalogs (e.g.
 	// projection_repro) sharing one binary.
 	catalogAliases map[string]struct{}
-	// catalogFunctionScope maps function-name → catalog-name when a
-	// function is restricted to a single catalog (e.g. proj_repro_* only
-	// appears under the ``projection_repro`` catalog, not ``example``).
-	// Functions not present in the map are visible to every catalog.
-	catalogFunctionScope map[string]string
+	// funcOrigins records, for every registered implementation, the catalog
+	// schema that declares it and the catalog it is restricted to (if any).
+	// Keyed by (kind, function name) with the slice index-aligned to the
+	// same-named slice in scalars/tables/tableInOuts/tableBufferings/
+	// aggregates, so two implementations sharing a name keep separate
+	// origins — which is exactly what makes a name registered in two schemas
+	// (or two catalogs) resolvable.
+	funcOrigins map[funcKey][]funcOrigin
 	// catalogAliasInfos carries per-alias discovery metadata (data version,
 	// etc.) for aliases that should advertise themselves distinctly in
 	// catalog_catalogs and mint a random per-ATTACH scope at attach (so two
@@ -718,21 +722,21 @@ func WithFunctionStorage(s FunctionStorage) WorkerOption {
 // NewWorker creates a new VGI worker.
 func NewWorker(opts ...WorkerOption) *Worker {
 	w := &Worker{
-		scalars:              make(map[string][]ScalarFunction),
-		tables:               make(map[string][]TableFunction),
-		tableInOuts:          make(map[string][]TableInOutFunction),
-		tableBufferings:      make(map[string][]TableBufferingFunction),
-		aggregates:           make(map[string][]AggregateFunction),
-		aggStorage:           newAggregateStorage(),
-		extraCatalogs:        make(map[string]*WritableCatalog),
-		catalogAliases:       make(map[string]struct{}),
-		catalogFunctionScope: make(map[string]string),
-		catalogAliasInfos:    make(map[string]CatalogInfo),
-		catalogTables:        make(map[string][]CatalogTable),
-		catalogViews:         make(map[string][]CatalogView),
-		catalogMacros:        make(map[string][]CatalogMacro),
-		dynamicSchemas:       make(map[string]string),
-		catalogName:          "example",
+		scalars:           make(map[string][]ScalarFunction),
+		tables:            make(map[string][]TableFunction),
+		tableInOuts:       make(map[string][]TableInOutFunction),
+		tableBufferings:   make(map[string][]TableBufferingFunction),
+		aggregates:        make(map[string][]AggregateFunction),
+		aggStorage:        newAggregateStorage(),
+		extraCatalogs:     make(map[string]*WritableCatalog),
+		catalogAliases:    make(map[string]struct{}),
+		funcOrigins:       make(map[funcKey][]funcOrigin),
+		catalogAliasInfos: make(map[string]CatalogInfo),
+		catalogTables:     make(map[string][]CatalogTable),
+		catalogViews:      make(map[string][]CatalogView),
+		catalogMacros:     make(map[string][]CatalogMacro),
+		dynamicSchemas:    make(map[string]string),
+		catalogName:       "example",
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -745,14 +749,116 @@ func NewWorker(opts ...WorkerOption) *Worker {
 	return w
 }
 
-// RegisterScalar registers a scalar function.
-func (w *Worker) RegisterScalar(f ScalarFunction) {
-	w.scalars[f.Name()] = append(w.scalars[f.Name()], f)
+// funcKind distinguishes the five registries a function can land in. It is
+// part of the funcOrigins key so an index in one registry never aliases an
+// index in another.
+type funcKind uint8
+
+const (
+	kindScalar funcKind = iota
+	kindTable
+	kindTableInOut
+	kindTableBuffering
+	kindAggregate
+)
+
+// funcKey identifies one registry slice: (kind, function name).
+type funcKey struct {
+	kind funcKind
+	name string
 }
 
-// RegisterTable registers a table function.
+// funcOrigin is the single home of one registered implementation: exactly one
+// (catalog, schema) pair. There is no "unscoped" home — a function is never
+// visible in every schema, nor reachable from every catalog.
+//
+// A function name is not a unique key: the same name may be registered in two
+// schemas of one catalog, or in two catalogs served by one worker process.
+// Registration is the only place that knows which, so the home is recorded here
+// and is what both the catalog listing and bind dispatch resolve against — a
+// bind naming schema `data` can only reach an implementation homed in `data`.
+type funcOrigin struct {
+	// catalog is the catalog that owns the function. Never empty: a
+	// registration that names none is homed in the worker's own catalog.
+	catalog string
+	// schema is the catalog schema declaring the function, lowercased.
+	schema string
+	// unlisted hides the function from every function listing without
+	// changing its home — it exists to back a catalog table, whose scan
+	// resolves it by name, so publishing it as a callable function too would
+	// be redundant surface area. Dispatch is unaffected.
+	unlisted bool
+}
+
+// defaultFunctionSchema is the schema a plain Register* call declares into —
+// the catalog's default schema, which is the schema DuckDB registers the
+// function in when nothing else is said.
+const defaultFunctionSchema = "main"
+
+// recordOrigin appends the home for a registration, keeping the funcOrigins
+// slice index-aligned with the registry slice it mirrors. An empty catalog
+// resolves to the worker's own catalog, so every entry names one.
+func (w *Worker) recordOrigin(kind funcKind, name string, o funcOrigin) {
+	if w.funcOrigins == nil {
+		w.funcOrigins = make(map[funcKey][]funcOrigin)
+	}
+	if o.catalog == "" {
+		o.catalog = w.catalogName
+	}
+	if o.schema == "" {
+		o.schema = defaultFunctionSchema
+	}
+	o.schema = strings.ToLower(o.schema)
+	key := funcKey{kind: kind, name: name}
+	w.funcOrigins[key] = append(w.funcOrigins[key], o)
+}
+
+// originOf returns the home recorded for the idx'th registration of
+// (kind, name). A registration made by a test poking the registry maps
+// directly falls back to the worker's own catalog and default schema.
+func (w *Worker) originOf(kind funcKind, name string, idx int) funcOrigin {
+	origins := w.funcOrigins[funcKey{kind: kind, name: name}]
+	if idx < len(origins) {
+		return origins[idx]
+	}
+	return funcOrigin{catalog: w.catalogName, schema: defaultFunctionSchema}
+}
+
+// RegisterScalar registers a scalar function in the catalog's default schema.
+func (w *Worker) RegisterScalar(f ScalarFunction) {
+	w.RegisterScalarInSchema(defaultFunctionSchema, f)
+}
+
+// RegisterScalarInSchema registers a scalar function in a named catalog schema.
+//
+// The same name may be registered in more than one schema; a schema-qualified
+// call (`db.schema.fn(...)`) then dispatches to the implementation declared in
+// the schema it names, rather than colliding with the other as an overload.
+func (w *Worker) RegisterScalarInSchema(schemaName string, f ScalarFunction) {
+	w.scalars[f.Name()] = append(w.scalars[f.Name()], f)
+	w.recordOrigin(kindScalar, f.Name(), funcOrigin{schema: schemaName})
+}
+
+// RegisterScalarForCatalog registers a scalar function scoped to a single
+// catalog name, in that catalog's default schema. The function only surfaces
+// in — and is only dispatchable from — ATTACHes of the named catalog, so two
+// catalogs served by one worker may each declare their own implementation of
+// the same function name.
+func (w *Worker) RegisterScalarForCatalog(catalogName string, f ScalarFunction) {
+	w.scalars[f.Name()] = append(w.scalars[f.Name()], f)
+	w.recordOrigin(kindScalar, f.Name(), funcOrigin{catalog: catalogName})
+}
+
+// RegisterTable registers a table function in the catalog's default schema.
 func (w *Worker) RegisterTable(f TableFunction) {
+	w.RegisterTableInSchema(defaultFunctionSchema, f)
+}
+
+// RegisterTableInSchema registers a table function in a named catalog schema.
+// See RegisterScalarInSchema for why the schema is part of the identity.
+func (w *Worker) RegisterTableInSchema(schemaName string, f TableFunction) {
 	w.tables[f.Name()] = append(w.tables[f.Name()], f)
+	w.recordOrigin(kindTable, f.Name(), funcOrigin{schema: schemaName})
 }
 
 // RegisterTableForCatalog registers a table function scoped to a single
@@ -763,12 +869,8 @@ func (w *Worker) RegisterTable(f TableFunction) {
 // “projection_repro“).
 func (w *Worker) RegisterTableForCatalog(catalogName string, f TableFunction) {
 	w.tables[f.Name()] = append(w.tables[f.Name()], f)
-	w.catalogFunctionScope[f.Name()] = catalogName
+	w.recordOrigin(kindTable, f.Name(), funcOrigin{catalog: catalogName})
 }
-
-// unlistedCatalogScope pins a function to a catalog no ATTACH can name, so it
-// is hidden from every catalog's function listing. See RegisterTableUnlisted.
-const unlistedCatalogScope = "\x00vgi.unlisted"
 
 // RegisterTableUnlisted registers a table function that is invokable but never
 // appears in any catalog's function listing (duckdb_functions, describe.json).
@@ -777,12 +879,21 @@ const unlistedCatalogScope = "\x00vgi.unlisted"
 // would be redundant surface area.
 func (w *Worker) RegisterTableUnlisted(f TableFunction) {
 	w.tables[f.Name()] = append(w.tables[f.Name()], f)
-	w.catalogFunctionScope[f.Name()] = unlistedCatalogScope
+	w.recordOrigin(kindTable, f.Name(), funcOrigin{unlisted: true})
 }
 
-// RegisterTableInOut registers a table-in-out function.
+// RegisterTableInOut registers a table-in-out function in the catalog's
+// default schema.
 func (w *Worker) RegisterTableInOut(f TableInOutFunction) {
+	w.RegisterTableInOutInSchema(defaultFunctionSchema, f)
+}
+
+// RegisterTableInOutInSchema registers a table-in-out function in a named
+// catalog schema. See RegisterScalarInSchema for why the schema is part of the
+// identity.
+func (w *Worker) RegisterTableInOutInSchema(schemaName string, f TableInOutFunction) {
 	w.tableInOuts[f.Name()] = append(w.tableInOuts[f.Name()], f)
+	w.recordOrigin(kindTableInOut, f.Name(), funcOrigin{schema: schemaName})
 }
 
 // RegisterTableInOutForCatalog is the catalog-scoped sibling of
@@ -792,14 +903,21 @@ func (w *Worker) RegisterTableInOut(f TableInOutFunction) {
 // inventories that fixture tests assert on).
 func (w *Worker) RegisterTableInOutForCatalog(catalogName string, f TableInOutFunction) {
 	w.tableInOuts[f.Name()] = append(w.tableInOuts[f.Name()], f)
-	w.catalogFunctionScope[f.Name()] = catalogName
+	w.recordOrigin(kindTableInOut, f.Name(), funcOrigin{catalog: catalogName})
 }
 
-// RegisterAggregate registers an aggregate function. Multiple registrations
-// with the same Name() are kept as overloads — distinguished by their
-// ArgumentSpecs at catalog-discovery time.
+// RegisterAggregate registers an aggregate function in the catalog's default
+// schema. Multiple registrations with the same Name() are kept as overloads —
+// distinguished by their ArgumentSpecs at catalog-discovery time.
 func (w *Worker) RegisterAggregate(f AggregateFunction) {
+	w.RegisterAggregateInSchema(defaultFunctionSchema, f)
+}
+
+// RegisterAggregateInSchema registers an aggregate function in a named catalog
+// schema. See RegisterScalarInSchema for why the schema is part of the identity.
+func (w *Worker) RegisterAggregateInSchema(schemaName string, f AggregateFunction) {
 	w.aggregates[f.Name()] = append(w.aggregates[f.Name()], f)
+	w.recordOrigin(kindAggregate, f.Name(), funcOrigin{schema: schemaName})
 }
 
 // RegisterWritableCatalog adds a writable catalog this worker handles
@@ -808,7 +926,7 @@ func (w *Worker) RegisterAggregate(f AggregateFunction) {
 // tables.
 func (w *Worker) RegisterWritableCatalog(c *WritableCatalog) {
 	w.extraCatalogs[c.Name] = c
-	w.registerWritableFunctions()
+	w.registerWritableFunctions(c.Name)
 }
 
 // RegisterCatalogTable registers a table in the given schema of the catalog.
@@ -822,6 +940,11 @@ func (w *Worker) RegisterCatalogTable(schemaName string, table CatalogTable) {
 	if table.Function != nil {
 		if _, exists := w.tables[table.Function.Name()]; !exists {
 			w.tables[table.Function.Name()] = append(w.tables[table.Function.Name()], table.Function)
+			// Homed in the catalog's default schema, not the table's: that is
+			// where the extension resolves a function-backed table's scan
+			// function when the table's own schema does not declare it, and so
+			// the schema its bind will name.
+			w.recordOrigin(kindTable, table.Function.Name(), funcOrigin{})
 		}
 	}
 }

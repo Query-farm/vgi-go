@@ -243,7 +243,7 @@ func (w *Worker) buildDescribeSchemas(catalogName string, aliasOnly bool) ([]map
 			}
 		}
 
-		functions := w.buildDescribeFunctions(si.functions, catalogName, aliasOnly)
+		functions := w.buildDescribeFunctions(si.functions, catalogName)
 
 		// Macros fold into the same functions array (a scalar macro is invoked
 		// like a scalar function in SQL, a table macro like a table function).
@@ -295,23 +295,15 @@ func (w *Worker) buildDescribeSchemas(catalogName string, aliasOnly bool) ([]map
 
 // buildDescribeFunctions builds the catalog-local function list for a schema.
 //
-// A function pinned to a specific catalog (catalogFunctionScope) belongs only to
-// that catalog. An unscoped function belongs to the primary catalog. Therefore:
-//
-//   - primary catalog (aliasOnly == false): include unscoped functions and
-//     functions scoped to this catalog; hide functions scoped elsewhere.
-//   - alias catalog (aliasOnly == true): include only functions scoped to this
-//     catalog; unscoped functions belong to the primary catalog, not here.
-func (w *Worker) buildDescribeFunctions(fns []FunctionInfo, catalogName string, aliasOnly bool) []map[string]any {
+// Every function has exactly one home catalog, so a catalog describes only the
+// functions it owns — the same rule catalog_schema_contents_functions applies.
+// Unlisted entries (a function existing solely to back a catalog table) are
+// hidden everywhere.
+func (w *Worker) buildDescribeFunctions(fns []FunctionInfo, catalogName string) []map[string]any {
 	visible := make([]*FunctionInfo, 0, len(fns))
 	for i := range fns {
 		fi := &fns[i]
-		scope, scoped := w.catalogFunctionScope[fi.Name]
-		if aliasOnly {
-			if !scoped || scope != catalogName {
-				continue
-			}
-		} else if scoped && catalogName != "" && catalogName != scope {
+		if fi.unlisted || fi.catalogHome != catalogName {
 			continue
 		}
 		visible = append(visible, fi)

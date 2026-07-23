@@ -38,6 +38,15 @@ type BindRequestWire struct {
 	AtUnit  *string `vgirpc:"at_unit" arrow:"at_unit"`
 	AtValue *string `vgirpc:"at_value" arrow:"at_value"`
 
+	// SchemaName is the catalog schema that owns the function being bound. A
+	// worker may register the same function name in more than one schema, so
+	// the bare name is not a unique key — dispatch resolves
+	// (schema_name, function_name). The C++ extension sets it from the schema
+	// entry the function was registered into; it is nil for callers with no
+	// schema to name (COPY handler binds, which are advertised at catalog
+	// level), where lookup falls back to a cross-schema search by name.
+	SchemaName *string `vgirpc:"schema_name" arrow:"schema_name"`
+
 	// CopyFrom carries the COPY ... FROM context (None unless this bind/init
 	// opens a COPY-FROM scan). Mirrors Python's BindRequest.copy_from. The C++
 	// extension ships it as a nested struct<format, file_path, expected_schema>
@@ -125,6 +134,7 @@ var bindRequestWireSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "resolved_secrets_provided", Type: &arrow.BooleanType{}},
 	{Name: "at_unit", Type: arrow.BinaryTypes.String, Nullable: true},
 	{Name: "at_value", Type: arrow.BinaryTypes.String, Nullable: true},
+	{Name: "schema_name", Type: arrow.BinaryTypes.String, Nullable: true},
 	{Name: "copy_from", Type: copyFromContextWireType, Nullable: true},
 	{Name: "copy_to", Type: copyToContextWireType, Nullable: true},
 }, nil)
@@ -476,7 +486,7 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		"named", len(bindParams.Args.Named),
 	)
 
-	fn, err := w.resolveFunctionWithOverload(req.FunctionName, FunctionType(req.FunctionType), bindParams.Args, bindParams.InputSchema)
+	fn, err := w.resolveFunction(w.lookupFor(&req, bindParams))
 	if err != nil {
 		LogRPC.Debug("bind: resolve function failed", "function", req.FunctionName, "err", err)
 		return BindResponseWire{}, err
@@ -577,7 +587,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	}
 
 	// Resolve the function with overload resolution
-	fn, err := w.resolveFunctionWithOverload(bindReq.FunctionName, FunctionType(bindReq.FunctionType), bindParams.Args, bindParams.InputSchema)
+	fn, err := w.resolveFunction(w.lookupFor(bindReq, bindParams))
 	if err != nil {
 		LogRPC.Debug("init: resolve function failed", "function", bindReq.FunctionName, "err", err)
 		return nil, err
@@ -1034,7 +1044,7 @@ func (w *Worker) handleTableFunctionStatistics(ctx context.Context, callCtx *vgi
 	}
 	bindParams.Auth = callCtx.Auth
 
-	fn, err := w.resolveFunctionWithOverload(bindReq.FunctionName, FunctionType(bindReq.FunctionType), bindParams.Args, bindParams.InputSchema)
+	fn, err := w.resolveFunction(w.lookupFor(bindReq, bindParams))
 	if err != nil {
 		return nil, err
 	}
@@ -1063,7 +1073,7 @@ func (w *Worker) handleCardinality(ctx context.Context, callCtx *vgirpc.CallCont
 	}
 	bindParams.Auth = callCtx.Auth
 
-	fn, err := w.resolveFunctionWithOverload(bindReq.FunctionName, FunctionType(bindReq.FunctionType), bindParams.Args, bindParams.InputSchema)
+	fn, err := w.resolveFunction(w.lookupFor(bindReq, bindParams))
 	if err != nil {
 		return TableCardinality{}, err
 	}
@@ -1100,6 +1110,9 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 		FunctionName: req.FunctionName,
 		FunctionType: FunctionType(req.FunctionType),
 		Args:         args,
+	}
+	if req.SchemaName != nil {
+		params.SchemaName = *req.SchemaName
 	}
 
 	if req.InputSchema != nil {
@@ -1167,6 +1180,21 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 	}
 
 	return params, nil
+}
+
+// lookupFor builds the (catalog, schema, name) resolution key for a bind_call
+// whose params were parsed on the live path — where parseBindRequest has
+// already opened the attachment down to the catalog's own plaintext, so the
+// catalog name reads straight off it.
+func (w *Worker) lookupFor(req *BindRequestWire, params *BindParams) functionLookup {
+	return functionLookup{
+		Name:        req.FunctionName,
+		Type:        FunctionType(req.FunctionType),
+		Schema:      params.SchemaName,
+		Catalog:     w.catalogOfAttach(params.AttachOpaqueData),
+		Args:        params.Args,
+		InputSchema: params.InputSchema,
+	}
 }
 
 // normalizeFunctionType converts DuckDB function type strings to our canonical values.

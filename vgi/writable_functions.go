@@ -21,17 +21,18 @@ const (
 	writableDeleteFunctionName = "vgi_writable_delete"
 )
 
-// registerWritableFunctions registers the four generic writable table
-// functions on the worker. Called automatically when the first writable
-// catalog is registered.
-func (w *Worker) registerWritableFunctions() {
-	if _, ok := w.tables[writableScanFunctionName]; ok {
-		return
-	}
-	w.RegisterTable(AsTableFunction[writableScanState](&writableScanFn{w: w}))
-	w.RegisterTableInOut(&writableInsertFn{w: w})
-	w.RegisterTableInOut(&writableUpdateFn{w: w})
-	w.RegisterTableInOut(&writableDeleteFn{w: w})
+// registerWritableFunctions registers the four generic writable table functions
+// for one writable catalog. Called automatically per RegisterWritableCatalog.
+//
+// One set is registered per catalog rather than one shared set, because every
+// function is homed in exactly one catalog: a bind arriving through catalog X
+// resolves only functions homed in X, so a single shared registration would be
+// reachable from just one of the worker's writable catalogs.
+func (w *Worker) registerWritableFunctions(catalogName string) {
+	w.RegisterTableForCatalog(catalogName, AsTableFunction[writableScanState](&writableScanFn{w: w}))
+	w.RegisterTableInOutForCatalog(catalogName, &writableInsertFn{w: w})
+	w.RegisterTableInOutForCatalog(catalogName, &writableUpdateFn{w: w})
+	w.RegisterTableInOutForCatalog(catalogName, &writableDeleteFn{w: w})
 }
 
 // findWritableTable looks up a (schema, table) across all writable catalogs.

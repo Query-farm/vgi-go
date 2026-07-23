@@ -4,6 +4,8 @@ package vgi
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -272,103 +274,183 @@ func getArgSpecsFromFn(fn interface{}) []ArgSpec {
 	return nil
 }
 
-// resolveFunctionWithOverload looks up a function by name and type, then uses
-// overload resolution when multiple candidates exist.
-func (w *Worker) resolveFunctionWithOverload(name string, ft FunctionType, args *Arguments, inputSchema *arrow.Schema) (interface{}, error) {
-	ft = normalizeFunctionType(ft)
+// functionLookup names the implementation a call is asking for. A function name
+// alone is not a unique key — the same name may be declared in two schemas of
+// one catalog, or in two catalogs served by one worker process — so resolution
+// takes the whole (catalog, schema, name) triple plus the argument shape.
+type functionLookup struct {
+	// Name is the function name the caller invoked.
+	Name string
+	// Type is the DuckDB-side function type (scalar/table/aggregate/...).
+	Type FunctionType
+	// Schema is the catalog schema the caller named, lowercased by the
+	// resolver. Empty when the caller named none (a COPY handler bind, or a
+	// pre-1.1.0 client), which widens the lookup to every schema.
+	Schema string
+	// Catalog is the catalog the call arrived through, derived from the
+	// attachment. Empty when there is no attachment (or it could not be
+	// opened), which disables catalog scoping for this lookup.
+	Catalog string
+	// Args and InputSchema drive overload resolution within the matched set.
+	Args        *Arguments
+	InputSchema *arrow.Schema
+}
 
-	var candidates []interface{}
+// candidate pairs a registered implementation with the origin recorded for it,
+// so the resolver can filter on the declaring schema/catalog.
+type candidate struct {
+	fn     interface{}
+	origin funcOrigin
+}
 
-	switch ft {
+// collect appends every registration of (kind, name) from one registry.
+func collect[T any](w *Worker, reg map[string][]T, kind funcKind, name string, out []candidate) []candidate {
+	for i, fn := range reg[name] {
+		out = append(out, candidate{fn: fn, origin: w.originOf(kind, name, i)})
+	}
+	return out
+}
+
+// candidatesFor gathers every registration of name, preferring the registry
+// matching the requested function type and falling back to the others (DuckDB
+// reports table-in-out and table-buffering functions as TABLE, and old clients
+// may send an unrecognized type).
+func (w *Worker) candidatesFor(name string, ft FunctionType) []candidate {
+	var out []candidate
+
+	switch normalizeFunctionType(ft) {
 	case FunctionTypeScalar:
-		if fns, ok := w.scalars[name]; ok {
-			for _, fn := range fns {
-				candidates = append(candidates, fn)
-			}
-		}
+		out = collect(w, w.scalars, kindScalar, name, out)
 	case FunctionTypeTable:
-		if fns, ok := w.tables[name]; ok {
-			for _, fn := range fns {
-				candidates = append(candidates, fn)
-			}
+		out = collect(w, w.tables, kindTable, name, out)
+		if len(out) == 0 {
+			out = collect(w, w.tableInOuts, kindTableInOut, name, out)
 		}
-		if len(candidates) == 0 {
-			if fns, ok := w.tableInOuts[name]; ok {
-				for _, fn := range fns {
-					candidates = append(candidates, fn)
-				}
-			}
-		}
-		if len(candidates) == 0 {
-			if fns, ok := w.tableBufferings[name]; ok {
-				for _, fn := range fns {
-					candidates = append(candidates, fn)
-				}
-			}
+		if len(out) == 0 {
+			out = collect(w, w.tableBufferings, kindTableBuffering, name, out)
 		}
 	case FunctionTypeAggregate:
-		if fns, ok := w.tableInOuts[name]; ok {
-			for _, fn := range fns {
-				candidates = append(candidates, fn)
-			}
-		}
+		out = collect(w, w.tableInOuts, kindTableInOut, name, out)
 	case FunctionTypeTableBuffering:
-		if fns, ok := w.tableBufferings[name]; ok {
-			for _, fn := range fns {
-				candidates = append(candidates, fn)
-			}
-		}
+		out = collect(w, w.tableBufferings, kindTableBuffering, name, out)
 	}
 
-	// Fallback: try all registries
-	if len(candidates) == 0 {
-		if fns, ok := w.scalars[name]; ok {
-			for _, fn := range fns {
-				candidates = append(candidates, fn)
-			}
-		}
+	// Fallback: try all registries.
+	if len(out) == 0 {
+		out = collect(w, w.scalars, kindScalar, name, out)
 	}
-	if len(candidates) == 0 {
-		if fns, ok := w.tables[name]; ok {
-			for _, fn := range fns {
-				candidates = append(candidates, fn)
-			}
-		}
+	if len(out) == 0 {
+		out = collect(w, w.tables, kindTable, name, out)
 	}
-	if len(candidates) == 0 {
-		if fns, ok := w.tableInOuts[name]; ok {
-			for _, fn := range fns {
-				candidates = append(candidates, fn)
-			}
-		}
+	if len(out) == 0 {
+		out = collect(w, w.tableInOuts, kindTableInOut, name, out)
 	}
-	if len(candidates) == 0 {
-		if fns, ok := w.tableBufferings[name]; ok {
-			for _, fn := range fns {
-				candidates = append(candidates, fn)
-			}
-		}
+	if len(out) == 0 {
+		out = collect(w, w.tableBufferings, kindTableBuffering, name, out)
 	}
+	return out
+}
 
-	if len(candidates) == 0 {
+// schemasOf lists, sorted and deduplicated, the schemas the given candidates
+// were declared in. Used to make a failed or ambiguous lookup actionable.
+func schemasOf(cands []candidate) []string {
+	seen := make(map[string]struct{}, len(cands))
+	var out []string
+	for _, c := range cands {
+		if _, ok := seen[c.origin.schema]; ok {
+			continue
+		}
+		seen[c.origin.schema] = struct{}{}
+		out = append(out, c.origin.schema)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// resolveFunction resolves a call to a single registered implementation.
+//
+// Scoping runs before overload resolution, narrowing "every registration of
+// this name" to "the registrations the caller could possibly mean":
+//
+//   - Catalog: a call arriving through catalog X can only reach functions
+//     registered catalog-wide or scoped to X. This is what lets one worker
+//     process serve two catalogs that each declare the same function name.
+//   - Schema: a schema-qualified call is exact — only functions declared in
+//     that schema are candidates, so a name registered in two schemas
+//     dispatches to the one the caller named instead of colliding. Naming a
+//     schema that does not hold the function reports where it does live.
+//
+// Only then do argument signatures pick between same-schema overloads. A caller
+// that named no schema and left a tie spanning several schemas gets an
+// ambiguity error listing them, rather than an arbitrary winner.
+func (w *Worker) resolveFunction(lk functionLookup) (interface{}, error) {
+	cands := w.candidatesFor(lk.Name, lk.Type)
+	if len(cands) == 0 {
 		return nil, &vgirpc.RpcError{
 			Type:    "ValueError",
-			Message: fmt.Sprintf("Unknown function: '%s'", name),
+			Message: fmt.Sprintf("Unknown function: '%s'", lk.Name),
 		}
 	}
 
-	if len(candidates) == 1 {
-		return candidates[0], nil
+	if lk.Catalog != "" {
+		var inCatalog []candidate
+		for _, c := range cands {
+			if c.origin.catalog == lk.Catalog {
+				inCatalog = append(inCatalog, c)
+			}
+		}
+		if len(inCatalog) == 0 {
+			return nil, &vgirpc.RpcError{
+				Type:    "ValueError",
+				Message: fmt.Sprintf("Function '%s' is not available in catalog '%s'", lk.Name, lk.Catalog),
+			}
+		}
+		cands = inCatalog
 	}
 
-	fn, err := resolveOverload(candidates, args, inputSchema)
+	if schema := strings.ToLower(lk.Schema); schema != "" {
+		var inSchema []candidate
+		for _, c := range cands {
+			if c.origin.schema == schema {
+				inSchema = append(inSchema, c)
+			}
+		}
+		if len(inSchema) == 0 {
+			return nil, &vgirpc.RpcError{
+				Type: "ValueError",
+				Message: fmt.Sprintf("Function '%s' is not registered in schema '%s'. It is available in: %v",
+					lk.Name, lk.Schema, schemasOf(cands)),
+			}
+		}
+		cands = inSchema
+	}
+
+	if len(cands) == 1 {
+		return cands[0].fn, nil
+	}
+
+	if lk.Schema == "" {
+		if schemas := schemasOf(cands); len(schemas) > 1 {
+			return nil, &vgirpc.RpcError{
+				Type: "ValueError",
+				Message: fmt.Sprintf("Ambiguous function call '%s': declared in more than one schema (%v) — "+
+					"qualify the call with a schema to disambiguate", lk.Name, schemas),
+			}
+		}
+	}
+
+	impls := make([]interface{}, 0, len(cands))
+	for _, c := range cands {
+		impls = append(impls, c.fn)
+	}
+	fn, err := resolveOverload(impls, lk.Args, lk.InputSchema)
 	if err != nil {
 		return nil, err
 	}
 	if fn == nil {
 		return nil, &vgirpc.RpcError{
 			Type:    "ValueError",
-			Message: fmt.Sprintf("No matching overload for function '%s'", name),
+			Message: fmt.Sprintf("No matching overload for function '%s'", lk.Name),
 		}
 	}
 	return fn, nil

@@ -26,8 +26,8 @@ type DynamicToStringHook interface {
 type DynamicToStringParams struct {
 	// FunctionName is the table function being profiled.
 	FunctionName string
-	// AttachOpaqueData identifies the catalog the function was invoked under (nil
-	// for direct vgi_table_function() calls).
+	// AttachOpaqueData identifies the catalog the function was invoked under
+	// (nil when the call carried no attachment).
 	AttachOpaqueData []byte
 	// GlobalExecutionID matches the execution_id returned from init_global
 	// for this scan; the function uses it to look up storage written during

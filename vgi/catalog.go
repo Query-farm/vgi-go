@@ -27,6 +27,34 @@ func catalogNameOf(attachOpaqueData []byte) string {
 	return string(attachOpaqueData)
 }
 
+// catalogOfAttach names the catalog an unwrapped attach plaintext belongs to.
+// Every function is homed in exactly one catalog, so both the function listing
+// and bind dispatch need one catalog name per request — this is where it comes
+// from.
+//
+// Writable catalogs mint their own "writable:<name>" plaintext, so their name is
+// recovered through that mapping; every other catalog carries its name up front.
+// A plaintext naming no catalog this worker serves — an attach validator that
+// replaced it with its own encoding (a resolved data version, encoded ATTACH
+// options), or no attachment at all — resolves to the worker's own catalog,
+// which is the only catalog such a worker can mean.
+func (w *Worker) catalogOfAttach(attachOpaqueData []byte) string {
+	if c := w.writableByAttachOpaqueData(attachOpaqueData); c != nil {
+		return c.Name
+	}
+	name := catalogNameOf(attachOpaqueData)
+	if name == w.catalogName {
+		return name
+	}
+	if _, ok := w.catalogAliases[name]; ok {
+		return name
+	}
+	if _, ok := w.extraCatalogs[name]; ok {
+		return name
+	}
+	return w.catalogName
+}
+
 // SerializedItems is a list of Arrow-IPC-encoded items sent over the wire.
 type SerializedItems = [][]byte
 
@@ -490,17 +518,36 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		version:     1,
 	}
 
-	// Create "main" schema with all functions
-	mainComment := "Default schema containing all registered functions"
-	if c, ok := w.schemaComments["main"]; ok {
-		mainComment = c
+	// schemaFor returns the schema entry for name, creating it on first use.
+	// Functions are placed in the schema they were *declared* in (see
+	// Worker.funcOrigins), so a schema may come into existence purely because a
+	// function names it.
+	schemaFor := func(name string) *catalogSchemaInfo {
+		if si, ok := cat.schemas[name]; ok {
+			return si
+		}
+		comment := name + " schema"
+		switch name {
+		case "main":
+			comment = "Default schema containing all registered functions"
+		case "data":
+			comment = "Data schema"
+		}
+		if c, ok := w.schemaComments[name]; ok {
+			comment = c
+		}
+		si := &catalogSchemaInfo{
+			info: &SchemaInfo{
+				Name:    name,
+				Comment: comment,
+			},
+		}
+		cat.schemas[name] = si
+		return si
 	}
-	mainSchema := &catalogSchemaInfo{
-		info: &SchemaInfo{
-			Name:    "main",
-			Comment: mainComment,
-		},
-	}
+
+	// "main" always exists, even for a worker that registers nothing.
+	schemaFor("main")
 
 	// Helper to build FunctionInfo from any function type
 	buildFunctionInfo := func(name string, ft FunctionType, meta FunctionMetadata, specs []ArgSpec) FunctionInfo {
@@ -558,8 +605,22 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		)},
 	}, nil)
 
+	// place files a FunctionInfo under its registration's home — the
+	// (catalog, schema) pair recorded in Worker.funcOrigins, index-aligned with
+	// the registry slice. The home lives per-registration rather than per-name
+	// so a name declared twice — in two schemas, or in two catalogs served by
+	// this worker — stays two distinct entries.
+	place := func(kind funcKind, name string, idx int, fi FunctionInfo) {
+		origin := w.originOf(kind, name, idx)
+		fi.SchemaName = origin.schema
+		fi.catalogHome = origin.catalog
+		fi.unlisted = origin.unlisted
+		si := schemaFor(origin.schema)
+		si.functions = append(si.functions, fi)
+	}
+
 	for name, fns := range w.scalars {
-		for _, fn := range fns {
+		for i, fn := range fns {
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeScalar, meta, fn.ArgumentSpecs())
 			if meta.ReturnType != nil {
@@ -569,20 +630,20 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			} else {
 				fi.OutputSchema = dynamicOutputSchema
 			}
-			mainSchema.functions = append(mainSchema.functions, fi)
+			place(kindScalar, name, i, fi)
 		}
 	}
 
 	for name, fns := range w.tables {
-		for _, fn := range fns {
+		for i, fn := range fns {
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs())
-			mainSchema.functions = append(mainSchema.functions, fi)
+			place(kindTable, name, i, fi)
 		}
 	}
 
 	for name, fns := range w.tableInOuts {
-		for _, fn := range fns {
+		for i, fn := range fns {
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs()) // table-in-out registers as "table"
 			fi.HasFinalize = meta.HasFinalize
@@ -590,20 +651,20 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			// columns — the C++ extension reads this to register the function
 			// with real-typed args serving literal / column / LATERAL shapes.
 			fi.InputFromArgs = meta.InputFromArgs
-			mainSchema.functions = append(mainSchema.functions, fi)
+			place(kindTableInOut, name, i, fi)
 		}
 	}
 
 	for name, fns := range w.tableBufferings {
-		for _, fn := range fns {
+		for i, fn := range fns {
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeTableBuffering, meta, fn.ArgumentSpecs())
-			mainSchema.functions = append(mainSchema.functions, fi)
+			place(kindTableBuffering, name, i, fi)
 		}
 	}
 
 	for name, fns := range w.aggregates {
-		for _, fn := range fns {
+		for i, fn := range fns {
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeAggregate, meta, fn.ArgumentSpecs())
 			if meta.ReturnType != nil {
@@ -617,31 +678,20 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			fi.StreamingPartitioned = meta.StreamingPartitioned
 			fi.OrderDependent = meta.OrderDependent
 			fi.DistinctDependent = meta.DistinctDependent
-			mainSchema.functions = append(mainSchema.functions, fi)
+			place(kindAggregate, name, i, fi)
 		}
 	}
 
-	cat.schemas["main"] = mainSchema
-
 	// Add "data" schema only when the worker actually registers tables,
 	// views, macros, or an explicit comment for it. Empty workers (e.g. the
-	// versioned-example worker) should expose main only.
+	// versioned-example worker) should expose main only. (A function declared
+	// into "data" has already created it above.)
 	_, hasDataTables := w.catalogTables["data"]
 	_, hasDataViews := w.catalogViews["data"]
 	_, hasDataMacros := w.catalogMacros["data"]
 	_, hasDataComment := w.schemaComments["data"]
 	if hasDataTables || hasDataViews || hasDataMacros || hasDataComment {
-		dataComment := "Data schema"
-		if c, ok := w.schemaComments["data"]; ok {
-			dataComment = c
-		}
-		dataSchema := &catalogSchemaInfo{
-			info: &SchemaInfo{
-				Name:    "data",
-				Comment: dataComment,
-			},
-		}
-		cat.schemas["data"] = dataSchema
+		schemaFor("data")
 	}
 
 	// Populate dynamic-only schemas (those without any registered table/view/macro
@@ -1243,7 +1293,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			// Per-catalog function visibility (e.g. proj_repro_* only surfacing
 			// under projection_repro, accumulate_* only under accumulate) compares
 			// against it.
-			catalogName := catalogNameOf(req.AttachOpaqueData)
+			catalogName := w.catalogOfAttach(req.AttachOpaqueData)
 
 			var items [][]byte
 			for i := range si.functions {
@@ -1265,13 +1315,14 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 						}
 					}
 				}
-				// Catalog-scoped function visibility: if this function is
-				// pinned to a specific catalog and the current attach is for
-				// a different catalog, hide it.
-				if scope, ok := w.catalogFunctionScope[fi.Name]; ok {
-					if catalogName != "" && catalogName != scope {
-						continue
-					}
+				// Every function has exactly one home catalog; a catalog only
+				// lists what it owns. (An unresolvable attach leaves
+				// catalogName empty — nothing to compare against, so list all.)
+				if fi.unlisted {
+					continue
+				}
+				if catalogName != "" && catalogName != fi.catalogHome {
+					continue
 				}
 				LogCatalog.Debug("catalog: returning function", "name", fi.Name, "type", fi.FunctionType)
 				data, err := SerializeFunctionInfo(fi)

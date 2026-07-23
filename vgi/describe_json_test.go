@@ -168,11 +168,8 @@ func TestDescribeAliasCatalogScoping(t *testing.T) {
 		Name:         "acc_read",
 		SchemaName:   "main",
 		FunctionType: FunctionTypeTable,
+		catalogHome:  "acc",
 	})
-	if w.catalogFunctionScope == nil {
-		w.catalogFunctionScope = map[string]string{}
-	}
-	w.catalogFunctionScope["acc_read"] = "acc"
 
 	hasFn := func(schemas []map[string]any, schema, fn string) bool {
 		for _, s := range schemas {
