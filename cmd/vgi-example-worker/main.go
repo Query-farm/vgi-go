@@ -886,7 +886,7 @@ func main() {
 			return &vgi.ScanFunctionResult{
 				FunctionName: "read_parquet",
 				PositionalArguments: []vgi.ScanArg{
-					{Value: "/tmp/rff_seg.parquet", Type: arrow.BinaryTypes.String},
+					{Value: branchPath("rff_seg.parquet"), Type: arrow.BinaryTypes.String},
 				},
 			}, nil
 		}
@@ -896,7 +896,7 @@ func main() {
 			return &vgi.ScanFunctionResult{
 				FunctionName: "read_parquet",
 				PositionalArguments: []vgi.ScanArg{
-					{Value: "/tmp/rff_hive/*/*/*.parquet", Type: arrow.BinaryTypes.String},
+					{Value: branchPath("rff_hive/*/*/*.parquet"), Type: arrow.BinaryTypes.String},
 				},
 				NamedArguments: map[string]vgi.ScanArg{
 					"hive_partitioning": {Value: true, Type: arrow.FixedWidthTypes.Boolean},
@@ -1038,6 +1038,21 @@ func int64Ptr(n int64) *int64 { return &n }
 
 func strPtr(s string) *string { return &s }
 
+// branchPath returns a native scan-branch file path under the shared scratch
+// dir. This fixture and the coupled `.test` files must name the SAME concrete
+// path: the tests write it via `${VGI_TEST_BRANCH_DIR}`, so this reads the same
+// env var (defaulting to the OS temp dir — hardcoding `/tmp` breaks on Windows).
+// Forward-slashed with no trailing separator so it matches the test's COPY-TO
+// target byte-for-byte.
+func branchPath(name string) string {
+	dir := os.Getenv("VGI_TEST_BRANCH_DIR")
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	dir = strings.TrimRight(strings.ReplaceAll(dir, "\\", "/"), "/")
+	return dir + "/" + name
+}
+
 // multiBranchScanBranchesGet resolves the physical sources for the
 // multi_branch_* fixture tables. It mirrors vgi-python's
 // ExampleCatalog.table_scan_branches_get. Returns (nil, false) for any other
@@ -1068,26 +1083,26 @@ func multiBranchScanBranchesGet(_ []byte, schemaName, name string, _, _ *string)
 		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{a, b}}, true, nil
 	case "multi_branch_hetero":
 		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{
-			seq(50), readParquet("/tmp/vgi_hetero_branch.parquet"),
+			seq(50), readParquet(branchPath("vgi_hetero_branch.parquet")),
 		}}, true, nil
 	case "multi_branch_iceberg":
 		return &vgi.ScanBranchesResult{
 			Branches: []vgi.ScanBranch{
 				seq(50),
-				{FunctionName: "iceberg_scan", PositionalArguments: []vgi.ScanArg{{Value: "/tmp/vgi_iceberg_branch", Type: arrow.BinaryTypes.String}}},
+				{FunctionName: "iceberg_scan", PositionalArguments: []vgi.ScanArg{{Value: branchPath("vgi_iceberg_branch"), Type: arrow.BinaryTypes.String}}},
 			},
 			RequiredExtensions: []string{"iceberg"},
 		}, true, nil
 	case "multi_branch_nopushdown":
 		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{
 			seq(50),
-			{FunctionName: "read_csv_auto", PositionalArguments: []vgi.ScanArg{{Value: "/tmp/vgi_nopushdown_branch.csv", Type: arrow.BinaryTypes.String}}},
+			{FunctionName: "read_csv_auto", PositionalArguments: []vgi.ScanArg{{Value: branchPath("vgi_nopushdown_branch.csv"), Type: arrow.BinaryTypes.String}}},
 		}}, true, nil
 	case "multi_branch_recon":
 		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{
-			readParquet("/tmp/vgi_recon_a_b.parquet"),
-			readParquet("/tmp/vgi_recon_b_a.parquet"),
-			readParquet("/tmp/vgi_recon_a_only.parquet"),
+			readParquet(branchPath("vgi_recon_a_b.parquet")),
+			readParquet(branchPath("vgi_recon_b_a.parquet")),
+			readParquet(branchPath("vgi_recon_a_only.parquet")),
 		}}, true, nil
 	case "multi_branch_empty":
 		// Intentionally empty — exercises the C++ "loud at attach" rejection.
