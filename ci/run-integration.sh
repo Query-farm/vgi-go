@@ -322,6 +322,83 @@ case "$TRANSPORT" in
     echo "::error::unknown TRANSPORT=$TRANSPORT (expected stdio|shm|launch|http)"; exit 1 ;;
 esac
 
+# ---------------------------------------------------------------------------
+# Skip contract + executed-case floor.
+#
+# haybarn-unittest exits 0 whether one test skipped or every test did: a failed
+# `require` / `require-env` is a SKIP, not an error. So "All tests passed" is
+# not evidence anything ran — a dead shared worker, an empty stage (the bash 3.2
+# empty-array bug), or a mis-wired env var all read as green while the suite
+# quietly tested nothing. Two guards close that gap (summarize_run, below):
+#
+#   * every skip reason must be named in EXPECTED_SKIP_REASONS — an unlisted
+#     reason (e.g. a whole-suite `require httpfs`) fails the lane;
+#   * the count of executed cases must stay above MIN_EXECUTED — the signature
+#     of a silent collapse is this number falling off a cliff.
+#
+# The strings are the exact reasons the runner prints under "Skipped tests for
+# the following reasons:". These are the fixtures / lanes vgi-go deliberately
+# does not stand up; each is a legitimate, load-bearing skip.
+EXPECTED_SKIP_REASONS=(
+  'require-env VGI_BAD_ENUM_WORKER'              # malformed-ENUM fixture, not wired here
+  'require-env VGI_BAD_PROTOCOL_WORKER'          # incompatible-protocol fixture, not wired here
+  'require-env VGI_RULES_WORKER'                 # vgi-rust multibatch-repro fixture
+  'require-env VGI_SCHEMA_RECONCILE_DB'          # schema-reconcile sqlite fixture, not set here
+  'require-env VGI_WORKER_SUPPORTS_DYNAMIC_CODE' # dynamic-code registration, not implemented
+  'require-env VGI_HTTP_TRANSPORT'               # http-identity tests; vgi-go never sets this flag
+  'require-env VGI_HTTP_DISABLE_ZSTD'            # gzip-fallback fixture server
+  'require-env VGI_HTTP_NO_COMPRESSION'          # no-compression fixture server (Python-side)
+  'require-env VGI_TEST_BEARER_TOKEN'            # bearer-auth fixture server
+  'require-env VGI_TEST_BRANCH_DIR'              # multi-branch Iceberg fixture tree
+  'require-env VGI_TEST_COMPANION_TARGET'        # companion-catalog fixture (Python-side)
+  'require-env VGI_DOCKER_IMAGE'                 # containerised worker lane
+  'require-env VGI_DOCKER_TCP_IMAGE'             # containerised worker over TCP
+  'require-env VGI_GITHUB_NETWORK_TESTS'         # hits github.com; opt-in only
+)
+# Lane-specific additions — a skip that is expected on one lane is a red flag on
+# another (e.g. VGI_TEST_DEDICATED_WORKER skipping on stdio would mean the crash
+# tests silently stopped running).
+case "$TRANSPORT" in
+  stdio)
+    # The launcher-only tests skip here (this is not the launcher transport).
+    EXPECTED_SKIP_REASONS+=('require-env VGI_REQUIRE_LAUNCHER_TRANSPORT')
+    ;;
+  shm|launch)
+    # Crash tests are stdio-only (VGI_TEST_DEDICATED_WORKER); the versioned
+    # *_http catalogs are booted only on the stdio lane.
+    EXPECTED_SKIP_REASONS+=(
+      'require-env VGI_TEST_DEDICATED_WORKER'
+      'require-env VGI_VERSIONED_HTTP_WORKER'
+      'require-env VGI_VERSIONED_TABLES_HTTP_WORKER'
+    )
+    ;;
+  http)
+    # Over http: crash tests gate off (shared server), launcher tests gate off,
+    # and the subprocess-path worker vars are unset (only their _HTTP_ variants
+    # would apply, and only the main worker is booted).
+    EXPECTED_SKIP_REASONS+=(
+      'require-env VGI_TEST_DEDICATED_WORKER'
+      'require-env VGI_REQUIRE_LAUNCHER_TRANSPORT'
+      'require-env VGI_VERSIONED_HTTP_WORKER'
+      'require-env VGI_VERSIONED_TABLES_HTTP_WORKER'
+      'require-env VGI_VERSIONED_WORKER'
+      'require-env VGI_VERSIONED_TABLES_WORKER'
+      'require-env VGI_ATTACH_OPTIONS_WORKER'
+    )
+    ;;
+esac
+
+# Floor on executed cases (main suite + the isolated simple_writable run,
+# summed). Deliberately a floor, not an equality — the upstream suite grows.
+# Measured 2026-07-24 against Query-farm/vgi @ main: stdio 269, launch/shm 263,
+# http 254 executed. The floors sit ~15 below, leaving headroom for churn while
+# staying far above the handful a silent collapse would leave.
+case "$TRANSPORT" in
+  stdio)      MIN_EXECUTED="${MIN_EXECUTED:-250}" ;;
+  shm|launch) MIN_EXECUTED="${MIN_EXECUTED:-245}" ;;
+  http)       MIN_EXECUTED="${MIN_EXECUTED:-235}" ;;
+esac
+
 cd "$STAGE"
 
 echo "Warming the extension cache (vgi from community, deps from core) ..."
@@ -350,6 +427,74 @@ EOF
 "$HAYBARN_UNITTEST" "test/_warm.test" >/dev/null 2>&1 || echo "::warning::extension warm step did not fully succeed"
 rm -f "$STAGE/test/_warm.test"
 
+# summarize_run <log> — parse the runner's console report and enforce the skip
+# contract + accumulate the executed-case count (checked against MIN_EXECUTED
+# after all invocations). Returns non-zero on an unexpected skip reason or a
+# runner that matched no tests at all (the empty-stage signature).
+#
+#   total    = the N in the last "[i/N] (..%):" progress line (cases staged)
+#   skipped  = the sum of the "Skipped tests for the following reasons:" block
+#   executed = total - skipped
+TOTAL_EXECUTED=0
+summarize_run() {
+  local log="$1" total skipped executed rc=0 reason
+  if grep -q 'No test cases matched\|No tests ran' "$log"; then
+    echo "::error::the runner matched no test cases — the glob or the staging is wrong" \
+         "(an empty stage still exits 0). transport=$TRANSPORT"
+    return 1
+  fi
+  total="$(sed -n 's/^\[[0-9]*\/\([0-9]*\)\].*/\1/p' "$log" | tail -1)"
+  [ -n "$total" ] || { echo "::error::could not parse a test-case total out of the report"; return 1; }
+  skipped="$(awk '
+    /^Skipped tests for the following reasons:/ { in_block = 1; next }
+    in_block && /^[[:space:]]*$/               { in_block = 0; next }
+    in_block && match($0, /: [0-9]+[[:space:]]*$/) { n += substr($0, RSTART + 2) }
+    END { print n + 0 }' "$log")"
+  executed=$(( total - skipped ))
+  echo "  executed: $executed / $total   skipped: $skipped   (transport=$TRANSPORT)"
+  # Every skip reason must be on the allowlist; an unlisted one fails the lane.
+  if [ "$skipped" -gt 0 ]; then
+    while IFS= read -r reason; do
+      [ -n "$reason" ] || continue
+      if printf '%s\n' "${EXPECTED_SKIP_REASONS[@]}" | grep -qxF "$reason"; then
+        continue
+      fi
+      echo "::error::unexpected skip reason '$reason'. Either a gate regressed and a" \
+           "whole file silently stopped running, or this skip is legitimate — if so add" \
+           "it to EXPECTED_SKIP_REASONS in ci/run-integration.sh with the reason why."
+      rc=1
+    done < <(awk '
+      /^Skipped tests for the following reasons:/ { in_block = 1; next }
+      in_block && /^[[:space:]]*$/               { in_block = 0; next }
+      in_block && match($0, /: [0-9]+[[:space:]]*$/) { print substr($0, 1, RSTART - 1) }' "$log")
+  fi
+  TOTAL_EXECUTED=$(( TOTAL_EXECUTED + executed ))
+  return "$rc"
+}
+
+# run_unittest <glob...> — run one haybarn-unittest invocation, streaming its
+# report, then fail on anything its exit code cannot express: a fatal-signal
+# report a fork()ed child printed against the parent's counters (invisible to
+# the exit code by construction), an unexpected skip, or an empty stage.
+run_unittest() {
+  local log rc=0
+  log="$(mktemp)"
+  # `&& rc=0 || rc=${PIPESTATUS[0]}` keeps the suite's own exit code without
+  # tripping errexit and without a trailing `|| true` (which, as a new simple
+  # command, would overwrite PIPESTATUS with 0 — the accounting must still run
+  # when the suite itself failed).
+  "$HAYBARN_UNITTEST" "$@" 2>&1 | tee "$log" && rc=0 || rc="${PIPESTATUS[0]}"
+  if grep -q 'due to a fatal error condition' "$log"; then
+    echo "::error::a forked child ran the test harness's signal handler (see the" \
+         "'fatal error condition' block above). The parent exited $rc and would" \
+         "otherwise have passed. This is invisible to the exit code by construction."
+    rc=1
+  fi
+  summarize_run "$log" || rc=1
+  rm -f "$log"
+  return "$rc"
+}
+
 # Run the whole lane in one invocation, streaming the native sqllogictest report
 # (a progress line per file + the final "All tests passed (.. N assertions ..)"
 # summary). Out-of-scope tests were dropped at staging, so the glob never
@@ -364,12 +509,24 @@ rm -f "$STAGE/test/_warm.test"
 # attaches a spawned binary (VGI_SIMPLE_WRITABLE_WORKER), even on the http lane.
 echo "Running suite ($SUITE_GLOB, transport=$TRANSPORT) ..."
 suite_rc=0
-"$HAYBARN_UNITTEST" "$SUITE_GLOB" "~test/sql/integration/simple_writable/*" || suite_rc=$?
+run_unittest "$SUITE_GLOB" "~test/sql/integration/simple_writable/*" || suite_rc=$?
 assert_bg_workers_alive || suite_rc=1
 
 echo "Running simple_writable (isolated process) ..."
-"$HAYBARN_UNITTEST" "test/sql/integration/simple_writable/*" || suite_rc=$?
+run_unittest "test/sql/integration/simple_writable/*" || suite_rc=$?
 assert_bg_workers_alive || suite_rc=1
+
+# The executed-case floor is checked once against the summed total (main suite +
+# the isolated simple_writable run) — see MIN_EXECUTED above.
+if [ "$TOTAL_EXECUTED" -lt "$MIN_EXECUTED" ]; then
+  echo "::error::only $TOTAL_EXECUTED test cases executed on the $TRANSPORT lane," \
+       "floor is MIN_EXECUTED=$MIN_EXECUTED. This is the signature of a suite-wide" \
+       "silent skip (a failed require is a SKIP, not an error). Do NOT lower the floor" \
+       "to make this pass — find what stopped running."
+  suite_rc=1
+else
+  echo "Executed $TOTAL_EXECUTED test cases (floor $MIN_EXECUTED) on the $TRANSPORT lane."
+fi
 
 # Coverage report. Fire the EXIT trap now (kill the background HTTP workers) so
 # they flush their pods before we read GOCOVERDIR, then summarise. Done even on

@@ -123,6 +123,37 @@ locally-built unittest). The HTTP-attach / bearer-auth / dynamic-code /
 schema-reconcile tests skip via their `require-env` gates (we don't set those
 workers), exactly as in the reference harness.
 
+## The skip contract + executed-case floor
+
+`haybarn-unittest` exits 0 whether one test skipped or every test did — a failed
+`require` / `require-env` is a **skip**, not an error. So "All tests passed" on
+its own is not evidence anything ran: a dead shared worker, an empty stage (the
+bash 3.2 empty-array bug that aborted `find`), or a mis-wired env var all read as
+green while the suite quietly tested nothing. `run-integration.sh` closes that
+gap with two guards in `summarize_run`, checked after every invocation:
+
+- **Skip allowlist.** Every skip reason the runner prints must appear in
+  `EXPECTED_SKIP_REASONS` (a base list plus per-lane additions — e.g.
+  `VGI_TEST_DEDICATED_WORKER` is an *expected* skip on the shared-worker lanes
+  but a red flag on `stdio`). An unlisted reason — the signature of a whole file
+  silently gated off, like `require httpfs: 227` — fails the lane. When a skip is
+  genuinely new and legitimate, add it to the list *with the reason why*.
+- **Executed-case floor.** The summed count of executed cases (main suite + the
+  isolated `simple_writable` run) must stay above a per-lane `MIN_EXECUTED`
+  (stdio 250, launch/shm 245, http 235 — floors ~15 below the measured counts,
+  leaving room for upstream growth). A collapse in this number is the tell of a
+  suite-wide silent skip. It is deliberately a floor, not an equality: **do not
+  lower it to make a run pass** — find what stopped running. Ported from
+  vgi-typescript, whose harness had this from the start and so never hit the
+  silent-void failures this one did.
+
+Two failure modes the runner's exit code cannot express are also caught:
+`assert_bg_workers_alive` fails the lane if the shared http worker dies mid-run
+(the stdio lane's secondary versioned http workers only warn — they back five
+files in the middle of the run), and `run_unittest` scans for the
+`fatal error condition` block a fork()ed child prints against the parent's
+counters (invisible to the exit code by construction).
+
 ## Run it locally
 
 ```bash
