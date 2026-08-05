@@ -295,10 +295,18 @@ type Worker struct {
 	aggStorage      *aggregateStorage
 	// streamingSessions tracks per-execution_id state for streaming-partitioned
 	// aggregates (aggregate_streaming_open/_chunk/_close).
-	streamingSessions    streamingSessionStore
-	catalogName          string
-	catalogComment       string
-	catalogTags          map[string]string
+	streamingSessions streamingSessionStore
+	catalogName       string
+	catalogComment    string
+	catalogTags       map[string]string
+	// globalFunctionNames / globalFunctionPrefix back the protocol-1.3.0
+	// global_functions + global_function_prefix fields of catalog_attach: the
+	// subset of this catalog's functions a client may republish into its own
+	// global (system.main) namespace, and the prefix it publishes them under.
+	// The Go analogue of vgi-python's Catalog(global_functions=...,
+	// global_function_prefix=...).
+	globalFunctionNames  []string
+	globalFunctionPrefix string
 	supportsTransactions bool
 	schemaComments       map[string]string
 	schemaTags           map[string]map[string]string
@@ -439,6 +447,34 @@ func WithCatalogComment(comment string) WorkerOption {
 func WithCatalogTags(tags map[string]string) WorkerOption {
 	return func(w *Worker) {
 		w.catalogTags = tags
+	}
+}
+
+// WithGlobalFunctions names the registered functions this catalog advertises
+// for publication into the client's *global* function namespace (DuckDB's
+// system.main), in the order they should be published. Each name is resolved
+// against the catalog's default schema; the serialized FunctionInfo of every
+// match is carried in catalog_attach's global_functions field (protocol
+// 1.3.0), under the *unprefixed* registered name — the prefix set by
+// WithGlobalFunctionPrefix is the client's to apply.
+//
+// Advertising a function does not change where the worker registers it: it
+// stays an ordinary member of its schema and is still callable as
+// catalog.schema.name. Mirrors vgi-python's Catalog(global_functions=[...]).
+func WithGlobalFunctions(names ...string) WorkerOption {
+	return func(w *Worker) {
+		w.globalFunctionNames = names
+	}
+}
+
+// WithGlobalFunctionPrefix sets the prefix a client prepends when publishing
+// this catalog's global functions (see WithGlobalFunctions) — e.g. prefix
+// "vgi_example" publishes global_scalar as vgi_example_global_scalar. Reported
+// by catalog_attach as global_function_prefix (protocol 1.3.0). Mirrors
+// vgi-python's Catalog(global_function_prefix=...).
+func WithGlobalFunctionPrefix(prefix string) WorkerOption {
+	return func(w *Worker) {
+		w.globalFunctionPrefix = prefix
 	}
 }
 
@@ -1016,6 +1052,17 @@ const (
 	transportTCP                          // concurrent connections — no cleanup hook (TTL sweep)
 )
 
+// ProtocolVersion is the VGI application protocol surface version this SDK
+// implements — the Go counterpart of VGI_PROTOCOL_VERSION in vgi-rust /
+// vgi-java and of VgiProtocol.protocol_version in vgi-python.
+//
+// It is carried in the vgi_rpc.protocol_version request metadata and enforced
+// as an exact major+minor match at the dispatch boundary, so it must track
+// vgi-python. Patch is ignored. 1.1.0 added schema_name to BindRequest; 1.2.0
+// added it to the unary requests that re-resolve a function by name; 1.3.0
+// adds global_functions and global_function_prefix to CatalogAttachResult.
+const ProtocolVersion = "1.3.0"
+
 func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 	// Configure structured logging.
 	// If a custom slog.Handler was supplied, install it directly — the caller
@@ -1046,6 +1093,10 @@ func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 	w.catalog = NewDefaultReadOnlyCatalog(w.catalogName, w)
 
 	s := vgirpc.NewServer()
+	// Declare the application protocol surface version. The framework
+	// advertises it via __describe__ and enforces an exact major+minor match
+	// against the client's vgi_rpc.protocol_version at dispatch.
+	s.SetProtocolVersion(ProtocolVersion)
 	// Execution-storage cleanup. The deferred-cleanup heuristic assumes a single
 	// serial dispatch stream (stdio); HTTP disables the deferred step. The unix
 	// (launcher) transport serves concurrent connections, where the hook's

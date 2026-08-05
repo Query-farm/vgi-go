@@ -54,6 +54,16 @@ func main() {
 		vgi.WithCatalogInfo(vgi.CatalogInfo{
 			SourceURL: &exampleSourceURL,
 		}),
+		// Global-function registration probes, one per function type, so a
+		// client's system.main publication path is exercised for all four.
+		// Dedicated functions (see examples/global_functions) rather than
+		// existing fixtures: this catalog is a cross-language contract, so
+		// reusing e.g. `double` would force every other implementation to make
+		// the same semantic change to a function it already ships. Published as
+		// vgi_example_global_scalar / _global_table / _global_agg /
+		// _global_buffered; they stay ordinary main-schema functions here.
+		vgi.WithGlobalFunctionPrefix("vgi_example"),
+		vgi.WithGlobalFunctions("global_scalar", "global_table", "global_agg", "global_buffered"),
 		vgi.WithSchemaComments(map[string]string{
 			"main": "Example functions for testing VGI",
 			"data": "Example tables backed by functions",

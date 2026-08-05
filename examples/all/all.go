@@ -10,6 +10,7 @@ import (
 	"github.com/Query-farm/vgi-go/examples/aggregate"
 	copy_from "github.com/Query-farm/vgi-go/examples/copy_from"
 	copy_to "github.com/Query-farm/vgi-go/examples/copy_to"
+	global_functions "github.com/Query-farm/vgi-go/examples/global_functions"
 	"github.com/Query-farm/vgi-go/examples/scalar"
 	"github.com/Query-farm/vgi-go/examples/schema_reconcile"
 	"github.com/Query-farm/vgi-go/examples/table"
@@ -28,6 +29,12 @@ func RegisterAll(w *vgi.Worker) {
 	registerCopyFroms(w)
 	registerCopyTos(w)
 	schema_reconcile.RegisterAll(w)
+	// Global-registration probes — one per function type (global_scalar,
+	// global_table, global_agg, global_buffered). Registered in the default
+	// schema like every other fixture; the "global" part is what a client
+	// republishes them as, not where the worker declares them. See
+	// examples/global_functions.
+	global_functions.RegisterAll(w)
 }
 
 func registerCopyFroms(w *vgi.Worker) {

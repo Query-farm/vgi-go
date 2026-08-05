@@ -293,6 +293,8 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 		AttachCatalogs:           serializedAttachCatalogs,
 		Tags:                     map[string]string{},
 		SupportsColumnStatistics: false,
+		GlobalFunctions:          SerializedItems{},
+		GlobalFunctionPrefix:     "",
 	}, nil
 }
 

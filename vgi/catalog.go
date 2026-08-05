@@ -93,21 +93,30 @@ type CatalogAttachRequestWire struct {
 
 // CatalogAttachResultWire is the wire type for catalog_attach result.
 type CatalogAttachResultWire struct {
-	AttachOpaqueData              []byte            `vgirpc:"attach_opaque_data"`
-	SupportsTransactions          bool              `vgirpc:"supports_transactions"`
-	SupportsTimeTravel            bool              `vgirpc:"supports_time_travel"`
-	CatalogVersionFrozen          bool              `vgirpc:"catalog_version_frozen"`
-	CatalogVersion                int64             `vgirpc:"catalog_version"`
-	AttachOpaqueDataRequired      bool              `vgirpc:"attach_opaque_data_required"`
-	DefaultSchema                 string            `vgirpc:"default_schema"`
-	Settings                      SerializedItems   `vgirpc:"settings"`
-	SecretTypes                   SerializedItems   `vgirpc:"secret_types"`
-	AttachCatalogs                SerializedItems   `vgirpc:"attach_catalogs"`
-	Comment                       *string           `vgirpc:"comment"`
-	Tags                          map[string]string `vgirpc:"tags"`
-	SupportsColumnStatistics      bool              `vgirpc:"supports_column_statistics"`
-	ResolvedDataVersion           *string           `vgirpc:"resolved_data_version"`
-	ResolvedImplementationVersion *string           `vgirpc:"resolved_implementation_version"`
+	AttachOpaqueData         []byte            `vgirpc:"attach_opaque_data"`
+	SupportsTransactions     bool              `vgirpc:"supports_transactions"`
+	SupportsTimeTravel       bool              `vgirpc:"supports_time_travel"`
+	CatalogVersionFrozen     bool              `vgirpc:"catalog_version_frozen"`
+	CatalogVersion           int64             `vgirpc:"catalog_version"`
+	AttachOpaqueDataRequired bool              `vgirpc:"attach_opaque_data_required"`
+	DefaultSchema            string            `vgirpc:"default_schema"`
+	Settings                 SerializedItems   `vgirpc:"settings"`
+	SecretTypes              SerializedItems   `vgirpc:"secret_types"`
+	AttachCatalogs           SerializedItems   `vgirpc:"attach_catalogs"`
+	Comment                  *string           `vgirpc:"comment"`
+	Tags                     map[string]string `vgirpc:"tags"`
+	SupportsColumnStatistics bool              `vgirpc:"supports_column_statistics"`
+	// GlobalFunctions and GlobalFunctionPrefix are protocol 1.3.0 additions.
+	// They sit between supports_column_statistics and resolved_data_version
+	// because the Arrow schema match is positional — see
+	// generated.CatalogAttachResultSchema. A worker populates them with
+	// WithGlobalFunctions / WithGlobalFunctionPrefix; a worker that declares
+	// neither sends the empty defaults (empty list / empty string), mirroring
+	// vgi-python's CatalogAttachResult.
+	GlobalFunctions               SerializedItems `vgirpc:"global_functions"`
+	GlobalFunctionPrefix          string          `vgirpc:"global_function_prefix"`
+	ResolvedDataVersion           *string         `vgirpc:"resolved_data_version"`
+	ResolvedImplementationVersion *string         `vgirpc:"resolved_implementation_version"`
 }
 
 // CatalogVersionRequestWire is the wire type for catalog_version.
@@ -836,6 +845,37 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 // ---------------------------------------------------------------------------
 
 // registerCatalogMethods registers all catalog RPC methods on the server.
+// serializedGlobalFunctions returns the IPC-serialized FunctionInfo of every
+// function named by WithGlobalFunctions, in declaration order, resolved
+// against the catalog's default schema. Names are carried unprefixed — the
+// client applies global_function_prefix itself. Unknown or unlisted names
+// contribute nothing, so declaring a function that was never registered is
+// inert rather than fatal.
+func (w *Worker) serializedGlobalFunctions() (SerializedItems, error) {
+	items := make(SerializedItems, 0, len(w.globalFunctionNames))
+	if w.catalog == nil {
+		return items, nil
+	}
+	si, ok := w.catalog.schemas[defaultFunctionSchema]
+	if !ok {
+		return items, nil
+	}
+	for _, name := range w.globalFunctionNames {
+		for i := range si.functions {
+			fi := &si.functions[i]
+			if fi.Name != name || fi.unlisted {
+				continue
+			}
+			data, err := SerializeFunctionInfo(fi)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, data)
+		}
+	}
+	return items, nil
+}
+
 func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	readOnlyErr := func(op string) error {
 		return &vgirpc.RpcError{
@@ -1051,6 +1091,19 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 					resolvedImpl = aliasInfo.ImplementationVersion
 				}
 			}
+			// Global functions belong to the catalog that declared them, so an
+			// alias ATTACH (projection_repro, twin_a, ...) must not re-advertise
+			// them: the client would otherwise be asked to publish the same
+			// prefixed name once per attached alias.
+			globalFunctions := SerializedItems{}
+			globalFunctionPrefix := ""
+			if req.Name == w.catalogName {
+				var err error
+				if globalFunctions, err = w.serializedGlobalFunctions(); err != nil {
+					return CatalogAttachResultWire{}, err
+				}
+				globalFunctionPrefix = w.globalFunctionPrefix
+			}
 			result := CatalogAttachResultWire{
 				AttachOpaqueData:              attachOpaqueData,
 				SupportsTransactions:          w.supportsTransactions,
@@ -1064,6 +1117,8 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				AttachCatalogs:                serializedAttachCatalogs,
 				Tags:                          tags,
 				SupportsColumnStatistics:      supportsColStats,
+				GlobalFunctions:               globalFunctions,
+				GlobalFunctionPrefix:          globalFunctionPrefix,
 				ResolvedDataVersion:           resolvedData,
 				ResolvedImplementationVersion: resolvedImpl,
 			}
