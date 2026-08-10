@@ -942,6 +942,18 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				}
 				return res, nil
 			}
+			// Options declared Required must actually be supplied: fail the
+			// attach loudly rather than yielding a catalog that reads as empty.
+			var optionsIPC []byte
+			if req.Options != nil {
+				optionsIPC = *req.Options
+			}
+			if err := validateRequiredAttachOptions(req.Name, w.attachOptions, optionsIPC); err != nil {
+				return CatalogAttachResultWire{}, &vgirpc.RpcError{
+					Type:    "ValueError",
+					Message: err.Error(),
+				}
+			}
 			// Validate catalog name matches the primary or one of the
 			// declared aliases (WithCatalogAliases).
 			if req.Name != w.catalogName {
