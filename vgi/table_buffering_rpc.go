@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 )
@@ -279,4 +280,26 @@ func decodeInitRecipe(data []byte) (*InitRecipe, error) {
 		return nil, fmt.Errorf("decoding init recipe: %w", err)
 	}
 	return &r, nil
+}
+
+// These request types carry the protocol's wrapped shape: a single `request`
+// binary column holding an IPC-encoded inner batch. The Go fields describe that
+// inner batch and deserializeParams unwraps it, but what the server *advertises*
+// has to be the wrapped shape — a client that builds its request from the
+// advertised schema (the TypeScript client does) otherwise finds none of its
+// keys and sends a batch of all-nulls.
+
+// VgiRpcParamsSchema advertises the wrapped protocol shape for table_buffering_combine.
+func (TableBufferingCombineRequestWire) VgiRpcParamsSchema() *arrow.Schema {
+	return generated.TableBufferingCombineParamsSchema
+}
+
+// VgiRpcParamsSchema advertises the wrapped protocol shape for table_buffering_destructor.
+func (TableBufferingDestructorRequestWire) VgiRpcParamsSchema() *arrow.Schema {
+	return generated.TableBufferingDestructorParamsSchema
+}
+
+// VgiRpcParamsSchema advertises the wrapped protocol shape for table_buffering_process.
+func (TableBufferingProcessRequestWire) VgiRpcParamsSchema() *arrow.Schema {
+	return generated.TableBufferingProcessParamsSchema
 }

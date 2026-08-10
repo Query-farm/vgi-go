@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"sync"
 
+	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -313,3 +314,25 @@ func PartitionKey(chunk arrow.RecordBatch, partitionKeyCount, i int) uint64 {
 }
 
 var _ = memory.NewGoAllocator
+
+// These request types carry the protocol's wrapped shape: a single `request`
+// binary column holding an IPC-encoded inner batch. The Go fields describe that
+// inner batch and deserializeParams unwraps it, but what the server *advertises*
+// has to be the wrapped shape — a client that builds its request from the
+// advertised schema (the TypeScript client does) otherwise finds none of its
+// keys and sends a batch of all-nulls.
+
+// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_streaming_chunk.
+func (AggregateStreamingChunkRequestWire) VgiRpcParamsSchema() *arrow.Schema {
+	return generated.AggregateStreamingChunkParamsSchema
+}
+
+// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_streaming_close.
+func (AggregateStreamingCloseRequestWire) VgiRpcParamsSchema() *arrow.Schema {
+	return generated.AggregateStreamingCloseParamsSchema
+}
+
+// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_streaming_open.
+func (AggregateStreamingOpenRequestWire) VgiRpcParamsSchema() *arrow.Schema {
+	return generated.AggregateStreamingOpenParamsSchema
+}

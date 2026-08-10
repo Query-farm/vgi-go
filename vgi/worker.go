@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -1341,4 +1342,22 @@ func (w *Worker) functionStorage() (FunctionStorage, error) {
 		w.fs = s
 	})
 	return w.fs, w.fsErr
+}
+
+// These request types carry the protocol's wrapped shape: a single `request`
+// binary column holding an IPC-encoded inner batch. The Go fields describe that
+// inner batch and deserializeParams unwraps it, but what the server *advertises*
+// has to be the wrapped shape — a client that builds its request from the
+// advertised schema (the TypeScript client does) otherwise finds none of its
+// keys and sends a batch of all-nulls.
+
+// VgiRpcParamsSchema advertises the wrapped protocol shape for bind.
+func (BindRequestWire) VgiRpcParamsSchema() *arrow.Schema { return generated.BindParamsSchema }
+
+// VgiRpcParamsSchema advertises the wrapped protocol shape for init.
+func (InitRequestWire) VgiRpcParamsSchema() *arrow.Schema { return generated.InitParamsSchema }
+
+// VgiRpcParamsSchema advertises the wrapped protocol shape for table_function_cardinality.
+func (CardinalityRequestWire) VgiRpcParamsSchema() *arrow.Schema {
+	return generated.TableFunctionCardinalityParamsSchema
 }
