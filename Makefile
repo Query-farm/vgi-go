@@ -95,7 +95,7 @@ HTTP_XFAIL_TESTS := vgi_worker_pool
 # (duckdb_unittest_tempdir/...). Over stdio the worker inherits DuckDB's cwd for
 # free; over HTTP it is an independent process, so the cwd has to be set here.
 
-.PHONY: build clean fmt vet lint test test-unit test-single test-shm test-http test-all test-landing new-worker
+.PHONY: build clean fmt vet lint test test-unit test-single test-shm test-http test-all new-worker
 
 # COVER=1 builds coverage-instrumented worker binaries (`go build -cover`).
 # The integration suite runs the workers as separate processes, so `go test`
@@ -148,9 +148,6 @@ test-unit:
 # Landing-surface conformance: boot the example HTTP worker and run the
 # cross-language landing checker (schema validation + asset marker + column
 # endpoints) against it. Requires Python with the `jsonschema` package.
-test-landing:
-	bash test/landing/run.sh
-
 # Scaffold a new VGI worker module from templates/worker. Usage:
 #   make new-worker NAME=myproj            # creates ./myproj/
 #   make new-worker NAME=myproj DIR=../    # creates ../myproj/

@@ -1239,11 +1239,10 @@ func (w *Worker) RunHttp(addr string) error {
 		oauthActive = true
 	}
 
-	// Standardized VGI landing surface: the shared static landing.html plus its
-	// versioned describe.json contract and lazy per-object column endpoints. The
-	// shared page reads the _vgi_identity cookie itself, so no server-side HTML
-	// injection is needed — disable the generic vgi-rpc landing page and serve
-	// our own. See describe_json.go.
+	// Standardized VGI landing surface: the shared static landing.html plus the
+	// browser client build it reads the catalog with. The shared page reads the
+	// _vgi_identity cookie itself, so no server-side HTML injection is needed —
+	// disable the generic vgi-rpc landing page and serve our own. See landing.go.
 	prefix := hs.Prefix()
 	if s.ServerID() == "" {
 		u := uuid.New()
@@ -1259,9 +1258,8 @@ func (w *Worker) RunHttp(addr string) error {
 	if prefix == "" {
 		landingPattern = "GET /{$}"
 	}
-	hs.Handle(landingPattern, makeLandingHandler(serverID))
-	hs.Handle("GET "+prefix+"/describe.json", w.makeDescribeJSONHandler(workerName, serverID, oauthActive))
-	hs.Handle("GET "+prefix+"/describe/{catalog}/{schema}/{table}", w.makeColumnsHandler())
+	hs.Handle(landingPattern, makeLandingHandler(workerName, serverID, oauthActive))
+	hs.Handle("GET "+prefix+"/vgi-client.js", makeClientBundleHandler())
 	// Pre-render the remaining pages / oauth routes deterministically rather
 	// than lazily on the first request.
 	hs.InitPages()
