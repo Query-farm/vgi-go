@@ -59,7 +59,7 @@ func serializeAttachOptionSpec(spec AttachOptionSpec) ([]byte, error) {
 	if spec.Required && spec.DefaultBatch != nil {
 		return nil, fmt.Errorf(
 			"attach option %q is required but also declares a default; an option with a "+
-				"default is always satisfiable without the caller. Drop one.", spec.Name)
+				"default is always satisfiable without the caller; drop one", spec.Name)
 	}
 	mem := memory.NewGoAllocator()
 
@@ -133,6 +133,8 @@ type MissingAttachOptionsError struct {
 	Missing     []string
 }
 
+// Error renders the missing option names, matching the Python and Go
+// implementations' message text.
 func (e *MissingAttachOptionsError) Error() string {
 	quoted := make([]string, len(e.Missing))
 	for i, name := range e.Missing {
