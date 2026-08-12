@@ -29,6 +29,18 @@ func main() {
 	w := vgi.NewWorker(
 		vgi.WithCatalogName(attach_options.CatalogName),
 		vgi.WithAttachOptions(attach_options.AttachOptionSpecs()...),
+		// A second catalog from the same worker, gated on an option the caller
+		// must supply: it advertises that at discovery and refuses the
+		// anonymous ATTACH, rather than attaching into something that reads as
+		// an empty catalog. It carries no functions of its own — the attach IS
+		// what's under test (attach/attach_options_required.test).
+		vgi.WithCatalogAliasInfo(attach_options.RequiredCatalogName, vgi.CatalogInfo{
+			Name: attach_options.RequiredCatalogName,
+		}),
+		vgi.WithAttachOptionsForCatalog(
+			attach_options.RequiredCatalogName,
+			attach_options.RequiredCatalogAttachOptionSpecs()...,
+		),
 		vgi.WithAttachValidator(func(req *vgi.CatalogAttachRequestWire, ctx *vgirpc.CallContext) (*vgi.AttachDecision, error) {
 			var optBytes []byte
 			if req.Options != nil {

@@ -26,7 +26,13 @@ import (
 )
 
 const (
-	CatalogName             = "attach_options"
+	CatalogName = "attach_options"
+	// RequiredCatalogName is a second catalog served by the same worker,
+	// gated on an option the caller has to supply. Kept separate from
+	// CatalogName so the defaults-and-round-trip coverage there keeps
+	// attaching with no options at all. Mirrors vgi-python's
+	// REQUIRED_CATALOG_NAME.
+	RequiredCatalogName     = "attach_options_required"
 	attachOpaqueDataSepByte = 0x00
 	uuidBytes               = 16
 )
@@ -247,6 +253,31 @@ func AttachOptionSpecs() []vgi.AttachOptionSpec {
 		})
 	}
 	return out
+}
+
+// RequiredCatalogAttachOptionSpecs are the options of RequiredCatalogName: one
+// the caller must supply, next to one that defaults, so the discovery listing
+// can be checked for the difference between them.
+func RequiredCatalogAttachOptionSpecs() []vgi.AttachOptionSpec {
+	regionSchema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.BinaryTypes.String}}, nil)
+	regionBuilder := array.NewStringBuilder(memory.NewGoAllocator())
+	defer regionBuilder.Release()
+	regionBuilder.Append("us-east-1")
+	regionValue := regionBuilder.NewArray()
+	defer regionValue.Release()
+	regionValue.Retain()
+
+	return []vgi.AttachOptionSpec{
+		// No DefaultBatch: Required and a default are mutually exclusive, since
+		// a default is exactly what makes an option optional.
+		{Name: "api_key", Description: "API key", Type: arrow.BinaryTypes.String, Required: true},
+		{
+			Name:         "region",
+			Description:  "Region",
+			Type:         arrow.BinaryTypes.String,
+			DefaultBatch: array.NewRecordBatch(regionSchema, []arrow.Array{regionValue}, 1),
+		},
+	}
 }
 
 // mergeOptionsToEchoBatch builds a single-row RecordBatch matching echoSchema

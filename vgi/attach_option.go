@@ -136,16 +136,19 @@ type MissingAttachOptionsError struct {
 // Error renders the missing option names, matching the Python and Go
 // implementations' message text.
 func (e *MissingAttachOptionsError) Error() string {
+	// Single-quoted, not %q: Python renders these names with repr() and Java
+	// with explicit single quotes, and the shared integration test
+	// (attach/attach_options_required.test) matches on that text.
 	quoted := make([]string, len(e.Missing))
 	for i, name := range e.Missing {
-		quoted[i] = fmt.Sprintf("%q", name)
+		quoted[i] = "'" + name + "'"
 	}
 	plural := ""
 	if len(e.Missing) > 1 {
 		plural = "s"
 	}
-	return fmt.Sprintf("Catalog %q cannot be attached without the required option%s %s",
-		e.CatalogName, plural, strings.Join(quoted, ", ")) + "."
+	return fmt.Sprintf("Catalog '%s' cannot be attached without the required option%s %s.",
+		e.CatalogName, plural, strings.Join(quoted, ", "))
 }
 
 // suppliedAttachOptionNames reads the option keys out of the serialized

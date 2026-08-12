@@ -361,12 +361,16 @@ type Worker struct {
 	secretTypes                   []SecretTypeSpec
 	attachCatalogs                []AttachCatalogInfo
 	attachOptions                 []AttachOptionSpec
-	logLevel                      slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
-	logHandler                    slog.Handler // nil means default TextHandler to stderr
-	logFormat                     LogFormat    // empty means text
-	logLoggers                    []string     // empty means all known loggers
-	logConfigured                 bool         // true once any logging WorkerOption fires
-	httpSigningKey                []byte       // HMAC key for HTTP state tokens (explicit via WithHttpSigningKey, else ephemeral per-process)
+	// catalogAttachOptions holds per-alias-catalog option specs
+	// (WithAttachOptionsForCatalog); a catalog absent here falls back to
+	// attachOptions.
+	catalogAttachOptions map[string][]AttachOptionSpec
+	logLevel             slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
+	logHandler           slog.Handler // nil means default TextHandler to stderr
+	logFormat            LogFormat    // empty means text
+	logLoggers           []string     // empty means all known loggers
+	logConfigured        bool         // true once any logging WorkerOption fires
+	httpSigningKey       []byte       // HMAC key for HTTP state tokens (explicit via WithHttpSigningKey, else ephemeral per-process)
 	// sealOpaqueData gates AEAD sealing of catalog opaque-data envelopes. It is
 	// enabled only when an explicit signing key is configured (WithHttpSigningKey),
 	// matching vgi-python: an anonymous worker with an ephemeral, per-process key
@@ -683,6 +687,32 @@ func WithAttachOptions(opts ...AttachOptionSpec) WorkerOption {
 	return func(w *Worker) {
 		w.attachOptions = append(w.attachOptions, opts...)
 	}
+}
+
+// WithAttachOptionsForCatalog declares ATTACH-time options for one alias
+// catalog (see WithCatalogAliasInfo) rather than for the worker as a whole.
+//
+// A worker that serves several catalogs rarely wants one option set spanning
+// all of them: an option that is Required on a gated catalog must not gate the
+// others too. Options registered here are advertised on that catalog's
+// vgi_catalogs() row only, and enforced only when that catalog is the ATTACH
+// target. The primary catalog keeps using WithAttachOptions.
+func WithAttachOptionsForCatalog(catalogName string, opts ...AttachOptionSpec) WorkerOption {
+	return func(w *Worker) {
+		if w.catalogAttachOptions == nil {
+			w.catalogAttachOptions = make(map[string][]AttachOptionSpec)
+		}
+		w.catalogAttachOptions[catalogName] = append(w.catalogAttachOptions[catalogName], opts...)
+	}
+}
+
+// attachOptionsFor returns the option specs governing an ATTACH of catalogName:
+// the per-catalog set when one is registered, otherwise the worker-wide set.
+func (w *Worker) attachOptionsFor(catalogName string) []AttachOptionSpec {
+	if specs, ok := w.catalogAttachOptions[catalogName]; ok {
+		return specs
+	}
+	return w.attachOptions
 }
 
 // WithLogLevel sets the minimum log level for the default handler.

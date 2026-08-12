@@ -917,8 +917,23 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			// (WithCatalogAliasInfo) as a distinct catalog row, carrying its own
 			// data version. Plain WithCatalogAliases entries are intentionally
 			// not advertised — they share the primary catalog's identity.
-			for _, aliasInfo := range w.catalogAliasInfos {
+			for aliasName, aliasInfo := range w.catalogAliasInfos {
 				ai := aliasInfo
+				// An alias with its own declared options advertises those, not
+				// the primary catalog's — otherwise a client cannot tell which
+				// option a gated catalog actually requires.
+				if specs, ok := w.catalogAttachOptions[aliasName]; ok && ai.AttachOptionSpecs == nil {
+					serialized := make([][]byte, 0, len(specs))
+					for _, opt := range specs {
+						data, err := serializeAttachOptionSpec(opt)
+						if err != nil {
+							LogCatalog.Error("failed to serialize attach option", "catalog", aliasName, "name", opt.Name, "err", err)
+							continue
+						}
+						serialized = append(serialized, data)
+					}
+					ai.AttachOptionSpecs = serialized
+				}
 				aData, aErr := SerializeCatalogInfo(&ai)
 				if aErr != nil {
 					return CatalogsResponseWire{}, aErr
@@ -949,7 +964,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			if req.Options != nil {
 				optionsIPC = *req.Options
 			}
-			if err := validateRequiredAttachOptions(req.Name, w.attachOptions, optionsIPC); err != nil {
+			if err := validateRequiredAttachOptions(req.Name, w.attachOptionsFor(req.Name), optionsIPC); err != nil {
 				return CatalogAttachResultWire{}, &vgirpc.RpcError{
 					Type:    "ValueError",
 					Message: err.Error(),

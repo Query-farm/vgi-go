@@ -75,3 +75,30 @@ func TestValidateRequiredAttachOptions(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestAttachOptionsForCatalog(t *testing.T) {
+	gated := AttachOptionSpec{Name: "api_key", Type: arrow.BinaryTypes.String, Required: true}
+	shared := AttachOptionSpec{Name: "opt_string", Type: arrow.BinaryTypes.String}
+
+	w := NewWorker(
+		WithCatalogName("primary"),
+		WithAttachOptions(shared),
+		WithCatalogAliasInfo("gated", CatalogInfo{Name: "gated"}),
+		WithAttachOptionsForCatalog("gated", gated),
+	)
+
+	// The gated catalog is governed by its own specs...
+	got := w.attachOptionsFor("gated")
+	if len(got) != 1 || got[0].Name != "api_key" || !got[0].Required {
+		t.Fatalf("gated catalog got the wrong specs: %v", got)
+	}
+
+	// ...and the required option there must not gate the primary catalog too.
+	got = w.attachOptionsFor("primary")
+	if len(got) != 1 || got[0].Name != "opt_string" {
+		t.Fatalf("primary catalog got the wrong specs: %v", got)
+	}
+	if err := validateRequiredAttachOptions("primary", got, nil); err != nil {
+		t.Fatalf("primary attach should not require anything: %v", err)
+	}
+}

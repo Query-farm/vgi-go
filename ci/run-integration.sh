@@ -253,6 +253,10 @@ case "$TRANSPORT" in
     export VGI_VERSIONED_WORKER="$VERSIONED"
     export VGI_VERSIONED_TABLES_WORKER="$VERSIONED_TABLES"
     export VGI_ATTACH_OPTIONS_WORKER="$ATTACH_OPTIONS"
+    # Same worker: it also serves the `attach_options_required` catalog, whose
+    # gated ATTACH is asserted separately (upstream split those assertions out
+    # of the shared attach_options_echo.test behind this env var).
+    export VGI_ATTACH_OPTIONS_REQUIRED_WORKER="$VGI_ATTACH_OPTIONS_WORKER"
     # Serve the versioned catalogs over HTTP too: attach/versioned_tables_*_http
     # and versioning_http attach an http:// worker regardless of the main transport.
     boot_http_worker "$VERSIONED_TABLES"; vth_port="$BOOTED_PORT"
@@ -289,6 +293,7 @@ case "$TRANSPORT" in
     export VGI_VERSIONED_WORKER="launch:${VERSIONED}"
     export VGI_VERSIONED_TABLES_WORKER="launch:${VERSIONED_TABLES}"
     export VGI_ATTACH_OPTIONS_WORKER="launch:${ATTACH_OPTIONS}"
+    export VGI_ATTACH_OPTIONS_REQUIRED_WORKER="$VGI_ATTACH_OPTIONS_WORKER"
     export VGI_REQUIRE_LAUNCHER_TRANSPORT=1
     if [ "$TRANSPORT" = "shm" ]; then
       # Both the C++ client and vgi-rpc-go skip shm for batches under
@@ -384,6 +389,7 @@ case "$TRANSPORT" in
       'require-env VGI_VERSIONED_WORKER'
       'require-env VGI_VERSIONED_TABLES_WORKER'
       'require-env VGI_ATTACH_OPTIONS_WORKER'
+      'require-env VGI_ATTACH_OPTIONS_REQUIRED_WORKER' # rides the attach-options worker, unset here
     )
     ;;
 esac
