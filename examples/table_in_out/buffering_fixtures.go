@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"syscall"
 
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -21,15 +20,21 @@ import (
 // table_buffering_*_crash and worker-crash tests.
 // ---------------------------------------------------------------------------
 
-// CrashOnProcessFunction SIGKILLs its own worker during process.
+// CrashOnProcessFunction hard-kills its own worker during process.
 type CrashOnProcessFunction struct{ BufferInputFunction }
 
 func (f *CrashOnProcessFunction) Name() string { return "crash_on_process" }
 func (f *CrashOnProcessFunction) Metadata() vgi.FunctionMetadata {
-	return vgi.FunctionMetadata{Description: "Worker SIGKILLs itself during process (test)", Categories: []string{"test", "crash"}}
+	return vgi.FunctionMetadata{Description: "Worker hard-kills itself during process (test)", Categories: []string{"test", "crash"}}
 }
 func (f *CrashOnProcessFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) ([]byte, error) {
-	_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+	// os.Process.Kill is the portable spelling of the old
+	// syscall.Kill(getpid(), SIGKILL): SIGKILL on POSIX, TerminateProcess on
+	// Windows. syscall.Kill does not exist on Windows, so the direct call made
+	// this whole package — and with it the example worker — unbuildable there.
+	if p, err := os.FindProcess(os.Getpid()); err == nil {
+		_ = p.Kill()
+	}
 	return params.ExecutionID, nil // unreachable
 }
 
