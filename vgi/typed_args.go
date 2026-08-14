@@ -206,6 +206,15 @@ func parseArgTag(f reflect.StructField, tag string) (ArgSpec, error) {
 			if val == "" {
 				return spec, fmt.Errorf("type= must not be empty")
 			}
+			// Reject a name the resolver does not know, here at the point it was
+			// written. Left unchecked it would resolve to VARCHAR and the mistake
+			// would surface much later as a binder error naming the CALL SITE
+			// ("No function matches ... 'double(INTEGER_LITERAL)'"), which sends
+			// the reader looking in the wrong file entirely.
+			if _, ok := resolveArgType(strings.ToLower(val)); !ok {
+				return spec, fmt.Errorf("type=%q is not a known Arrow type name%s; valid names are: %s",
+					val, suggestArgTypeName(val), strings.Join(validArgTypeNames(), ", "))
+			}
 			spec.ArrowType = val
 			// If the override is one of the canonical names we recognise
 			// (duration_ms, timestamp_ms_utc, ...) attach its concrete

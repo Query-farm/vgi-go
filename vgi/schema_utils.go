@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -223,40 +224,60 @@ func BuildArgSchema(specs []ArgSpec) *arrow.Schema {
 }
 
 // argTypeToArrowType converts a VGI arg type string to an Arrow DataType.
+//
+// Unknown names resolve to VARCHAR. That tolerance is deliberate on this path:
+// it also carries ArgSpecs that did not originate in this process, and a name a
+// newer peer knows and this build does not must not crash a worker. Author-facing
+// input is validated instead at the point it is written — see the type= case in
+// parseTag, which rejects an unknown name outright.
 func argTypeToArrowType(t string) arrow.DataType {
+	dt, _ := resolveArgType(t)
+	return dt
+}
+
+// resolveArgType maps a VGI arg type name to its Arrow type and reports whether
+// the name was recognised at all.
+//
+// This is the single source of truth for what a type name means. Validation
+// derives its accepted set from here rather than repeating it, so the two cannot
+// drift apart as names are added.
+func resolveArgType(t string) (arrow.DataType, bool) {
+	if dt, ok := typeOverrides[t]; ok {
+		return dt, true
+	}
 	switch t {
 	case "int8":
-		return arrow.PrimitiveTypes.Int8
+		return arrow.PrimitiveTypes.Int8, true
 	case "int16":
-		return arrow.PrimitiveTypes.Int16
+		return arrow.PrimitiveTypes.Int16, true
 	case "int32":
-		return arrow.PrimitiveTypes.Int32
+		return arrow.PrimitiveTypes.Int32, true
 	case "int64":
-		return arrow.PrimitiveTypes.Int64
+		return arrow.PrimitiveTypes.Int64, true
 	case "uint8":
-		return arrow.PrimitiveTypes.Uint8
+		return arrow.PrimitiveTypes.Uint8, true
 	case "uint16":
-		return arrow.PrimitiveTypes.Uint16
+		return arrow.PrimitiveTypes.Uint16, true
 	case "uint32":
-		return arrow.PrimitiveTypes.Uint32
+		return arrow.PrimitiveTypes.Uint32, true
 	case "uint64":
-		return arrow.PrimitiveTypes.Uint64
+		return arrow.PrimitiveTypes.Uint64, true
 	case "float", "float32":
-		return arrow.PrimitiveTypes.Float32
+		return arrow.PrimitiveTypes.Float32, true
 	case "double", "float64":
-		return arrow.PrimitiveTypes.Float64
+		return arrow.PrimitiveTypes.Float64, true
 	case "varchar", "string":
-		return arrow.BinaryTypes.String
+		return arrow.BinaryTypes.String, true
 	case "bool", "boolean":
-		return &arrow.BooleanType{}
+		return &arrow.BooleanType{}, true
 	case "blob", "binary":
-		return arrow.BinaryTypes.Binary
+		return arrow.BinaryTypes.Binary, true
 	case "any", "", "struct":
-		return arrow.Null // placeholder for any/flexible type
+		return arrow.Null, true // placeholder for any/flexible type
 	case "table":
-		return arrow.Null // placeholder for table input
+		return arrow.Null, true // placeholder for table input
 	default:
-		return arrow.BinaryTypes.String
+		return arrow.BinaryTypes.String, false
 	}
 }
 
@@ -442,4 +463,68 @@ func predicateNames(bounds []TypeBoundPredicate) []string {
 		names = append(names, py)
 	}
 	return names
+}
+
+// argTypeNameCandidates lists every non-temporal name resolveArgType accepts.
+// The temporal names come from typeOverrides, so validArgTypeNames() is the
+// union and no name has to be written down twice.
+var argTypeNameCandidates = []string{
+	"int8", "int16", "int32", "int64",
+	"uint8", "uint16", "uint32", "uint64",
+	"float", "float32", "double", "float64",
+	"varchar", "string", "bool", "boolean",
+	"blob", "binary", "any", "struct", "table",
+}
+
+// validArgTypeNames returns every name a `vgi:"type=..."` tag may use, sorted.
+//
+// It asks resolveArgType rather than trusting the list, so a candidate that
+// stops resolving drops out here too instead of being offered in an error
+// message that would then be wrong.
+func validArgTypeNames() []string {
+	seen := make(map[string]bool, len(argTypeNameCandidates)+len(typeOverrides))
+	for _, n := range argTypeNameCandidates {
+		if _, ok := resolveArgType(n); ok {
+			seen[n] = true
+		}
+	}
+	for n := range typeOverrides {
+		seen[n] = true
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sqlTypeAliases maps the SQL spelling an author is likely to reach for onto the
+// Arrow name the tag actually wants.
+//
+// The trap this exists for: the tag already accepts several SQL spellings
+// (varchar, double, boolean, blob), so "bigint" looks like it belongs — and a
+// bare "timestamp" or "date" looks even more reasonable, since only the
+// unit-qualified forms (timestamp_us, date32) resolve.
+var sqlTypeAliases = map[string]string{
+	"bigint":    "int64",
+	"integer":   "int32",
+	"int":       "int32",
+	"smallint":  "int16",
+	"tinyint":   "int8",
+	"real":      "float32",
+	"timestamp": "timestamp_us",
+	"date":      "date32",
+	"time":      "time64_us",
+	"text":      "varchar",
+	"bytea":     "blob",
+}
+
+// suggestArgTypeName returns a parenthesised hint for an unrecognised name, or
+// "" when there is nothing useful to say.
+func suggestArgTypeName(name string) string {
+	if want, ok := sqlTypeAliases[strings.ToLower(name)]; ok {
+		return fmt.Sprintf(" (did you mean %q?)", want)
+	}
+	return ""
 }
