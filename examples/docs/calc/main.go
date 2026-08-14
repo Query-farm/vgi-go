@@ -7,7 +7,7 @@
 // *generates* rows from an argument, so it is called in a FROM clause rather
 // than an expression. One worker can serve any mix of shapes.
 //
-//	go build -o calc ./examples/docs/calc
+//	go build -o calc .
 //	# then, in a Haybarn shell:
 //	ATTACH 'calc' (TYPE vgi, LOCATION './calc');
 //	SELECT calc.double(21);

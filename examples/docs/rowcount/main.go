@@ -15,7 +15,7 @@
 // memory between them. State goes in params.Storage, which is scoped to this
 // execution and shared across the workers serving it.
 //
-//	go build -o rowcountworker ./examples/docs/rowcount
+//	go build -o rowcountworker .
 //	# then, in a Haybarn shell:
 //	ATTACH 'buffers' (TYPE vgi, LOCATION './rowcountworker');
 //	SELECT * FROM buffers.row_count((SELECT * FROM big_table));

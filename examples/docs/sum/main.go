@@ -14,7 +14,7 @@
 //
 //   - Finalize  — turn state into one output row per group.
 //
-//     go build -o sumworker ./examples/docs/sum
+//     go build -o sumworker .
 //     # then, in a Haybarn shell:
 //     ATTACH 'agg' (TYPE vgi, LOCATION './sumworker');
 //     SELECT category, agg.vgi_sum(value) FROM t GROUP BY category;
@@ -72,8 +72,8 @@ func (*SumFn) Metadata() vgi.FunctionMetadata {
 		// NULLs are skipped rather than treated as zero, matching SQL's SUM.
 		NullHandling:      vgi.NullHandlingDefault,
 		ReturnType:        arrow.PrimitiveTypes.Int64,
-		OrderDependent:    "NOT_ORDER_DEPENDENT",
-		DistinctDependent: "NOT_DISTINCT_DEPENDENT",
+		OrderDependent:    vgi.OrderDependenceNotDependent,
+		DistinctDependent: vgi.DistinctDependenceNotDependent,
 	}
 }
 

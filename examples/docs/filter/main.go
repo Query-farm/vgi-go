@@ -8,7 +8,7 @@
 // what it can from the batch in hand, which is what keeps memory flat over an
 // arbitrarily large scan.
 //
-//	go build -o filterworker ./examples/docs/filter
+//	go build -o filterworker .
 //	# then, in a Haybarn shell:
 //	ATTACH 'filters' (TYPE vgi, LOCATION './filterworker');
 //	SELECT * FROM filters.filter_positive((SELECT * FROM t));

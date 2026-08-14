@@ -11,7 +11,7 @@
 // runs the function with those arguments baked in. The user never passes them,
 // and never sees the function.
 //
-//	go build -o catalogworker ./examples/docs/catalog
+//	go build -o catalogworker .
 //	# then, in a Haybarn shell:
 //	ATTACH 'cat' (TYPE vgi, LOCATION './catalogworker');
 //	SELECT * FROM cat.data.cities;
@@ -59,6 +59,11 @@ type citiesArgs struct {
 	MinPopulation int64 `vgi:"pos=0,ge=0,doc=Only return cities at least this large"`
 }
 
+// citiesState materializes the whole filtered result up front. That is fine for
+// three rows and wrong for three million: state is carried between Process calls
+// and gob-encoded across an HTTP continuation, so anything held here is paid for
+// repeatedly. A real scan keeps a *cursor* — an offset, a page token, an open
+// iterator id — and fetches each batch in Process.
 type citiesState struct {
 	vgi.BatchState
 	Rows []city

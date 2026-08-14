@@ -7,7 +7,7 @@
 // state and no finalize phase. DuckDB hands the worker a whole Arrow column and
 // expects a column of the same length back.
 //
-//	go build -o calcscalar ./examples/docs/calcscalar
+//	go build -o calcscalar .
 //	# then, in a Haybarn shell:
 //	ATTACH 'calc' (TYPE vgi, LOCATION './calcscalar');
 //	SELECT calc.double(21);

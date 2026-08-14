@@ -11,7 +11,7 @@
 // validator plus Revalidatable so the client can ask "still good?" instead of
 // paying for a recompute, and the 304-equivalent reply to such a request.
 //
-//	go build -o cacheworker ./examples/docs/cache
+//	go build -o cacheworker .
 //	# then, in a Haybarn shell:
 //	ATTACH 'rates' (TYPE vgi, LOCATION './cacheworker');
 //	SELECT * FROM rates.rates();   -- repeat calls inside the TTL never land here
