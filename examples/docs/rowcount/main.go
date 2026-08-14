@@ -62,8 +62,8 @@ func (*RowCountFn) ArgumentSpecs() []vgi.ArgSpec {
 	}
 }
 
-// Output is one int64 column whatever the input looked like, so the schema is
-// fixed rather than derived from the input.
+// OnBind resolves the output schema. It is one int64 column whatever the input
+// looked like, so the schema is fixed rather than derived from the input.
 func (*RowCountFn) OnBind(_ *vgi.BindParams) (*vgi.BindResponse, error) {
 	return vgi.BindSchema(rowCountOutputSchema)
 }

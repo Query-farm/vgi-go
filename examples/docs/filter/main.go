@@ -44,9 +44,10 @@ func (*FilterPositiveFn) Metadata() vgi.FunctionMetadata {
 	}
 }
 
-// A TABLE argument is written as an explicit ArgSpec rather than a struct tag.
-// The struct-tag path binds scalar values into fields, and a relation is not a
-// value — it arrives as the stream of batches Process is called with.
+// ArgumentSpecs declares the input relation. A TABLE argument is written as an
+// explicit ArgSpec rather than a struct tag: the struct-tag path binds scalar
+// values into fields, and a relation is not a value — it arrives as the stream
+// of batches Process is called with.
 func (*FilterPositiveFn) ArgumentSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
 		{Name: "data", Position: 0, ArrowType: "table", Doc: "Rows to filter"},
@@ -57,8 +58,8 @@ func (*FilterPositiveFn) OnBind(_ *vgi.BindParams) (*vgi.BindResponse, error) {
 	return vgi.BindSchema(filterOutputSchema)
 }
 
-// This function is stateless across batches — each one is decided on its own —
-// so the state type is the empty struct.
+// NewState returns the per-scan state. This function is stateless across
+// batches — each one is decided on its own — so the state type is empty.
 func (*FilterPositiveFn) NewState(_ *vgi.ProcessParams) (*struct{}, error) {
 	return &struct{}{}, nil
 }
