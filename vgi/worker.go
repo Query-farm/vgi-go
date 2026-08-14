@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -983,8 +984,31 @@ func (w *Worker) RegisterAggregate(f AggregateFunction) {
 // RegisterAggregateInSchema registers an aggregate function in a named catalog
 // schema. See RegisterScalarInSchema for why the schema is part of the identity.
 func (w *Worker) RegisterAggregateInSchema(schemaName string, f AggregateFunction) {
+	registerAggregateState(f)
 	w.aggregates[f.Name()] = append(w.aggregates[f.Name()], f)
 	w.recordOrigin(kindAggregate, f.Name(), funcOrigin{schema: schemaName})
+}
+
+// registerAggregateState gob-registers the concrete per-group state type, so an
+// author does not have to.
+//
+// Per-group state is gob-encoded between Update, Combine and Finalize, which may
+// run in different processes. AsTableFunction and AsTableInOutFunction already
+// call gob.Register(new(S)) inside the adapter, so state for those shapes just
+// works; aggregates have no adapter — RegisterAggregate takes the interface
+// directly — and an unregistered state used to compile, attach, and only then
+// fail on the first GROUP BY with "gob: type not registered for interface".
+//
+// The type is discovered by asking the function for a state. NewState is
+// documented as returning a fresh state and the SDK's own aggregates ignore
+// their params, but a function is free to dereference them, so the call is
+// guarded: if it cannot run without real params we simply skip registration and
+// leave the author to call gob.Register themselves, exactly as before.
+func registerAggregateState(f AggregateFunction) {
+	defer func() { _ = recover() }()
+	if state := f.NewState(nil); state != nil {
+		gob.Register(state)
+	}
 }
 
 // RegisterWritableCatalog adds a writable catalog this worker handles

@@ -174,7 +174,7 @@ func (w *Worker) RegisterCopyFrom(f CopyFromFunction) {
 	if c, ok := f.(CopyFromCommenter); ok {
 		comment = c.CopyFromComment()
 	}
-	w.copyFromFormats = append(w.copyFromFormats, copyFromFormatRecord{
+	w.recordCopyFormat(copyFromFormatRecord{
 		formatName:  f.CopyFromFormat(),
 		handler:     f.Name(),
 		comment:     comment,
