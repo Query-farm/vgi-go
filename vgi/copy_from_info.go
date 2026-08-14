@@ -4,6 +4,7 @@ package vgi
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -113,4 +114,59 @@ func SerializeCopyFromFormatInfo(rec copyFromFormatRecord) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// CopyBothDirections marks a format served by one handler in both directions.
+// The extension wires the reader and the writer onto a single DuckDB
+// CopyFunction when it sees this.
+const CopyBothDirections = "both"
+
+// recordCopyFormat appends rec to w.copyFromFormats, reconciling it with any
+// format already registered under the same name.
+//
+// The extension's COPY registry is keyed by `<attach-alias>.<format>` with NO
+// direction component, and on a hit it silently skips the entry — it reads a hit
+// as an idempotent re-ATTACH. Two records sharing a format name therefore lose
+// one of them without a word, and the loser only shows up as
+// "COPY TO is not supported for FORMAT ..." much later.
+//
+// A record carries a single handler and a single option schema, so one name can
+// only serve both directions when ONE handler serves both. That case is merged
+// here into direction="both". Anything else is a genuine ambiguity the wire
+// format cannot express, and is rejected at registration rather than silently
+// half-working.
+func (w *Worker) recordCopyFormat(rec copyFromFormatRecord) {
+	for i := range w.copyFromFormats {
+		existing := &w.copyFromFormats[i]
+		if existing.formatName != rec.formatName {
+			continue
+		}
+		if existing.direction == rec.direction {
+			// Re-registering the identical pair is a no-op; a second handler
+			// claiming the same name and direction is a conflict.
+			if existing.handler == rec.handler {
+				return
+			}
+			panic(fmt.Sprintf(
+				"vgi: COPY format %q is already registered for direction %q by handler %q; "+
+					"handler %q cannot also claim it — give one of them a different format name",
+				rec.formatName, rec.direction, existing.handler, rec.handler))
+		}
+		if existing.handler != rec.handler {
+			panic(fmt.Sprintf(
+				"vgi: COPY format %q is registered by handler %q (%s) and handler %q (%s). "+
+					"The extension keys COPY functions by name alone and would silently drop one of them. "+
+					"Give each direction its own format name (e.g. %q and %q), or serve both from one handler",
+				rec.formatName, existing.handler, existing.direction, rec.handler, rec.direction,
+				rec.formatName, rec.formatName+"_out"))
+		}
+		// One handler, both directions: exactly what direction="both" is for.
+		existing.direction = CopyBothDirections
+		if existing.comment == "" {
+			existing.comment = rec.comment
+		}
+		existing.ordered = existing.ordered || rec.ordered
+		return
+	}
+	w.copyFromFormats = append(w.copyFromFormats, rec)
 }

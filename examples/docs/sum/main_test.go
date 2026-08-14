@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/gob"
 	"testing"
 
@@ -18,21 +19,26 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
-// Aggregate state is gob-encoded between phases and nothing registers it for
-// you — RegisterAggregate takes the interface directly, unlike the table
-// adapters which call gob.Register themselves. An unregistered state compiles
-// and attaches, then fails on the first GROUP BY.
-func TestSumStateIsGobRegistered(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected gob.Register to panic on a duplicate — meaning init() " +
-				"already registered *SumState. Without that registration the worker " +
-				"fails at runtime with: gob: type not registered for interface")
-		}
-	}()
-	// Registering the same concrete type under a second name panics, which is a
-	// cheap way to assert the first registration happened.
-	gob.RegisterName("probe.SumState", &SumState{})
+// Per-group state is gob-encoded between phases, which may run in different
+// processes. Registering it is the SDK's job — RegisterAggregate does it from
+// NewState — so this example carries no gob.Register of its own. The assertion
+// is that a registered aggregate's state really can round-trip through an
+// interface, which is what the encoder does at runtime.
+func TestRegisteringTheAggregateMakesItsStateEncodable(t *testing.T) {
+	vgi.NewWorker().RegisterAggregate(&SumFn{})
+
+	var buf bytes.Buffer
+	var in interface{} = &SumState{Total: 42}
+	if err := gob.NewEncoder(&buf).Encode(&in); err != nil {
+		t.Fatalf("state should be encodable after RegisterAggregate: %v", err)
+	}
+	var out interface{}
+	if err := gob.NewDecoder(&buf).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got, ok := out.(*SumState); !ok || got.Total != 42 {
+		t.Fatalf("round-tripped to %#v", out)
+	}
 }
 
 func TestSumAccumulatesPerGroup(t *testing.T) {

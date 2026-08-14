@@ -21,7 +21,6 @@
 package main
 
 import (
-	"encoding/gob"
 	"flag"
 	"fmt"
 	"log"
@@ -38,17 +37,6 @@ import (
 type SumState struct {
 	Total int64
 }
-
-// Aggregate state must be gob-registered, and nothing does it for you.
-//
-// The typed adapters for the other stateful shapes (AsTableFunction,
-// AsTableInOutFunction) call gob.Register(new(S)) themselves, so their state
-// just works. Aggregates have no such adapter — RegisterAggregate takes the
-// interface directly — so an unregistered state compiles, attaches, and then
-// fails on the first GROUP BY with:
-//
-//	encoding aggregate state: gob: type not registered for interface: main.SumState
-func init() { gob.Register(&SumState{}) }
 
 type sumArgs struct {
 	Value int64 `vgi:"pos=0,const=false,doc=Column to sum"`
