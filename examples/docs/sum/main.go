@@ -21,6 +21,7 @@
 package main
 
 import (
+	"encoding/gob"
 	"flag"
 	"fmt"
 	"log"
@@ -37,6 +38,21 @@ import (
 type SumState struct {
 	Total int64
 }
+
+// Register the state with gob.
+//
+// Aggregate state is gob-encoded between phases. Through v0.21.0 nothing does
+// this for you: the typed adapters (AsTableFunction, AsTableInOutFunction) call
+// gob.Register(new(S)) themselves, but RegisterAggregate takes the interface
+// directly and has no adapter. An unregistered state compiles, attaches, and
+// then fails on the first GROUP BY with:
+//
+//	encoding aggregate state: gob: type not registered for interface: main.SumState
+//
+// Later versions register it from NewState, at which point this line becomes a
+// harmless no-op — registering the same type twice is fine — so it is safe to
+// keep either way.
+func init() { gob.Register(&SumState{}) }
 
 type sumArgs struct {
 	Value int64 `vgi:"pos=0,const=false,doc=Column to sum"`
