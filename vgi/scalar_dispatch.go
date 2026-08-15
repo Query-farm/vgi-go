@@ -24,7 +24,8 @@ func NumericDispatch(
 	batch arrow.RecordBatch,
 	intFn func(cols []arrow.Array, i int) int64,
 	floatFn func(cols []arrow.Array, i int) float64,
-) (arrow.RecordBatch, error) {
+) (_ arrow.RecordBatch, err error) {
+	defer RecoverUnsupportedColumnType(&err)
 	mem := defaultAllocator
 	n := int(batch.NumRows())
 	numCols := int(batch.NumCols())

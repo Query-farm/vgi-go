@@ -67,7 +67,7 @@ func GetInt64Value(col arrow.Array, i int) int64 {
 	case *array.Uint8:
 		return int64(c.Value(i))
 	default:
-		return 0
+		panic(unsupportedColumn("GetInt64Value", col, numericHint))
 	}
 }
 
@@ -102,7 +102,7 @@ func GetFloat64Value(col arrow.Array, i int) float64 {
 		dt := c.DataType().(*arrow.Decimal256Type)
 		return c.Value(i).ToFloat64(dt.Scale)
 	default:
-		return 0
+		panic(unsupportedColumn("GetFloat64Value", col, "GetFloat64Value covers every numeric column; a non-numeric one needs its own accessor"))
 	}
 }
 
@@ -115,7 +115,7 @@ func GetStringValue(col arrow.Array, i int) string {
 		dict := c.Dictionary().(*array.String)
 		return dict.Value(c.GetValueIndex(i))
 	default:
-		return ""
+		panic(unsupportedColumn("GetStringValue", col, "GetStringValue reads String and Dictionary columns"))
 	}
 }
 
@@ -145,7 +145,7 @@ func Int64Accessor(col arrow.Array) func(i int) int64 {
 	case *array.Uint8:
 		return func(i int) int64 { return int64(c.Value(i)) }
 	default:
-		return func(int) int64 { return 0 }
+		panic(unsupportedColumn("Int64Accessor", col, numericHint))
 	}
 }
 
@@ -181,7 +181,7 @@ func Float64Accessor(col arrow.Array) func(i int) float64 {
 		scale := c.DataType().(*arrow.Decimal256Type).Scale
 		return func(i int) float64 { return c.Value(i).ToFloat64(scale) }
 	default:
-		return func(int) float64 { return 0 }
+		panic(unsupportedColumn("Float64Accessor", col, "Float64Accessor covers every numeric column; a non-numeric one needs its own accessor"))
 	}
 }
 
@@ -195,7 +195,7 @@ func StringAccessor(col arrow.Array) func(i int) string {
 		dict := c.Dictionary().(*array.String)
 		return func(i int) string { return dict.Value(c.GetValueIndex(i)) }
 	default:
-		return func(int) string { return "" }
+		panic(unsupportedColumn("StringAccessor", col, "StringAccessor reads String and Dictionary columns"))
 	}
 }
 
@@ -215,4 +215,76 @@ func MustTyped[T any](col arrow.Array) (T, error) {
 		return zero, fmt.Errorf("expected %T, got %T", zero, col)
 	}
 	return result, nil
+}
+
+// UnsupportedColumnTypeError is raised by the typed column accessors when they
+// are handed a column outside their contract.
+//
+// The accessors used to return a zero value instead — 0 for the numeric ones,
+// "" for the string one. That is the worst possible answer: a function that
+// advertises `bound=numeric` and reads its column with GetInt64Value accepts a
+// DOUBLE argument, produces a column of zeros, and reports no error anywhere.
+// The query succeeds and the numbers are wrong.
+//
+// It is raised as a panic because the accessors return a bare value with
+// nowhere to put an error, and because a column whose type the function did not
+// plan for is a programming mistake rather than a data condition — the Go
+// convention for exactly this case. The SDK's own per-row entry points
+// (MapColumn and friends, NumericDispatch) recover it and return it as an
+// error, so the documented patterns surface it cleanly. A hand-rolled loop over
+// GetInt64Value gets the panic, and should either handle the type or defer
+// RecoverPanic.
+type UnsupportedColumnTypeError struct {
+	// Helper is the accessor that was called, e.g. "GetInt64Value".
+	Helper string
+	// Actual is the column type it was handed.
+	Actual arrow.DataType
+	// Hint names the way out.
+	Hint string
+}
+
+func (e *UnsupportedColumnTypeError) Error() string {
+	actual := "<nil>"
+	if e.Actual != nil {
+		actual = e.Actual.String()
+	}
+	msg := fmt.Sprintf("%s: column type %s is not supported", e.Helper, actual)
+	if e.Hint != "" {
+		msg += " (" + e.Hint + ")"
+	}
+	return msg
+}
+
+// unsupportedColumn builds the panic value for an out-of-contract column.
+func unsupportedColumn(helper string, col arrow.Array, hint string) *UnsupportedColumnTypeError {
+	var dt arrow.DataType
+	if col != nil {
+		dt = col.DataType()
+	}
+	return &UnsupportedColumnTypeError{Helper: helper, Actual: dt, Hint: hint}
+}
+
+const numericHint = "for a function that accepts both integers and floats, bind a " +
+	"dynamic output type with BindResultFromInput and read the column through " +
+	"NumericDispatch, which picks the int or float callback for you"
+
+// RecoverUnsupportedColumnType converts a panicking typed accessor into a
+// returned error, and re-panics anything else so genuine bugs still surface.
+// Used by the SDK's per-row helpers; exported so a hand-rolled Process can do
+// the same:
+//
+//	func (f *MyFn) Process(...) (err error) {
+//	    defer vgi.RecoverUnsupportedColumnType(&err)
+//	    ...
+//	}
+func RecoverUnsupportedColumnType(errOut *error) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	if e, ok := r.(*UnsupportedColumnTypeError); ok {
+		*errOut = e
+		return
+	}
+	panic(r)
 }

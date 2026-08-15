@@ -33,7 +33,8 @@ func MapColumn[T any, B ArrayBuilder[T]](
 	colIndex int,
 	newBuilder func(memory.Allocator) B,
 	transform func(col arrow.Array, i int) T,
-) (arrow.RecordBatch, error) {
+) (_ arrow.RecordBatch, err error) {
+	defer RecoverUnsupportedColumnType(&err)
 	mem := defaultAllocator
 	col := batch.Column(colIndex)
 	n := int(batch.NumRows())
@@ -72,7 +73,8 @@ func MapColumnCustomNulls[T any, B ArrayBuilder[T]](
 	colIndex int,
 	newBuilder func(memory.Allocator) B,
 	transform func(col arrow.Array, i int) T,
-) (arrow.RecordBatch, error) {
+) (_ arrow.RecordBatch, err error) {
+	defer RecoverUnsupportedColumnType(&err)
 	mem := defaultAllocator
 	col := batch.Column(colIndex)
 	n := int(batch.NumRows())
@@ -99,7 +101,8 @@ func MapColumns[T any, B ArrayBuilder[T]](
 	colIndices []int,
 	newBuilder func(memory.Allocator) B,
 	transform func(cols []arrow.Array, i int) T,
-) (arrow.RecordBatch, error) {
+) (_ arrow.RecordBatch, err error) {
+	defer RecoverUnsupportedColumnType(&err)
 	mem := defaultAllocator
 	n := int(batch.NumRows())
 
@@ -156,7 +159,8 @@ func MapAllColumns[T any, B ArrayBuilder[T]](
 	batch arrow.RecordBatch,
 	newBuilder func(memory.Allocator) B,
 	transform func(cols []arrow.Array, i int) T,
-) (arrow.RecordBatch, error) {
+) (_ arrow.RecordBatch, err error) {
+	defer RecoverUnsupportedColumnType(&err)
 	indices := make([]int, int(batch.NumCols()))
 	for i := range indices {
 		indices[i] = i
@@ -172,7 +176,8 @@ func GenerateColumn[T any, B ArrayBuilder[T]](
 	batch arrow.RecordBatch,
 	newBuilder func(memory.Allocator) B,
 	generateFn func(i int) T,
-) (arrow.RecordBatch, error) {
+) (_ arrow.RecordBatch, err error) {
+	defer RecoverUnsupportedColumnType(&err)
 	mem := defaultAllocator
 	n := int(batch.NumRows())
 
