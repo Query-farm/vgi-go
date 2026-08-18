@@ -203,6 +203,20 @@ type TableFunctionWithPlan interface {
 func SerializeScanSplit(split *ScanSplit) ([]byte, error) {
 	mem := memory.NewGoAllocator()
 
+	// The position columns are plain binary while payload/token/bounds/statistics
+	// are large_binary — an asymmetry inherited from the canonical schema, not a
+	// mistake to be tidied away. A client reads these by name and type.
+	plainBin := func(v []byte, null bool) arrow.Array {
+		b := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+		defer b.Release()
+		if null {
+			b.AppendNull()
+		} else {
+			b.Append(v)
+		}
+		return b.NewArray()
+	}
+
 	largeBin := func(v []byte, null bool) arrow.Array {
 		b := array.NewBinaryBuilder(mem, arrow.BinaryTypes.LargeBinary)
 		defer b.Release()
@@ -260,8 +274,8 @@ func SerializeScanSplit(split *ScanSplit) ([]byte, error) {
 		largeBin(pb, pbNull),
 		largeBin(cs, csNull),
 		locBuilder.NewArray(),
-		largeBin(sp, spNull),
-		largeBin(ep, epNull),
+		plainBin(sp, spNull),
+		plainBin(ep, epNull),
 	}
 	defer func() {
 		for _, c := range cols {
@@ -278,8 +292,8 @@ func SerializeScanSplit(split *ScanSplit) ([]byte, error) {
 		{Name: "partition_bounds", Type: arrow.BinaryTypes.LargeBinary, Nullable: true},
 		{Name: "column_statistics", Type: arrow.BinaryTypes.LargeBinary, Nullable: true},
 		{Name: "location_ids", Type: arrow.ListOf(arrow.PrimitiveTypes.Int64), Nullable: true},
-		{Name: "start_position", Type: arrow.BinaryTypes.LargeBinary, Nullable: true},
-		{Name: "end_position", Type: arrow.BinaryTypes.LargeBinary, Nullable: true},
+		{Name: "start_position", Type: arrow.BinaryTypes.Binary, Nullable: true},
+		{Name: "end_position", Type: arrow.BinaryTypes.Binary, Nullable: true},
 	}
 	schema := arrow.NewSchema(fields, nil)
 	rec := array.NewRecord(schema, cols, 1)
