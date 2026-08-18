@@ -182,6 +182,14 @@ type InitRequestWire struct {
 	TablesamplePercentage *float64 `vgirpc:"tablesample_percentage"`
 	TablesampleSeed       *int64   `vgirpc:"tablesample_seed"`
 	FinalizeStateID       *[]byte  `vgirpc:"finalize_state_id"`
+
+	// SplitTokens carries the framework-stamped envelopes this init redeems.
+	// A LIST because DataFusion's partition_count() is its concurrency, so it
+	// bin-packs at planning time and must read a whole group per partition;
+	// DuckDB always sends exactly one. A worker handed several concatenates
+	// them into one stream in the order given.
+	SplitTokens *[][]byte `vgirpc:"split_tokens"`
+	RowLimit    *int64    `vgirpc:"row_limit"`
 }
 
 // GlobalInitResponseWire is the wire format for global init responses.
@@ -627,6 +635,12 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	if req.InitOpaqueData != nil {
 		initParams.InitOpaqueData = *req.InitOpaqueData
 	}
+	if req.SplitTokens != nil {
+		initParams.SplitTokens = *req.SplitTokens
+	}
+	if req.RowLimit != nil {
+		initParams.RowLimit = *req.RowLimit
+	}
 	if req.PushdownFilters != nil {
 		batch, err := DeserializeRecordBatch(*req.PushdownFilters)
 		if err == nil {
@@ -655,6 +669,18 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 			hint.Seed = *req.TablesampleSeed
 		}
 		initParams.TableSampleHint = hint
+	}
+
+	// Verify and strip the split envelopes BEFORE any user code runs, so an
+	// unverified token never reaches a function. Failure here is fatal to the
+	// init: a bad token means the caller is asking for work this worker did not
+	// hand out, which is exactly what the envelope exists to refuse.
+	if len(initParams.SplitTokens) > 0 {
+		payloads, err := w.openSplitTokens(initParams.SplitTokens, bindReq, callCtx)
+		if err != nil {
+			return nil, err
+		}
+		initParams.SplitPayloads = payloads
 	}
 
 	// Apply projection to the wire output schema (what DuckDB expects back).
@@ -833,6 +859,22 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 		return nil, err
 	}
 	initParams.Storage = initStorage
+
+	// Carry the verified payloads onto the process params: NewState is where a
+	// function seeds its cursor from them, and it takes ProcessParams.
+	processParams.SplitPayloads = initParams.SplitPayloads
+
+	// A split init is neither primary nor secondary. It carries an execution_id
+	// like a secondary (so it must not re-run global init), but unlike one it
+	// MUST run user code: the payloads name the work. The secondary branch below
+	// runs none, which is why this is a third branch rather than a flag on it.
+	if len(initParams.SplitPayloads) > 0 {
+		if rf, ok := splitPlannerFor(fn); ok {
+			if err := rf.Redeem(initParams); err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	var resp *GlobalInitResponse
 	if !initParams.IsSecondary {
@@ -1093,6 +1135,86 @@ func (w *Worker) handleCardinality(ctx context.Context, callCtx *vgirpc.CallCont
 		return *card, nil
 	}
 	return TableCardinality{Estimate: -1, Max: -1}, nil
+}
+
+// handlePlan processes a table_function_plan RPC request.
+//
+// Functions that do not implement TableFunctionWithPlan get the framework
+// default: a single empty-payload split, which is what "not split-capable"
+// means — the whole scan is one unit of work. That keeps every existing worker
+// serving unchanged under protocol 1.4.0.
+func (w *Worker) handlePlan(ctx context.Context, callCtx *vgirpc.CallContext, req PlanRequestWire) (plan PlanResponseWire, err error) {
+	defer RecoverPanic("plan", req.BindCall.FunctionName, &err)
+	bindReq := &req.BindCall
+
+	bindParams, err := w.parseBindRequest(*bindReq, callCtx)
+	if err != nil {
+		return PlanResponseWire{}, err
+	}
+	bindParams.Auth = callCtx.Auth
+
+	fn, err := w.resolveFunction(w.lookupFor(bindReq, bindParams))
+	if err != nil {
+		return PlanResponseWire{}, err
+	}
+
+	pf, ok := splitPlannerFor(fn)
+	if !ok {
+		// Not split-capable: one split standing for the whole scan. That keeps
+		// every existing worker starting and serving unchanged under 1.4.0 —
+		// splits are opt-in, not something a worker must now implement.
+		blob, err := SerializeScanSplit(&ScanSplit{})
+		if err != nil {
+			return PlanResponseWire{}, err
+		}
+		return PlanResponseWire{Splits: [][]byte{blob}, Scope: "catalog"}, nil
+	}
+
+	result, err := pf.Plan(bindParams, req)
+	if err != nil {
+		return PlanResponseWire{}, err
+	}
+	if result == nil {
+		result = &PlanResult{}
+	}
+	if result.Scope == "" {
+		result.Scope = "catalog"
+	}
+
+	// The framework stamps every token: an author cannot forget the consistency
+	// anchor, cannot mis-bind the fingerprint, and never writes crypto.
+	if err := w.stampSplitTokens(result.Splits, &req, result.CatalogVersion, callCtx.Auth); err != nil {
+		return PlanResponseWire{}, err
+	}
+
+	blobs := make([][]byte, 0, len(result.Splits))
+	for i := range result.Splits {
+		blob, err := SerializeScanSplit(&result.Splits[i])
+		if err != nil {
+			return PlanResponseWire{}, err
+		}
+		blobs = append(blobs, blob)
+	}
+
+	out := PlanResponseWire{
+		Splits:               blobs,
+		NextCursors:          result.NextCursors,
+		EstimatedTotalSplits: result.EstimatedTotalSplits,
+		EstimatedTotalRows:   result.EstimatedTotalRows,
+		EstimatedTotalBytes:  result.EstimatedTotalBytes,
+		Scope:                result.Scope,
+	}
+	if result.ExecutionID != nil {
+		out.ExecutionID = &result.ExecutionID
+	}
+	out.InitOpaqueData = result.InitOpaqueData
+	if result.MaxWorkers != 0 {
+		out.MaxWorkers = &result.MaxWorkers
+	}
+	if result.CatalogVersion != 0 {
+		out.CatalogVersion = &result.CatalogVersion
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------

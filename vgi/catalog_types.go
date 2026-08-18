@@ -42,6 +42,10 @@ type FunctionInfo struct {
 	OrderPreservation          OrderPreservation // "" = null
 	MaxWorkers                 int32
 	SupportsBatchIndex         bool               // opt-in per-batch batch_index tagging
+	SupportsSplits             bool               // opt-in to plan()/on_split(): named, redeemable scan units
+	FiltersExactlyApplied      bool               // worker applies pushed filters exactly; engine may drop its own
+	SupportsPositions          bool               // addressable positions in the data (incremental/streaming reads)
+	SplitTokenTTLSeconds       *int64             // nil = UNBOUNDED, not "expires immediately"
 	PartitionKind              PartitionKind      // default PartitionKindNotPartitioned
 	OrderDependent             OrderDependence    // default NOT_ORDER_DEPENDENT
 	DistinctDependent          DistinctDependence // default NOT_DISTINCT_DEPENDENT
@@ -276,6 +280,28 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	defer sbiBuilder.Release()
 	sbiBuilder.Append(info.SupportsBatchIndex)
 
+	// supports_splits / filters_exactly_applied / supports_positions (non-null)
+	ssBuilder := array.NewBooleanBuilder(mem)
+	defer ssBuilder.Release()
+	ssBuilder.Append(info.SupportsSplits)
+
+	feaBuilder := array.NewBooleanBuilder(mem)
+	defer feaBuilder.Release()
+	feaBuilder.Append(info.FiltersExactlyApplied)
+
+	sposBuilder := array.NewBooleanBuilder(mem)
+	defer sposBuilder.Release()
+	sposBuilder.Append(info.SupportsPositions)
+
+	// split_token_ttl_seconds (nullable; null means UNBOUNDED)
+	sttBuilder := array.NewInt64Builder(mem)
+	defer sttBuilder.Release()
+	if info.SplitTokenTTLSeconds != nil {
+		sttBuilder.Append(*info.SplitTokenTTLSeconds)
+	} else {
+		sttBuilder.AppendNull()
+	}
+
 	// partition_kind (non-null dict)
 	pkBuilder := array.NewDictionaryBuilder(mem, dictType)
 	defer pkBuilder.Release()
@@ -388,6 +414,10 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		opBuilder.NewArray(),
 		mwBuilder.NewArray(),
 		sbiBuilder.NewArray(),
+		ssBuilder.NewArray(),
+		feaBuilder.NewArray(),
+		sposBuilder.NewArray(),
+		sttBuilder.NewArray(),
 		pkBuilder.NewArray(),
 		odBuilder.NewArray(),
 		ddBuilder.NewArray(),

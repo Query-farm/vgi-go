@@ -170,6 +170,13 @@ type ScanBranch struct {
 	SourceCatalog *string
 	SourceSchema  *string
 	SourceTable   *string
+	// FormatName/FormatLocations define a *format* branch: when FunctionName and
+	// SourceTable are both empty and FormatName is set, the branch names a format
+	// plus the locations to read, and the client resolves the format to its
+	// reader. That lets a worker say "these 40 parquet files" without needing a
+	// function per format or knowing the reader's argument spelling.
+	FormatName      *string
+	FormatLocations []string
 }
 
 // ScanBranchesResult is the list of physical sources backing a multi-branch
@@ -234,6 +241,21 @@ func SerializeScanBranch(branch *ScanBranch) ([]byte, error) {
 		appendNullableString(branch.SourceCatalog),
 		appendNullableString(branch.SourceSchema),
 		appendNullableString(branch.SourceTable),
+		appendNullableString(branch.FormatName),
+		func() arrow.Array {
+			lb := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+			defer lb.Release()
+			vb := lb.ValueBuilder().(*array.StringBuilder)
+			if branch.FormatLocations == nil {
+				lb.AppendNull()
+			} else {
+				lb.Append(true)
+				for _, loc := range branch.FormatLocations {
+					vb.Append(loc)
+				}
+			}
+			return lb.NewArray()
+		}(),
 	}
 	defer func() {
 		for _, c := range cols {

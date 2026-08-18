@@ -169,6 +169,16 @@ func AsTableFunction[S any](f TypedTableFunc[S]) TableFunction {
 	return base
 }
 
+// InnerFunc exposes the wrapped implementation so the framework can test it for
+// optional interfaces the adapter deliberately does NOT forward.
+//
+// Forwarding would be wrong for anything the framework dispatches on by type
+// assertion: a method on the adapter is present for every wrapped function, so
+// "does this function implement it" would answer yes universally. Splits are the
+// case in point — TableFunctionWithPlan is what opts a function INTO the split
+// path, so it has to stay a property of the inner value.
+func (a *typedTableAdapter[S]) InnerFunc() any { return a.inner }
+
 // typedTableAdapter implements TableFunction by delegating to a TypedTableFunc[S].
 type typedTableAdapter[S any] struct {
 	inner         TypedTableFunc[S]

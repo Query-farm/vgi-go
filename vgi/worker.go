@@ -1115,8 +1115,10 @@ const (
 // as an exact major+minor match at the dispatch boundary, so it must track
 // vgi-python. Patch is ignored. 1.1.0 added schema_name to BindRequest; 1.2.0
 // added it to the unary requests that re-resolve a function by name; 1.3.0
-// adds global_functions and global_function_prefix to CatalogAttachResult.
-const ProtocolVersion = "1.3.0"
+// adds global_functions and global_function_prefix to CatalogAttachResult;
+// 1.4.0 adds table_function_plan (split-based scan planning) plus split_tokens
+// and row_limit on InitRequest.
+const ProtocolVersion = "1.4.0"
 
 func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 	// Configure structured logging.
@@ -1181,6 +1183,9 @@ func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 
 	// Register table_function_cardinality (unary)
 	vgirpc.Unary[CardinalityRequestWire, TableCardinality](s, "table_function_cardinality", w.handleCardinality)
+
+	// Register table_function_plan (unary). Split-based scan planning.
+	vgirpc.Unary[PlanRequestWire, PlanResponseWire](s, "table_function_plan", w.handlePlan)
 
 	// Register table_function_statistics (unary). Uses []byte result to avoid
 	// vgi-rpc-go's struct-to-IPC double-wrap — the C++ extension parses the

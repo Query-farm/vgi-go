@@ -11,6 +11,15 @@ import (
 type ProcessParams struct {
 	// FunctionName is the name of the function.
 	FunctionName string
+
+	// SplitPayloads are the VERIFIED payloads of the splits this init claimed —
+	// the worker's own bytes, with the token envelope already opened and
+	// stripped, so unverified bytes never reach a function.
+	//
+	// nil means this is not a split init at all. That is worth distinguishing
+	// from an EMPTY slice: nil is "the client did not plan" (a split-only
+	// function should fail loudly), empty is a claim of no work.
+	SplitPayloads [][]byte
 	// FunctionType is the type of the function.
 	FunctionType FunctionType
 	// Args are the parsed function arguments.

@@ -272,6 +272,33 @@ type FunctionMetadata struct {
 	// SupportsBatchIndex opts a table function into per-batch vgi_batch_index
 	// tagging (see EmitBatchIndex). The C++ extension enforces monotonicity.
 	SupportsBatchIndex bool
+
+	// SupportsSplits declares that this table function divides its scan into
+	// named, independently redeemable splits (see TableFunctionWithPlan).
+	//
+	// The declaration is what a distributed engine reads to decide whether it
+	// can retry a task: a split NAMES its work, so re-running one reads exactly
+	// the same rows. Without it the engine falls back to primary/secondary init,
+	// where the division lives behind an opaque worker-side queue and a retry
+	// reads neither what it read before nor what it missed.
+	SupportsSplits bool
+
+	// FiltersExactlyApplied declares that the worker applies every pushed filter
+	// EXACTLY, so the engine may drop its own copy rather than re-filtering.
+	// Wrong answers if declared falsely — leave it false unless certain.
+	FiltersExactlyApplied bool
+
+	// SupportsPositions declares addressable positions in the data, for
+	// incremental and streaming reads. The engine owns the checkpoint; this
+	// declares only that positions are meaningful to externalize.
+	SupportsPositions bool
+
+	// SplitTokenTTLSeconds is how long a split token stays redeemable.
+	// NIL MEANS UNBOUNDED, not "expires immediately" — a client must not assume
+	// a TTL exists, or long-running streams are foreclosed. A client rejects a
+	// plan whose TTL is below its own planning-to-task-start horizon, which for
+	// a busy cluster is hours rather than seconds.
+	SplitTokenTTLSeconds *int64
 	// PartitionKind declares the partition shape of a table function's output
 	// (see PartitionField / EmitPartitioned). Empty = NOT_PARTITIONED.
 	PartitionKind PartitionKind

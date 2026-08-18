@@ -32,6 +32,16 @@ type InitParams struct {
 	Secrets Secrets
 	// IsSecondary is true if this is a secondary init (worker init).
 	IsSecondary bool
+
+	// SplitTokens are the raw envelopes as they arrived; SplitPayloads are the
+	// verified worker payloads after the framework stripped them. A function
+	// reads SplitPayloads — an unverified token never reaches user code.
+	SplitTokens   [][]byte
+	SplitPayloads [][]byte
+
+	// RowLimit is a plain fetch limit, or 0 when unset. Distinct from the
+	// order_by_limit inside an OrderByHint, which is a field OF the Top-N hint.
+	RowLimit int64
 	// PushdownFilters is the pushdown filter batch (nil if none).
 	PushdownFilters arrow.RecordBatch
 	// JoinKeys maps keys_column name -> Arrow array carrying the join keys

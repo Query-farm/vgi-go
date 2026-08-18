@@ -135,6 +135,13 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewMakePairsMixedFunction())
 	w.RegisterTable(table.NewMakePairsStrFunction())
 	w.RegisterTable(table.NewMakeSeriesCountFunction())
+
+	// Split-capable twins, for the cross-SDK splits suite.
+	w.RegisterTable(table.NewSplitSequenceFunction())
+	w.RegisterTable(table.NewSplitZeroFunction())
+	w.RegisterTable(table.NewSplitEmptyRangesFunction())
+	w.RegisterTable(table.NewSplitSkewedFunction())
+	w.RegisterTable(table.NewSplitManyFunction())
 	w.RegisterTable(table.NewMakeSeriesRangeFunction())
 	w.RegisterTable(table.NewMakeSeriesStepFunction())
 	w.RegisterTable(table.NewMakeSeriesCsvFunction())

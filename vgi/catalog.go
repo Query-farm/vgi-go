@@ -614,6 +614,10 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			fi.OrderPreservation = meta.OrderPreservation
 		}
 		fi.SupportsBatchIndex = meta.SupportsBatchIndex
+		fi.SupportsSplits = meta.SupportsSplits
+		fi.FiltersExactlyApplied = meta.FiltersExactlyApplied
+		fi.SupportsPositions = meta.SupportsPositions
+		fi.SplitTokenTTLSeconds = meta.SplitTokenTTLSeconds
 		if meta.PartitionKind != "" {
 			fi.PartitionKind = meta.PartitionKind
 		}
