@@ -10,6 +10,8 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // Split-capable table generators, the Go half of the cross-SDK splits suite.
@@ -288,4 +290,322 @@ func NewSplitManyFunction() vgi.TableFunction {
 		},
 		rowAt: identityRow,
 	})
+}
+
+// --- fixtures that exercise the CLIENT's split machinery -------------------
+
+type splitFailArgs struct {
+	N          int64 `vgi:"name=n,ge=0,doc=Number of rows to produce"`
+	Splits     int64 `vgi:"name=splits,default=4,ge=0,doc=How many splits to divide the scan into"`
+	FailAt     int64 `vgi:"name=fail_at,default=-1,doc=Split ordinal to fail on; -1 never fails"`
+	FailInInit bool  `vgi:"name=fail_in_init,default=false,doc=Fail during the split's init rather than mid-stream"`
+}
+
+// SplitFailAtFunction fails on a chosen split, in either of the two places that
+// matter. They are genuinely different failure paths, not variations:
+//
+//   - fail_in_init fails while REDEEMING the token, before any row is produced.
+//     The client must not return that connection to the pool — the init request
+//     is on the wire with no answer, so a later checkout would read this split's
+//     init response as its own stream header: silent cross-query corruption on
+//     the pool-enabled default.
+//   - Otherwise it fails MID-STREAM, after emitting rows, so the capture is
+//     genuinely partial when it dies. A partial result committed as complete is
+//     the failure class the never-partial gate exists to prevent.
+type SplitFailAtFunction struct{}
+
+type splitFailState struct {
+	Ranges   []splitRange
+	Ordinals []int64
+	Idx      int
+	Cur      int64
+	FailAt   int64
+}
+
+func (f *SplitFailAtFunction) Name() string { return "split_fail_at" }
+
+func (f *SplitFailAtFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description:    "Fails on a chosen split, at init or mid-stream",
+		Stability:      vgi.StabilityConsistent,
+		SupportsSplits: true,
+	}
+}
+
+func (f *SplitFailAtFunction) ArgumentSpecs() []vgi.ArgSpec {
+	return vgi.DeriveArgSpecs(splitFailArgs{})
+}
+
+func (f *SplitFailAtFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+	return vgi.BindSchema(splitOutputSchema)
+}
+
+// encodeFail packs ordinal ‖ lo ‖ hi. The ordinal is what fail_at names, so the
+// test says what it means regardless of how the rows happen to divide.
+func encodeFail(ordinal int64, r splitRange) []byte {
+	out := binary.LittleEndian.AppendUint64(nil, uint64(ordinal))
+	out = binary.LittleEndian.AppendUint64(out, uint64(r.Lo))
+	return binary.LittleEndian.AppendUint64(out, uint64(r.Hi))
+}
+
+func decodeFail(payload []byte) (int64, splitRange, error) {
+	if len(payload) != 24 {
+		return 0, splitRange{}, fmt.Errorf("fail payload must be 24 bytes, got %d", len(payload))
+	}
+	return int64(binary.LittleEndian.Uint64(payload[0:8])), splitRange{
+		Lo: int64(binary.LittleEndian.Uint64(payload[8:16])),
+		Hi: int64(binary.LittleEndian.Uint64(payload[16:24])),
+	}, nil
+}
+
+func (f *SplitFailAtFunction) Plan(params *vgi.BindParams, req vgi.PlanRequestWire) (*vgi.PlanResult, error) {
+	var args splitFailArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	ranges := splitRanges(args.N, args.Splits)
+	splits := make([]vgi.ScanSplit, 0, len(ranges))
+	for i, r := range ranges {
+		rows := r.Hi - r.Lo
+		splits = append(splits, vgi.ScanSplit{
+			Payload:       encodeFail(int64(i), r),
+			EstimatedRows: &rows,
+			RowsExact:     true,
+		})
+	}
+	n := int64(len(ranges))
+	return &vgi.PlanResult{Splits: splits, EstimatedTotalSplits: &n}, nil
+}
+
+// Redeem is where the init-time failure lands, so the client's
+// connection-poisoning path is exercised rather than the mid-stream one.
+func (f *SplitFailAtFunction) Redeem(params *vgi.InitParams) error {
+	var args splitFailArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return err
+	}
+	if !args.FailInInit {
+		return nil
+	}
+	for _, payload := range params.SplitPayloads {
+		ordinal, _, err := decodeFail(payload)
+		if err != nil {
+			return err
+		}
+		if ordinal == args.FailAt {
+			return fmt.Errorf("split %d refuses to initialize (fixture)", ordinal)
+		}
+	}
+	return nil
+}
+
+func (f *SplitFailAtFunction) NewState(params *vgi.ProcessParams) (*splitFailState, error) {
+	if params.SplitPayloads == nil {
+		return nil, fmt.Errorf("split_fail_at is split-only but was initialized with no split tokens")
+	}
+	var args splitFailArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	state := &splitFailState{FailAt: args.FailAt}
+	for _, payload := range params.SplitPayloads {
+		ordinal, r, err := decodeFail(payload)
+		if err != nil {
+			return nil, err
+		}
+		state.Ranges = append(state.Ranges, r)
+		state.Ordinals = append(state.Ordinals, ordinal)
+	}
+	if len(state.Ranges) > 0 {
+		state.Cur = state.Ranges[0].Lo
+	}
+	return state, nil
+}
+
+func (f *SplitFailAtFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *splitFailState, out *vgirpc.OutputCollector) error {
+	for state.Idx < len(state.Ranges) {
+		r := state.Ranges[state.Idx]
+		if state.Cur >= r.Hi {
+			state.Idx++
+			if state.Idx < len(state.Ranges) {
+				state.Cur = state.Ranges[state.Idx].Lo
+			}
+			continue
+		}
+		// Fail AFTER at least one row of this split has gone out, so the
+		// never-partial gate is tested against a genuinely partial capture
+		// rather than an empty one.
+		if state.FailAt >= 0 && state.Ordinals[state.Idx] == state.FailAt && state.Cur > r.Lo {
+			return fmt.Errorf("split %d failed mid-stream (fixture)", state.FailAt)
+		}
+		size := r.Hi - state.Cur
+		if size > 8 {
+			size = 8
+		}
+		start := state.Cur
+		state.Cur += size
+		arr := vgi.BuildInt64Array(size, func(i int64) int64 { return start + i })
+		defer arr.Release()
+		return out.EmitArrays([]arrow.Array{arr}, size)
+	}
+	return out.Finish()
+}
+
+// NewSplitFailAtFunction registers the failure fixture.
+func NewSplitFailAtFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[splitFailState](&SplitFailAtFunction{})
+}
+
+// SplitEndlessCursorFunction paginates forever: every plan page returns a cursor
+// and never exhausts it.
+//
+// A worker can hang a client this way by accident as easily as on purpose, and
+// the failure mode is the bad one: a client that stopped early would scan a
+// PARTIAL enumeration and report it as the whole answer. The client must hit its
+// page cap and throw an error naming it — never truncate and proceed.
+type SplitEndlessCursorFunction struct{ splitPlanner }
+
+func NewSplitEndlessCursorFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[splitState](&SplitEndlessCursorFunction{splitPlanner{
+		name:  "split_endless_cursor",
+		desc:  "Paginates forever: the client must hit its page cap, not truncate",
+		plan:  func(a splitArgs) []splitRange { return []splitRange{{Lo: 0, Hi: 1}} },
+		rowAt: identityRow,
+	}})
+}
+
+// Plan always hands back one split and a fresh cursor.
+func (f *SplitEndlessCursorFunction) Plan(params *vgi.BindParams, req vgi.PlanRequestWire) (*vgi.PlanResult, error) {
+	page := 0
+	if req.Cursor != nil {
+		page = len(req.Cursor)
+	}
+	next := make([]byte, page+1)
+	for i := range next {
+		next[i] = 'x'
+	}
+	return &vgi.PlanResult{
+		Splits:      []vgi.ScanSplit{{Payload: encodeSplit(splitRange{Lo: 0, Hi: 1})}},
+		NextCursors: [][]byte{next},
+	}, nil
+}
+
+var splitEchoSchema = arrow.NewSchema([]arrow.Field{
+	{Name: "split_ordinal", Type: arrow.PrimitiveTypes.Int64},
+	{Name: "saw_filters", Type: arrow.FixedWidthTypes.Boolean},
+	{Name: "n_projection", Type: arrow.PrimitiveTypes.Int64},
+}, nil)
+
+type splitEchoArgs struct {
+	Splits int64 `vgi:"name=splits,default=3,ge=1,doc=How many splits to report"`
+}
+
+// SplitEchoFiltersFunction reports, per split, what pushdown the PLAN call
+// actually received.
+//
+// A row-count assertion cannot catch a pushdown regression — the rows are the
+// same either way — so this fixture makes the pushdown itself the data. What it
+// reports is recorded at PLAN time and baked into each split's payload, which is
+// the claim under test: filters and projection must reach plan(), not merely
+// reach the per-split init() afterwards.
+type SplitEchoFiltersFunction struct{}
+
+type splitEchoState struct {
+	Ordinals []int64
+	SawFilt  []bool
+	NProj    []int64
+	Done     bool
+}
+
+func (f *SplitEchoFiltersFunction) Name() string { return "split_echo_filters" }
+
+func (f *SplitEchoFiltersFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description:    "Reports the pushdown each split's plan() call saw",
+		Stability:      vgi.StabilityConsistent,
+		SupportsSplits: true,
+		// FilterPushdown declares that this worker APPLIES the filter, so DuckDB
+		// stops re-checking it above the scan. Declaring it while only reporting
+		// the filter would be the "wrong answers if declared falsely" hazard in
+		// miniature. AutoApplyFilters makes the declaration true.
+		FilterPushdown:   true,
+		AutoApplyFilters: true,
+	}
+}
+
+func (f *SplitEchoFiltersFunction) ArgumentSpecs() []vgi.ArgSpec {
+	return vgi.DeriveArgSpecs(splitEchoArgs{})
+}
+
+func (f *SplitEchoFiltersFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+	return vgi.BindSchema(splitEchoSchema)
+}
+
+func (f *SplitEchoFiltersFunction) Plan(params *vgi.BindParams, req vgi.PlanRequestWire) (*vgi.PlanResult, error) {
+	var args splitEchoArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	sawFilters := int64(0)
+	if req.PushdownFilters != nil {
+		sawFilters = 1
+	}
+	nProj := int64(0)
+	if req.ProjectionIDs != nil {
+		nProj = int64(len(*req.ProjectionIDs))
+	}
+	splits := make([]vgi.ScanSplit, 0, args.Splits)
+	for i := int64(0); i < args.Splits; i++ {
+		payload := binary.LittleEndian.AppendUint64(nil, uint64(i))
+		payload = binary.LittleEndian.AppendUint64(payload, uint64(sawFilters))
+		payload = binary.LittleEndian.AppendUint64(payload, uint64(nProj))
+		splits = append(splits, vgi.ScanSplit{Payload: payload})
+	}
+	n := args.Splits
+	return &vgi.PlanResult{Splits: splits, EstimatedTotalSplits: &n}, nil
+}
+
+func (f *SplitEchoFiltersFunction) Redeem(params *vgi.InitParams) error { return nil }
+
+func (f *SplitEchoFiltersFunction) NewState(params *vgi.ProcessParams) (*splitEchoState, error) {
+	if params.SplitPayloads == nil {
+		return nil, fmt.Errorf("split_echo_filters is split-only but was initialized with no split tokens")
+	}
+	state := &splitEchoState{}
+	for _, payload := range params.SplitPayloads {
+		if len(payload) != 24 {
+			return nil, fmt.Errorf("echo payload must be 24 bytes, got %d", len(payload))
+		}
+		state.Ordinals = append(state.Ordinals, int64(binary.LittleEndian.Uint64(payload[0:8])))
+		state.SawFilt = append(state.SawFilt, binary.LittleEndian.Uint64(payload[8:16]) != 0)
+		state.NProj = append(state.NProj, int64(binary.LittleEndian.Uint64(payload[16:24])))
+	}
+	return state, nil
+}
+
+func (f *SplitEchoFiltersFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *splitEchoState, out *vgirpc.OutputCollector) error {
+	if state.Done || len(state.Ordinals) == 0 {
+		return out.Finish()
+	}
+	state.Done = true
+	n := int64(len(state.Ordinals))
+	ordinals := vgi.BuildInt64Array(n, func(i int64) int64 { return state.Ordinals[i] })
+	defer ordinals.Release()
+	nproj := vgi.BuildInt64Array(n, func(i int64) int64 { return state.NProj[i] })
+	defer nproj.Release()
+
+	b := array.NewBooleanBuilder(memory.NewGoAllocator())
+	defer b.Release()
+	for _, v := range state.SawFilt {
+		b.Append(v)
+	}
+	saw := b.NewArray()
+	defer saw.Release()
+
+	return out.EmitArrays([]arrow.Array{ordinals, saw, nproj}, n)
+}
+
+// NewSplitEchoFiltersFunction registers the pushdown-reporting fixture.
+func NewSplitEchoFiltersFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[splitEchoState](&SplitEchoFiltersFunction{})
 }
