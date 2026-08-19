@@ -282,6 +282,14 @@ func main() {
 			Comment: "Multi-branch with complementary branch_filters — exercises pruning",
 		})
 		w.RegisterCatalogTable("data", vgi.CatalogTable{
+			Name: "multi_branch_format",
+			Columns: arrow.NewSchema([]arrow.Field{
+				{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+				{Name: "label", Type: arrow.BinaryTypes.String, Nullable: true},
+			}, nil),
+			Comment: "Format branch: read_csv with delim/header options — used by multi_branch_format.test",
+		})
+		w.RegisterCatalogTable("data", vgi.CatalogTable{
 			Name:    "multi_branch_hetero",
 			Columns: nCol,
 			Comment: "Multi-branch: sequence(50) + read_parquet — used by multi_branch_heterogeneous.test",
@@ -1096,6 +1104,21 @@ func multiBranchScanBranchesGet(_ []byte, schemaName, name string, _, _ *string)
 		a.BranchFilter = strPtr("n < 50")
 		b.BranchFilter = strPtr("n >= 50")
 		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{a, b}}, true, nil
+	case "multi_branch_format":
+		// A FORMAT branch: name the format and the locations, and let the client
+		// resolve the reader. The options BECOME the reader's named arguments —
+		// `nullstr` is the load-bearing one, since DuckDB's CSV sniffer works out
+		// the delimiter and header unaided and so proves nothing on its own.
+		csv := "csv"
+		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{{
+			FormatName:      &csv,
+			FormatLocations: []string{branchPath("vgi_format_branch.csv")},
+			FormatOptions: map[string]vgi.ScanArg{
+				"delim":   {Value: "|", Type: arrow.BinaryTypes.String},
+				"header":  {Value: true, Type: arrow.FixedWidthTypes.Boolean},
+				"nullstr": {Value: "row_2", Type: arrow.BinaryTypes.String},
+			},
+		}}}, true, nil
 	case "multi_branch_hetero":
 		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{
 			seq(50), readParquet(branchPath("vgi_hetero_branch.parquet")),

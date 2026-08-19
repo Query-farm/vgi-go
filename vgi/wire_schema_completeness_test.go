@@ -251,6 +251,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					SourceTable:         strPtr("events"),
 					FormatName:          strPtr("acme_csv"),
 					FormatLocations:     []string{"s3://bucket/a.csv"},
+					FormatOptions:       map[string]ScanArg{"delim": {Value: "|", Type: arrow.BinaryTypes.String}},
 				})
 			},
 		},

@@ -177,6 +177,15 @@ type ScanBranch struct {
 	// function per format or knowing the reader's argument spelling.
 	FormatName      *string
 	FormatLocations []string
+	// FormatOptions are the reader's options for a format branch. They BECOME
+	// the reader's named arguments, so without them a format branch cannot pass
+	// its reader a delimiter, a header flag, or anything else.
+	//
+	// Typed like NamedArguments rather than raw bytes: on the wire this is a
+	// 1-row IPC batch whose COLUMN NAMES are the option names (an option value
+	// may be any Arrow type, so no static schema could describe it), but that
+	// encoding is the serializer's business, not the caller's.
+	FormatOptions map[string]ScanArg
 }
 
 // ScanBranchesResult is the list of physical sources backing a multi-branch
@@ -201,6 +210,17 @@ func SerializeScanBranch(branch *ScanBranch) ([]byte, error) {
 		return nil, fmt.Errorf("serializing branch arguments: %w", err)
 	}
 
+	// Same encoding as the arguments blob, so the client decodes both with one
+	// helper. Nil when there are no options, which reads as absent rather than
+	// as an empty batch.
+	var formatOptionBytes []byte
+	if len(branch.FormatOptions) > 0 {
+		formatOptionBytes, err = serializeScanArgs(mem, nil, branch.FormatOptions)
+		if err != nil {
+			return nil, fmt.Errorf("serializing branch format options: %w", err)
+		}
+	}
+
 	fnNameBuilder := array.NewStringBuilder(mem)
 	defer fnNameBuilder.Release()
 	fnNameBuilder.Append(branch.FunctionName)
@@ -222,6 +242,17 @@ func SerializeScanBranch(branch *ScanBranch) ([]byte, error) {
 	writableBuilder.Append(branch.Writable)
 
 	// Catalog-table branch fields (nullable strings; nil = function branch).
+	appendNullableBinary := func(v []byte) *array.Binary {
+		b := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+		defer b.Release()
+		if v != nil {
+			b.Append(v)
+		} else {
+			b.AppendNull()
+		}
+		return b.NewArray().(*array.Binary)
+	}
+
 	appendNullableString := func(v *string) *array.String {
 		b := array.NewStringBuilder(mem)
 		defer b.Release()
@@ -256,6 +287,7 @@ func SerializeScanBranch(branch *ScanBranch) ([]byte, error) {
 			}
 			return lb.NewArray()
 		}(),
+		appendNullableBinary(formatOptionBytes),
 	}
 	defer func() {
 		for _, c := range cols {
