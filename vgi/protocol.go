@@ -1378,12 +1378,21 @@ func (w *Worker) getArgSpecs(fn interface{}) []ArgSpec {
 // ArrowSerializable implementation for GlobalInitResponseWire
 // ---------------------------------------------------------------------------
 
+// globalInitResponseWireSchema is the init stream's header schema. It has no
+// codegen counterpart (the generated InitParamsSchema covers only the request
+// envelope), so it is the one init-side wire shape spelled out by hand — which
+// is exactly why it must be spelled out ONCE. It used to be written twice, here
+// and again at the vgirpc.DynamicStreamWithHeader registration in worker.go, and
+// two copies of a wire schema is how the TypeScript SDK ended up rejecting a
+// correct client at its very first catalog call: the copies disagreed about a
+// field's nullability and neither side was wrong on its own terms.
+var globalInitResponseWireSchema = arrow.NewSchema([]arrow.Field{
+	{Name: "execution_id", Type: arrow.BinaryTypes.Binary},
+	{Name: "max_workers", Type: arrow.PrimitiveTypes.Int64},
+	{Name: "opaque_data", Type: arrow.BinaryTypes.Binary, Nullable: true},
+}, nil)
+
 // ArrowSchema returns the Arrow schema used to serialize a GlobalInitResponseWire.
 func (r *GlobalInitResponseWire) ArrowSchema() *arrow.Schema {
-	fields := []arrow.Field{
-		{Name: "execution_id", Type: arrow.BinaryTypes.Binary},
-		{Name: "max_workers", Type: arrow.PrimitiveTypes.Int64},
-		{Name: "opaque_data", Type: arrow.BinaryTypes.Binary, Nullable: true},
-	}
-	return arrow.NewSchema(fields, nil)
+	return globalInitResponseWireSchema
 }

@@ -1173,13 +1173,10 @@ func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 	// Register bind (unary)
 	vgirpc.Unary[BindRequestWire, BindResponseWire](s, "bind", w.handleBind)
 
-	// Register init (dynamic stream with header)
-	headerSchema := arrow.NewSchema([]arrow.Field{
-		{Name: "execution_id", Type: arrow.BinaryTypes.Binary},
-		{Name: "max_workers", Type: arrow.PrimitiveTypes.Int64},
-		{Name: "opaque_data", Type: arrow.BinaryTypes.Binary, Nullable: true},
-	}, nil)
-	vgirpc.DynamicStreamWithHeader[InitRequestWire](s, "init", headerSchema, w.handleInit)
+	// Register init (dynamic stream with header). The header schema is the one
+	// GlobalInitResponseWire serializes against — shared rather than restated so
+	// the advertised header and the emitted header cannot drift apart.
+	vgirpc.DynamicStreamWithHeader[InitRequestWire](s, "init", globalInitResponseWireSchema, w.handleInit)
 
 	// Register table_function_cardinality (unary)
 	vgirpc.Unary[CardinalityRequestWire, TableCardinality](s, "table_function_cardinality", w.handleCardinality)
