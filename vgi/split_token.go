@@ -62,7 +62,13 @@ type SplitTokenError struct {
 	Message string
 }
 
-func (e *SplitTokenError) Error() string { return e.Message }
+// Error prefixes the stable KIND, because the kind is the part a caller acts
+// on: only SPLIT_SNAPSHOT_EXPIRED means "re-run the query", and a connector
+// several layers up sees the message string rather than this type. Dropping it
+// made the three failures indistinguishable to everyone downstream — and made
+// the cross-SDK suite, which asserts on the code, pass only against the SDKs
+// that kept it.
+func (e *SplitTokenError) Error() string { return "[" + e.Kind + "] " + e.Message }
 
 // Error kinds, stable across SDKs.
 const (
@@ -272,13 +278,39 @@ func (w *Worker) openSplitTokens(tokens [][]byte, bindReq *BindRequestWire, call
 	}
 	payloads := make([][]byte, 0, len(tokens))
 	for _, token := range tokens {
-		payload, err := OpenSplitToken(token, w.splitSigningKey(), auth, expected, nil)
+		// The anchor is CHECKED, not skipped. Passing nil here meant a plan that
+		// outlived its snapshot was redeemed happily, so SPLIT_SNAPSHOT_EXPIRED —
+		// the one error whose purpose is telling an operator the query is
+		// re-runnable — could never be raised by this SDK.
+		payload, err := OpenSplitToken(token, w.splitSigningKey(), auth, expected, w.splitLiveAnchor())
 		if err != nil {
 			return nil, err
 		}
 		payloads = append(payloads, payload)
 	}
 	return payloads, nil
+}
+
+// splitLiveAnchor is the consistency anchor a split token must still name: the
+// catalog version this worker currently reports.
+//
+// Read from ONE place by both the mint and the verify side on purpose. Minting
+// from a different value than redemption compares against is not a subtle bug:
+// it refuses every token, and the documented response to SPLIT_SNAPSHOT_EXPIRED
+// is "re-run the query", which re-plans, mints the same mismatch and fails
+// again — a livelock returning no rows, blaming the data for moving when it has
+// not.
+func (w *Worker) splitLiveAnchor() []byte {
+	return splitAnchor(w.splitLiveCatalogVersion())
+}
+
+// splitLiveCatalogVersion is the catalog version this worker reports, matching
+// what the catalog_version RPC answers.
+func (w *Worker) splitLiveCatalogVersion() int64 {
+	if w.catalog != nil {
+		return w.catalog.version
+	}
+	return 1
 }
 
 // splitSigningKey returns the key to seal with, or nil when this worker holds

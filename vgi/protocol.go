@@ -1183,7 +1183,16 @@ func (w *Worker) handlePlan(ctx context.Context, callCtx *vgirpc.CallContext, re
 
 	// The framework stamps every token: an author cannot forget the consistency
 	// anchor, cannot mis-bind the fingerprint, and never writes crypto.
-	if err := w.stampSplitTokens(result.Splits, &req, result.CatalogVersion, callCtx.Auth); err != nil {
+	// A worker that names its version is taken at its word — it knows which
+	// snapshot it planned against. One that leaves it unset gets the LIVE
+	// version, never 0: minting 0 while redemption compares against the live
+	// counter refuses every token, and is invisible on a catalog whose version
+	// happens to be 0, which is most fixtures.
+	planVersion := result.CatalogVersion
+	if planVersion == 0 {
+		planVersion = w.splitLiveCatalogVersion()
+	}
+	if err := w.stampSplitTokens(result.Splits, &req, planVersion, callCtx.Auth); err != nil {
 		return PlanResponseWire{}, err
 	}
 

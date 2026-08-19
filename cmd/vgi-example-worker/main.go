@@ -297,6 +297,11 @@ func main() {
 			Comment: "Multi-branch: VGI + read_csv — used by multi_branch_pushdown_incapable.test",
 		})
 		w.RegisterCatalogTable("data", vgi.CatalogTable{
+			Name:    "multi_branch_split",
+			Columns: nCol,
+			Comment: "Multi-branch: split_sequence(30 over 6 splits) + sequence(20) — used by splits/multi_branch.test",
+		})
+		w.RegisterCatalogTable("data", vgi.CatalogTable{
 			Name:    "multi_branch_empty",
 			Columns: nCol,
 			Comment: "Multi-branch: empty branches list — used by multi_branch_empty_branches.test",
@@ -1113,6 +1118,23 @@ func multiBranchScanBranchesGet(_ []byte, schemaName, name string, _, _ *string)
 			readParquet(branchPath("vgi_recon_a_b.parquet")),
 			readParquet(branchPath("vgi_recon_b_a.parquet")),
 			readParquet(branchPath("vgi_recon_a_only.parquet")),
+		}}, true, nil
+	case "multi_branch_split":
+		// One split-capable arm plus one ordinary arm. The split arm's plan call
+		// happens at THAT arm's own InitGlobal, independently of the plain arm
+		// beside it — the two parallelism axes (branches divide a table across
+		// functions, splits divide one function's scan across readers) compose
+		// without either planning on the other's behalf.
+		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{
+			{
+				FunctionName: "split_sequence",
+				NamedArguments: map[string]vgi.ScanArg{
+					"n":      {Value: int64(30), Type: arrow.PrimitiveTypes.Int64},
+					"splits": {Value: int64(6), Type: arrow.PrimitiveTypes.Int64},
+				},
+			},
+			// The ordinary arm, which never sees a plan call at all.
+			seq(20),
 		}}, true, nil
 	case "multi_branch_empty":
 		// Intentionally empty — exercises the C++ "loud at attach" rejection.

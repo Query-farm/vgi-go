@@ -34,6 +34,27 @@ func (pf *PushdownFilters) GetColumnBounds(name string) *ColumnBounds {
 	maxInc := true
 
 	for _, f := range pf.collectColumnFilters(name) {
+		// An IN set implies bounds — [min(values), max(values)] — and a join-key
+		// filter IS an IN set once its side batch is resolved. Skipping them meant
+		// a worker pruning by range got NOTHING from a join-key pushdown, which is
+		// the single most valuable pushdown a scan receives: it read every row and
+		// let the engine filter above it, silently, with the pushdown having
+		// arrived and been discarded one call short of use.
+		if inf, ok := f.(*InFilter); ok && inf.Values != nil {
+			lo, hi, found := arrayBoundsScalar(inf.Values)
+			if !found {
+				continue
+			}
+			if minVal == nil || scalarGreaterEqual(lo, minVal) {
+				// Deliberately NOT tightened: an IN set's min is the tightest
+				// lower bound already, and it is inclusive by construction.
+				minVal, minInc = lo, true
+			}
+			if maxVal == nil || scalarLessEqual(hi, maxVal) {
+				maxVal, maxInc = hi, true
+			}
+			continue
+		}
 		cf, ok := f.(*ConstantFilter)
 		if !ok {
 			continue
@@ -78,6 +99,28 @@ func (pf *PushdownFilters) GetColumnBounds(name string) *ColumnBounds {
 		MaxValue:     maxVal,
 		MaxInclusive: maxInc,
 	}
+}
+
+// arrayBoundsScalar returns the (min, max) of an array as scalars, skipping
+// nulls. Used to derive range bounds from an IN / join-key value set.
+func arrayBoundsScalar(arr arrow.Array) (scalar.Scalar, scalar.Scalar, bool) {
+	var lo, hi scalar.Scalar
+	for i := 0; i < arr.Len(); i++ {
+		if arr.IsNull(i) {
+			continue
+		}
+		v, err := scalar.GetScalar(arr, i)
+		if err != nil {
+			continue
+		}
+		if lo == nil || scalarLess(v, lo) {
+			lo = v
+		}
+		if hi == nil || scalarGreater(v, hi) {
+			hi = v
+		}
+	}
+	return lo, hi, lo != nil && hi != nil
 }
 
 // GetColumnConstant returns the constant value if the column has an equality
