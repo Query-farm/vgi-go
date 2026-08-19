@@ -252,6 +252,11 @@ func (w *Worker) stampSplitTokens(splits []ScanSplit, req *PlanRequestWire, cata
 			return err
 		}
 		splits[i].Token = token
+		// Clear the payload. It is sealed INTO the token, and shipping the
+		// plaintext in the field beside the ciphertext made the seal decorative.
+		// No client reads it — the C++ side pulls Token alone — and redemption
+		// recovers the payload from inside the envelope.
+		splits[i].Payload = nil
 	}
 	return nil
 }
