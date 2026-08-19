@@ -3,6 +3,7 @@
 package vgi
 
 import (
+	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -200,25 +201,18 @@ type TableFunctionWithPlan interface {
 // SerializeScanSplit encodes one split as a single-row Arrow IPC batch, the
 // same list<binary>-of-records shape ScanBranch uses. Field ORDER and types are
 // wire-significant and must match vgi/protocol.py's ScanSplit exactly.
+// SerializeScanSplit encodes one split as the single-row Arrow IPC batch that
+// rides one entry of PlanResponse.splits.
+//
+// The schema comes from codegen (ScanSplitSchema) rather than being spelled out
+// here. It used to be hand-written, and hand-written is how four SDKs ended up
+// disagreeing about which columns were binary and which were large_binary — a
+// disagreement the client surfaced as "the worker bypassed the framework".
 func SerializeScanSplit(split *ScanSplit) ([]byte, error) {
 	mem := memory.NewGoAllocator()
 
-	// The position columns are plain binary while payload/token/bounds/statistics
-	// are large_binary — an asymmetry inherited from the canonical schema, not a
-	// mistake to be tidied away. A client reads these by name and type.
-	plainBin := func(v []byte, null bool) arrow.Array {
+	bin := func(v []byte, null bool) arrow.Array {
 		b := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
-		defer b.Release()
-		if null {
-			b.AppendNull()
-		} else {
-			b.Append(v)
-		}
-		return b.NewArray()
-	}
-
-	largeBin := func(v []byte, null bool) arrow.Array {
-		b := array.NewBinaryBuilder(mem, arrow.BinaryTypes.LargeBinary)
 		defer b.Release()
 		if null {
 			b.AppendNull()
@@ -254,28 +248,28 @@ func SerializeScanSplit(split *ScanSplit) ([]byte, error) {
 		locBuilder.AppendNull()
 	}
 
-	derefBytes := func(p *[]byte) ([]byte, bool) {
+	deref := func(p *[]byte) ([]byte, bool) {
 		if p == nil {
 			return nil, true
 		}
 		return *p, false
 	}
-	pb, pbNull := derefBytes(split.PartitionBounds)
-	cs, csNull := derefBytes(split.ColumnStatistics)
-	sp, spNull := derefBytes(split.StartPosition)
-	ep, epNull := derefBytes(split.EndPosition)
+	pb, pbNull := deref(split.PartitionBounds)
+	cs, csNull := deref(split.ColumnStatistics)
+	sp, spNull := deref(split.StartPosition)
+	ep, epNull := deref(split.EndPosition)
 
 	cols := []arrow.Array{
-		largeBin(split.Payload, false),
-		largeBin(split.Token, false),
+		bin(split.Payload, false),
+		bin(split.Token, false),
 		nullableInt64(split.EstimatedRows),
 		boolBuilder.NewArray(),
 		nullableInt64(split.EstimatedBytes),
-		largeBin(pb, pbNull),
-		largeBin(cs, csNull),
+		bin(pb, pbNull),
+		bin(cs, csNull),
 		locBuilder.NewArray(),
-		plainBin(sp, spNull),
-		plainBin(ep, epNull),
+		bin(sp, spNull),
+		bin(ep, epNull),
 	}
 	defer func() {
 		for _, c := range cols {
@@ -283,20 +277,7 @@ func SerializeScanSplit(split *ScanSplit) ([]byte, error) {
 		}
 	}()
 
-	fields := []arrow.Field{
-		{Name: "payload", Type: arrow.BinaryTypes.LargeBinary},
-		{Name: "token", Type: arrow.BinaryTypes.LargeBinary},
-		{Name: "estimated_rows", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-		{Name: "rows_exact", Type: arrow.FixedWidthTypes.Boolean},
-		{Name: "estimated_bytes", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-		{Name: "partition_bounds", Type: arrow.BinaryTypes.LargeBinary, Nullable: true},
-		{Name: "column_statistics", Type: arrow.BinaryTypes.LargeBinary, Nullable: true},
-		{Name: "location_ids", Type: arrow.ListOf(arrow.PrimitiveTypes.Int64), Nullable: true},
-		{Name: "start_position", Type: arrow.BinaryTypes.Binary, Nullable: true},
-		{Name: "end_position", Type: arrow.BinaryTypes.Binary, Nullable: true},
-	}
-	schema := arrow.NewSchema(fields, nil)
-	rec := array.NewRecord(schema, cols, 1)
+	rec := array.NewRecord(generated.ScanSplitSchema, cols, 1)
 	defer rec.Release()
 	return SerializeRecordBatch(rec)
 }
