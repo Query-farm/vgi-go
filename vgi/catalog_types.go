@@ -270,7 +270,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		opBuilder.AppendNull()
 	}
 
-	// max_workers (non-null)
+	// max_workers (nullable in the schema; this SDK always writes a value)
 	mwBuilder := array.NewInt32Builder(mem)
 	defer mwBuilder.Release()
 	mwBuilder.Append(info.MaxWorkers)

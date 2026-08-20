@@ -84,7 +84,7 @@ func SerializeCatalogInfo(info *CatalogInfo) ([]byte, error) {
 	// Field order and types must match generated.CatalogInfoSchema.
 	relStructType := arrow.StructOf(
 		arrow.Field{Name: "version", Type: arrow.BinaryTypes.String},
-		arrow.Field{Name: "released_at", Type: &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}},
+		arrow.Field{Name: "released_at", Type: &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}, Nullable: true},
 		arrow.Field{Name: "summary", Type: arrow.BinaryTypes.String},
 		arrow.Field{Name: "notes_url", Type: arrow.BinaryTypes.String, Nullable: true},
 	)

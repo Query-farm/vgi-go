@@ -133,7 +133,8 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 		}
 	}
 
-	// parameter_default_values (binary, non-null; empty bytes when no defaults)
+	// parameter_default_values (binary, nullable; this SDK writes empty bytes
+	// rather than null when there are no defaults)
 	pdvBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
 	defer pdvBuilder.Release()
 	if info.ParameterDefaultValues != nil {
@@ -147,7 +148,8 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 	defer defBuilder.Release()
 	defBuilder.Append(info.Definition)
 
-	// arguments_schema (binary, non-null; empty bytes when no per-parameter docs)
+	// arguments_schema (binary, nullable; this SDK writes empty bytes rather
+	// than null when there are no per-parameter docs)
 	argsBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
 	defer argsBuilder.Release()
 	if info.ArgumentsSchema != nil {

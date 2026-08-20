@@ -150,7 +150,7 @@ func (BindRequestWire) ArrowSchema() *arrow.Schema {
 // BindResponseWire is the wire format for bind responses.
 type BindResponseWire struct {
 	OutputSchema      []byte   `vgirpc:"output_schema"`
-	OpaqueData        []byte   `vgirpc:"opaque_data"`
+	OpaqueData        []byte   `vgirpc:"opaque_data,nullable"`
 	LookupSecretTypes []string `vgirpc:"lookup_secret_types"`
 	LookupScopes      []string `vgirpc:"lookup_scopes"`
 	LookupNames       []string `vgirpc:"lookup_names"`

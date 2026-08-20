@@ -227,9 +227,9 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 	columnStatsArr := appendOptBinary(info.ColumnStatistics)
 	bindResultArr := appendOptBinary(info.BindResult)
 
-	// cardinality_estimate / cardinality_max: schema is non-nullable int64,
-	// but the C++ extension reads via `row[...].as<int64_t>()` which yields
-	// std::nullopt for nulls. Match vgi-python: write null when unset.
+	// cardinality_estimate / cardinality_max: nullable int64. The C++ extension
+	// reads via `row[...].as<int64_t>()`, which yields std::nullopt for nulls.
+	// Match vgi-python: write null when unset.
 	cardEstBuilder := array.NewInt64Builder(mem)
 	defer cardEstBuilder.Release()
 	if info.CardinalityEstimate != nil {

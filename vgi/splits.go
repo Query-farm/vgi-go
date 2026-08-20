@@ -23,14 +23,14 @@ import (
 // the response with a schema-mismatch error naming the field count.
 type PlanRequestWire struct {
 	BindCall       BindRequestWire `vgirpc:"bind_call"`
-	BindOpaqueData []byte          `vgirpc:"bind_opaque_data"`
+	BindOpaqueData []byte          `vgirpc:"bind_opaque_data,nullable"`
 
 	// Pushdown, as it reached the scan. A plan is built from STATIC filters
 	// only: join-key values land after planning, so they prune within a split
 	// rather than deciding the split set.
 	ProjectionIDs   *[]int64 `vgirpc:"projection_ids"`
-	PushdownFilters []byte   `vgirpc:"pushdown_filters"`
-	JoinKeys        [][]byte `vgirpc:"join_keys"`
+	PushdownFilters []byte   `vgirpc:"pushdown_filters,nullable"`
+	JoinKeys        [][]byte `vgirpc:"join_keys,nullable"`
 
 	// RowLimit is a plain fetch limit. DuckDB cannot supply it —
 	// TableFunctionInitInput carries no limit — so it is always nil from there;
@@ -49,19 +49,19 @@ type PlanRequestWire struct {
 	// data (that is StartPosition). Merging the two later would be a mess: a
 	// cursor lives for one plan call, a position is checkpointed and must
 	// survive restarts, upgrades and key rotation.
-	Cursor []byte `vgirpc:"cursor"`
+	Cursor []byte `vgirpc:"cursor,nullable"`
 
 	// RefinedFilters narrows FUTURE splits only; splits already emitted under a
 	// looser filter stay valid. FiltersComplete=false says more narrowing may
 	// arrive, so a worker may hold splits back; true says stop waiting.
-	RefinedFilters  []byte `vgirpc:"refined_filters"`
+	RefinedFilters  []byte `vgirpc:"refined_filters,nullable"`
 	FiltersComplete bool   `vgirpc:"filters_complete"`
 
 	// The position range in the DATA. A null EndPosition means "as of now" — the
 	// worker resolves the frontier and reports it back, which is latestOffset()
 	// and planInputPartitions(start, end) in one call.
-	StartPosition []byte `vgirpc:"start_position"`
-	EndPosition   []byte `vgirpc:"end_position"`
+	StartPosition []byte `vgirpc:"start_position,nullable"`
+	EndPosition   []byte `vgirpc:"end_position,nullable"`
 
 	// Existing scan hints. A worker may return FEWER splits when a Top-N limit
 	// is present.
@@ -88,10 +88,10 @@ type PlanResponseWire struct {
 	// scan), it compared token bytes so it could never work on a keyed worker where
 	// each mint uses a fresh nonce, and the most a client can do with a duplicate is
 	// refuse anyway. Violating this returns DUPLICATE ROWS, silently.
-	NextCursors [][]byte `vgirpc:"next_cursors"`
+	NextCursors [][]byte `vgirpc:"next_cursors,nullable"`
 
 	ExecutionID    *[]byte `vgirpc:"execution_id"`
-	InitOpaqueData []byte  `vgirpc:"init_opaque_data"`
+	InitOpaqueData []byte  `vgirpc:"init_opaque_data,nullable"`
 
 	// MaxWorkers is NORMATIVE on redemption, not advisory.
 	MaxWorkers *int64 `vgirpc:"max_workers"`
@@ -119,21 +119,21 @@ type PlanResponseWire struct {
 	// split really is single-valued — a byte-sized plan that packs across
 	// partition boundaries would otherwise produce silently wrong co-partitioned
 	// join results.
-	Partitioning [][]byte `vgirpc:"partitioning"`
+	Partitioning [][]byte `vgirpc:"partitioning,nullable"`
 
 	// SortOrder is ordering WITHIN each split, never a global claim across
 	// splits. An engine that bin-packs several splits into one partition must
 	// declare no ordering at all: concatenating K non-contiguous sorted runs is
 	// not sorted, and a sort-elimination pass would then delete a needed sort.
-	SortOrder [][]byte `vgirpc:"sort_order"`
+	SortOrder [][]byte `vgirpc:"sort_order,nullable"`
 
 	CacheMaxAgeSeconds *int64 `vgirpc:"cache_max_age_seconds"`
 
 	// StartPosition is what the worker actually started from; EndPosition is the
 	// data frontier resolved at plan time — checkpoint it and pass it back as
 	// the next StartPosition.
-	StartPosition []byte `vgirpc:"start_position"`
-	EndPosition   []byte `vgirpc:"end_position"`
+	StartPosition []byte `vgirpc:"start_position,nullable"`
+	EndPosition   []byte `vgirpc:"end_position,nullable"`
 }
 
 // ScanSplit is one unit of scan work.

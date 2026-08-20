@@ -307,7 +307,7 @@ func main() {
 		w.RegisterCatalogTable("data", vgi.CatalogTable{
 			Name:    "multi_branch_split",
 			Columns: nCol,
-			Comment: "Multi-branch: split_sequence(30 over 6 splits) + sequence(20) — used by splits/multi_branch.test",
+			Comment: "Multi-branch: split_sequence(30, splits=6) + sequence(20) — used by splits/multi_branch.test",
 		})
 		w.RegisterCatalogTable("data", vgi.CatalogTable{
 			Name:    "multi_branch_empty",
