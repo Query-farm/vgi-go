@@ -68,12 +68,21 @@ EXTRA_SKIP=()
 #     the launcher changes — connection multiplexing.
 if [ "$TRANSPORT" = "http" ]; then
   AWK_HTTP=1
-  # Dropped on http only — transport-agnostic coverage that the prebuilt binary
-  # cannot serve over http (matches upstream's make test_http and vgi-java):
+  # Dropped on http only:
   #   * projection_pushdown_repro.test — one POST round-trip per two rows; fully
   #     covered by the stdio lane.
-  #   * dynamic_filter.test — Top-N + dynamic-filter continuation terminates
-  #     early over http in the prebuilt binary (a property of that C++ build).
+  #   * dynamic_filter.test — NOT a property of the prebuilt C++ binary, as this
+  #     comment used to claim. Root-caused 2026-08-21: this SDK's HTTP server
+  #     dropped a continuation turn's Arrow custom_metadata, so DuckDB's
+  #     tightening Top-N filter never reached the worker and COUNT(DISTINCT
+  #     pushed_filters) stayed at 1. Fixed in vgi-rpc-go 01b080c ("deliver a
+  #     continuation turn's tick metadata to the producer") — but that commit is
+  #     NOT in any published tag, and go.mod pins vgi-rpc-go v0.21.0, so the
+  #     worker CI builds still has the bug. Verified 2026-08-21 against a worker
+  #     built from that pin: fails 1/35 at dynamic_filter.test:134. REMOVE THIS
+  #     EXCLUSION once a vgi-rpc-go release containing 01b080c is out and go.mod
+  #     is bumped to it; the file then passes on both transports (proven in
+  #     vgi-rust, whose Cargo patch already picks the equivalent fix up).
   EXTRA_SKIP=(-not -name 'projection_pushdown_repro.test' -not -name 'dynamic_filter.test')
 fi
 
@@ -86,9 +95,6 @@ mkdir -p "$STAGE/test/sql/integration"
   #   nested_type_combinations.test — segfaults the prebuilt standalone runner
   #     (a property of that C++ build, not the worker — the worker passes it
   #     against a locally-built unittest).
-  #   bool_in_union.test — a pre-existing, arch-dependent union-bool bug; its
-  #     pinned expected output matches arm64 but not amd64 (CI is amd64), so it
-  #     is dropped on all platforms (mirrors vgi-rust's ci/run-integration.sh).
   # simple_writable/ IS staged: VGI_SIMPLE_WRITABLE_WORKER (below) points at the
   # Go fixture worker, so the 5 cross-language write tests run on every lane —
   # that var is always a spawned binary, so they run over subprocess (or the
@@ -96,7 +102,6 @@ mkdir -p "$STAGE/test/sql/integration"
   find . -name '*.test' \
        -not -path './writable/*' \
        -not -name 'nested_type_combinations.test' \
-       -not -name 'bool_in_union.test' \
        ${EXTRA_SKIP[@]+"${EXTRA_SKIP[@]}"} | while read -r f; do
     mkdir -p "$STAGE/test/sql/integration/$(dirname "$f")"
     awk -v http="$AWK_HTTP" -f "$HERE/preprocess-require.awk" "$f" > "$STAGE/test/sql/integration/$f"
