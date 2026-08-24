@@ -29,8 +29,8 @@ type PlanRequestWire struct {
 	// only: join-key values land after planning, so they prune within a split
 	// rather than deciding the split set.
 	ProjectionIDs   *[]int64 `vgirpc:"projection_ids"`
-	PushdownFilters []byte   `vgirpc:"pushdown_filters,nullable"`
-	JoinKeys        [][]byte `vgirpc:"join_keys,nullable"`
+	PushdownFilters []byte   `vgirpc:"pushdown_filters,large_binary,nullable"`
+	JoinKeys        [][]byte `vgirpc:"join_keys,elem=large_binary,nullable"`
 
 	// RowLimit is a plain fetch limit. DuckDB cannot supply it —
 	// TableFunctionInitInput carries no limit — so it is always nil from there;
@@ -54,7 +54,7 @@ type PlanRequestWire struct {
 	// RefinedFilters narrows FUTURE splits only; splits already emitted under a
 	// looser filter stay valid. FiltersComplete=false says more narrowing may
 	// arrive, so a worker may hold splits back; true says stop waiting.
-	RefinedFilters  []byte `vgirpc:"refined_filters,nullable"`
+	RefinedFilters  []byte `vgirpc:"refined_filters,large_binary,nullable"`
 	FiltersComplete bool   `vgirpc:"filters_complete"`
 
 	// The position range in the DATA. A null EndPosition means "as of now" — the

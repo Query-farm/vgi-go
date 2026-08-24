@@ -90,6 +90,13 @@ type CatalogAttachRequestWire struct {
 	Options               *[]byte `vgirpc:"options"`
 	DataVersionSpec       *string `vgirpc:"data_version_spec"`
 	ImplementationVersion *string `vgirpc:"implementation_version"`
+	// P5 client capabilities: the engine's name, the formats and catalogs it
+	// can bind natively, whether it can stream, and which filter encodings it
+	// speaks. Absent from this struct until 2026-08-21, so the C++ client sent
+	// a 5-column batch that this worker described as 4 — tolerated silently
+	// until vgi-rpc-go began validating the parameter contract before
+	// dispatch, at which point every ATTACH failed.
+	ClientCapabilities *[]byte `vgirpc:"client_capabilities"`
 }
 
 // CatalogAttachResultWire is the wire type for catalog_attach result.
@@ -286,7 +293,7 @@ type TableCommentSetRequestWire struct {
 	SchemaName            string  `vgirpc:"schema_name"`
 	Name                  string  `vgirpc:"name"`
 	Comment               *string `vgirpc:"comment"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
+	IgnoreNotFound        bool    `vgirpc:"ignore_not_found"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
@@ -296,18 +303,23 @@ type TableRenameRequestWire struct {
 	SchemaName            string  `vgirpc:"schema_name"`
 	Name                  string  `vgirpc:"name"`
 	NewName               string  `vgirpc:"new_name"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
+	IgnoreNotFound        bool    `vgirpc:"ignore_not_found"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
 // TableColumnAddRequestWire is for catalog_table_column_add.
 type TableColumnAddRequestWire struct {
-	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
-	SchemaName            string  `vgirpc:"schema_name"`
-	Name                  string  `vgirpc:"name"`
-	ColumnDefinition      []byte  `vgirpc:"column_definition"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
-	IfColumnNotExists     *bool   `vgirpc:"if_column_not_exists"`
+	AttachOpaqueData []byte `vgirpc:"attach_opaque_data"`
+	SchemaName       string `vgirpc:"schema_name"`
+	Name             string `vgirpc:"name"`
+	ColumnDefinition []byte `vgirpc:"column_definition"`
+	// Both flags are NON-nullable in the protocol (see
+	// generated.CatalogTableColumnAddParamsSchema). Declaring them *bool
+	// derived them nullable, and the derived schema is what the parameter
+	// contract is validated against — so every ALTER TABLE ... ADD COLUMN from
+	// the C++ client was rejected as a schema mismatch.
+	IgnoreNotFound        bool    `vgirpc:"ignore_not_found"`
+	IfColumnNotExists     bool    `vgirpc:"if_column_not_exists"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
@@ -317,9 +329,9 @@ type TableColumnDropRequestWire struct {
 	SchemaName            string  `vgirpc:"schema_name"`
 	Name                  string  `vgirpc:"name"`
 	ColumnName            string  `vgirpc:"column_name"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
-	IfColumnExists        *bool   `vgirpc:"if_column_exists"`
-	Cascade               *bool   `vgirpc:"cascade"`
+	IgnoreNotFound        bool    `vgirpc:"ignore_not_found"`
+	IfColumnExists        bool    `vgirpc:"if_column_exists"`
+	Cascade               bool    `vgirpc:"cascade"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
@@ -330,7 +342,7 @@ type TableColumnRenameRequestWire struct {
 	Name                  string  `vgirpc:"name"`
 	ColumnName            string  `vgirpc:"column_name"`
 	NewColumnName         string  `vgirpc:"new_column_name"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
+	IgnoreNotFound        bool    `vgirpc:"ignore_not_found"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
@@ -341,7 +353,7 @@ type TableColumnDefaultSetRequestWire struct {
 	Name                  string  `vgirpc:"name"`
 	ColumnName            string  `vgirpc:"column_name"`
 	Expression            string  `vgirpc:"expression"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
+	IgnoreNotFound        bool    `vgirpc:"ignore_not_found"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
@@ -351,7 +363,7 @@ type TableColumnDefaultDropRequestWire struct {
 	SchemaName            string  `vgirpc:"schema_name"`
 	Name                  string  `vgirpc:"name"`
 	ColumnName            string  `vgirpc:"column_name"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
+	IgnoreNotFound        bool    `vgirpc:"ignore_not_found"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
@@ -362,7 +374,7 @@ type TableColumnTypeChangeRequestWire struct {
 	Name                  string  `vgirpc:"name"`
 	ColumnDefinition      []byte  `vgirpc:"column_definition"`
 	Expression            *string `vgirpc:"expression"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
+	IgnoreNotFound        bool    `vgirpc:"ignore_not_found"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
@@ -372,7 +384,7 @@ type TableNotNullRequestWire struct {
 	SchemaName            string  `vgirpc:"schema_name"`
 	Name                  string  `vgirpc:"name"`
 	ColumnName            string  `vgirpc:"column_name"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
+	IgnoreNotFound        bool    `vgirpc:"ignore_not_found"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
@@ -396,10 +408,14 @@ type ViewCreateRequestWire struct {
 
 // ViewDropRequestWire is for catalog_view_drop.
 type ViewDropRequestWire struct {
-	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
-	SchemaName            string  `vgirpc:"schema_name"`
-	Name                  string  `vgirpc:"name"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
+	AttachOpaqueData []byte `vgirpc:"attach_opaque_data"`
+	SchemaName       string `vgirpc:"schema_name"`
+	Name             string `vgirpc:"name"`
+	IgnoreNotFound   bool   `vgirpc:"ignore_not_found"`
+	// Cascade was missing entirely, so this struct derived a 5-column contract
+	// against a 6-column protocol and every DROP VIEW was rejected. It is
+	// declared non-nullable, so there is no "absent" form to fall back on.
+	Cascade               bool    `vgirpc:"cascade"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
@@ -409,7 +425,7 @@ type ViewRenameRequestWire struct {
 	SchemaName            string  `vgirpc:"schema_name"`
 	Name                  string  `vgirpc:"name"`
 	NewName               string  `vgirpc:"new_name"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
+	IgnoreNotFound        bool    `vgirpc:"ignore_not_found"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
@@ -419,7 +435,7 @@ type ViewCommentSetRequestWire struct {
 	SchemaName            string  `vgirpc:"schema_name"`
 	Name                  string  `vgirpc:"name"`
 	Comment               *string `vgirpc:"comment"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
+	IgnoreNotFound        bool    `vgirpc:"ignore_not_found"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 
@@ -454,7 +470,7 @@ type MacroDropRequestWire struct {
 	AttachOpaqueData      []byte  `vgirpc:"attach_opaque_data"`
 	SchemaName            string  `vgirpc:"schema_name"`
 	Name                  string  `vgirpc:"name"`
-	IgnoreNotFound        *bool   `vgirpc:"ignore_not_found"`
+	IgnoreNotFound        bool    `vgirpc:"ignore_not_found"`
 	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
 }
 

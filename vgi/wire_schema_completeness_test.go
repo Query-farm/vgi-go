@@ -413,6 +413,12 @@ func TestEveryGeneratedRecordSchemaIsCovered(t *testing.T) {
 	for _, tc := range wireRecordCases(t) {
 		covered[tc.origin] = true
 	}
+	// Records whose schema is DERIVED from a Go struct rather than assembled by
+	// hand are covered by TestDerivedWireSchemasMatchGenerated instead. Same
+	// obligation, different mechanism — see wire_schema_derived_test.go.
+	for _, tc := range derivedRecordCases() {
+		covered[tc.origin] = true
+	}
 
 	var missing []string
 	for _, m := range matches {
@@ -427,17 +433,16 @@ func TestEveryGeneratedRecordSchemaIsCovered(t *testing.T) {
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
-		t.Fatalf("%v appear in %s but are not exercised by TestWireRecordSchemasMatchGenerated. "+
-			"Add a wireRecordCase that builds each one with every field populated, or add it to "+
-			"notBuiltByGo with the reason this SDK never constructs it.", missing, generatedPath)
+		t.Fatalf("%v appear in %s but are exercised by neither TestWireRecordSchemasMatchGenerated "+
+			"nor TestDerivedWireSchemasMatchGenerated. Add a wireRecordCase that builds each one "+
+			"with every field populated, a derivedRecordCase if its schema comes from a *Wire "+
+			"struct's tags, or an entry in notBuiltByGo with the reason this SDK never "+
+			"constructs it.", missing, generatedPath)
 	}
 
 	// The excuse list has to stay honest too: an entry for a record the
 	// generator no longer emits reads as coverage that does not exist.
-	declared := map[string]bool{}
-	for _, m := range matches {
-		declared[m[1]] = true
-	}
+	declared := generatedOrigins(t)
 	for origin := range notBuiltByGo {
 		if !declared[origin] {
 			t.Errorf("notBuiltByGo lists %q, which %s no longer declares — drop the entry",
@@ -449,4 +454,24 @@ func TestEveryGeneratedRecordSchemaIsCovered(t *testing.T) {
 			t.Errorf("%q is both covered by a wireRecordCase and excused in notBuiltByGo", origin)
 		}
 	}
+}
+
+// generatedOrigins is the set of record names the generated schemas declare,
+// read from the "// Origin: X" markers. Shared with the derived-schema test so
+// both coverage guards agree on what "declared" means.
+func generatedOrigins(t *testing.T) map[string]bool {
+	t.Helper()
+	src, err := os.ReadFile("generated/protocol_schemas.go")
+	if err != nil {
+		t.Fatalf("reading generated/protocol_schemas.go: %v", err)
+	}
+	matches := generatedOriginPattern.FindAllStringSubmatch(string(src), -1)
+	if len(matches) == 0 {
+		t.Fatal("found no \"// Origin: X\" markers — the generator's comment format changed")
+	}
+	out := make(map[string]bool, len(matches))
+	for _, m := range matches {
+		out[m[1]] = true
+	}
+	return out
 }

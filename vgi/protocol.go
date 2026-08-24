@@ -38,6 +38,26 @@ type BindRequestWire struct {
 	AtUnit  *string `vgirpc:"at_unit" arrow:"at_unit"`
 	AtValue *string `vgirpc:"at_value" arrow:"at_value"`
 
+	// CopyFrom carries the COPY ... FROM context (None unless this bind/init
+	// opens a COPY-FROM scan). Mirrors Python's BindRequest.copy_from. The C++
+	// extension ships it as a nested struct<format, file_path, expected_schema>
+	// column. It is ALWAYS present (null on a non-COPY bind): a worker that
+	// validates its declared parameter contract compares field order, name, type
+	// and nullability, so an omitted column is a contract violation rather than
+	// an absent value. The `struct` tag option is what derives the INLINE struct
+	// column the protocol declares; without it the field derives as `binary`
+	// (ArrowSerializable) and every bind from the C++ client is rejected.
+	// Nil here means the cell was Arrow-null, i.e. this is not a COPY bind.
+	CopyFrom *CopyFromContextWire `vgirpc:"copy_from,struct" arrow:"copy_from"`
+
+	// CopyTo carries the COPY ... TO context (None unless this bind/init opens a
+	// COPY-TO sink). Mirrors Python's BindRequest.copy_to. The C++ extension
+	// ships it as a nested struct<format, file_path> column, always present and
+	// null on a non-COPY bind (see CopyFrom above).
+	// The source columns ride the existing InputSchema, so they are not
+	// duplicated here. Read at bind/init via CopyToContextWire.
+	CopyTo *CopyToContextWire `vgirpc:"copy_to,struct" arrow:"copy_to"`
+
 	// SchemaName is the catalog schema that owns the function being bound. A
 	// worker may register the same function name in more than one schema, so
 	// the bare name is not a unique key — dispatch resolves
@@ -46,30 +66,15 @@ type BindRequestWire struct {
 	// schema to name (COPY handler binds, which are advertised at catalog
 	// level), where lookup falls back to a cross-schema search by name.
 	SchemaName *string `vgirpc:"schema_name" arrow:"schema_name"`
-
-	// CopyFrom carries the COPY ... FROM context (None unless this bind/init
-	// opens a COPY-FROM scan). Mirrors Python's BindRequest.copy_from. The C++
-	// extension ships it as a nested struct<format, file_path, expected_schema>
-	// column, only added for a COPY scan; fields are matched by name so its
-	// absence is wire-safe. Read at bind/init via CopyFromContextWire.
-	CopyFrom *CopyFromContextWire `vgirpc:"copy_from" arrow:"copy_from"`
-
-	// CopyTo carries the COPY ... TO context (None unless this bind/init opens a
-	// COPY-TO sink). Mirrors Python's BindRequest.copy_to. The C++ extension
-	// ships it as a nested struct<format, file_path> column, only added for a
-	// COPY TO statement; fields are matched by name so its absence is wire-safe.
-	// The source columns ride the existing InputSchema, so they are not
-	// duplicated here. Read at bind/init via CopyToContextWire.
-	CopyTo *CopyToContextWire `vgirpc:"copy_to" arrow:"copy_to"`
 }
 
 // CopyFromContextWire is the wire form of a COPY ... FROM context, carried as a
 // nested struct on the bind request. Mirrors Python's CopyFromContext dataclass:
 // format (utf8), file_path (utf8), expected_schema (binary IPC schema bytes).
 type CopyFromContextWire struct {
-	Format         string `arrow:"format"`
-	FilePath       string `arrow:"file_path"`
-	ExpectedSchema []byte `arrow:"expected_schema"`
+	Format         string `vgirpc:"format" arrow:"format"`
+	FilePath       string `vgirpc:"file_path" arrow:"file_path"`
+	ExpectedSchema []byte `vgirpc:"expected_schema" arrow:"expected_schema"`
 }
 
 // copyFromContextWireType is the Arrow struct type for the copy_from field; its
@@ -84,10 +89,13 @@ var copyFromContextWireType = arrow.StructOf(
 // copyFromContextWireSchema describes the children of the copy_from struct.
 var copyFromContextWireSchema = arrow.NewSchema(copyFromContextWireType.Fields(), nil)
 
-// ArrowSchema makes CopyFromContextWire an ArrowSerializable so the framework's
-// schema builder accepts it as a nested struct field on BindRequestWire and the
-// deserializer routes the incoming struct (or binary-IPC) column through
-// setStructField. The C++ extension ships it as a struct column.
+// ArrowSchema keeps CopyFromContextWire an ArrowSerializable. It no longer
+// decides the copy_from COLUMN type — the `vgirpc:"copy_from,struct"` tag does
+// that, deriving struct<format, file_path, expected_schema> from the vgirpc
+// tags above (ArrowSerializable alone would derive `binary`, which is what
+// made every C++ bind fail the parameter-contract check). What it still buys
+// is tolerance on the UNVALIDATED nested bind_call path: a peer that ships
+// copy_from as binary IPC bytes rather than an inline struct still decodes.
 func (CopyFromContextWire) ArrowSchema() *arrow.Schema {
 	return copyFromContextWireSchema
 }
@@ -97,8 +105,8 @@ func (CopyFromContextWire) ArrowSchema() *arrow.Schema {
 // format (utf8), file_path (utf8). The source columns ride InputSchema, so they
 // are not carried here.
 type CopyToContextWire struct {
-	Format   string `arrow:"format"`
-	FilePath string `arrow:"file_path"`
+	Format   string `vgirpc:"format" arrow:"format"`
+	FilePath string `vgirpc:"file_path" arrow:"file_path"`
 }
 
 // copyToContextWireType is the Arrow struct type for the copy_to field; its
@@ -112,10 +120,9 @@ var copyToContextWireType = arrow.StructOf(
 // copyToContextWireSchema describes the children of the copy_to struct.
 var copyToContextWireSchema = arrow.NewSchema(copyToContextWireType.Fields(), nil)
 
-// ArrowSchema makes CopyToContextWire an ArrowSerializable so the framework's
-// schema builder accepts it as a nested struct field on BindRequestWire and the
-// deserializer routes the incoming struct (or binary-IPC) column through
-// setStructField. The C++ extension ships it as a struct column.
+// ArrowSchema keeps CopyToContextWire an ArrowSerializable; see the note on
+// CopyFromContextWire.ArrowSchema for why the `struct` tag, not this method,
+// is what makes copy_to an inline struct column.
 func (CopyToContextWire) ArrowSchema() *arrow.Schema {
 	return copyToContextWireSchema
 }
@@ -134,9 +141,13 @@ var bindRequestWireSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "resolved_secrets_provided", Type: &arrow.BooleanType{}},
 	{Name: "at_unit", Type: arrow.BinaryTypes.String, Nullable: true},
 	{Name: "at_value", Type: arrow.BinaryTypes.String, Nullable: true},
-	{Name: "schema_name", Type: arrow.BinaryTypes.String, Nullable: true},
+	// Protocol order: copy_from, copy_to, then schema_name last. Readers match
+	// bind_call children by name, so order is not load-bearing here — but this
+	// schema is the shape a Go CLIENT emits, and it should agree with the
+	// struct-tag derivation above rather than drift from it.
 	{Name: "copy_from", Type: copyFromContextWireType, Nullable: true},
 	{Name: "copy_to", Type: copyToContextWireType, Nullable: true},
+	{Name: "schema_name", Type: arrow.BinaryTypes.String, Nullable: true},
 }, nil)
 
 // ArrowSchema makes BindRequestWire an ArrowSerializable. The framework then
@@ -158,15 +169,40 @@ type BindResponseWire struct {
 
 // InitRequestWire is the wire format for init requests.
 type InitRequestWire struct {
-	BindCall        BindRequestWire `vgirpc:"bind_call"`
-	OutputSchema    []byte          `vgirpc:"output_schema"`
-	BindOpaqueData  *[]byte         `vgirpc:"bind_opaque_data"`
-	ProjectionIDs   *[]int32        `vgirpc:"projection_ids"`
-	PushdownFilters *[]byte         `vgirpc:"pushdown_filters"`
-	JoinKeys        *[][]byte       `vgirpc:"join_keys"`
-	Phase           *string         `vgirpc:"phase,enum"`
-	ExecutionID     *[]byte         `vgirpc:"execution_id"`
-	InitOpaqueData  *[]byte         `vgirpc:"init_opaque_data"`
+	// Field ORDER matches generated.InitRequestSchema (asserted by
+	// TestWireRecordSchemasMatchGenerated). Deserialization is by name, so order
+	// is not load-bearing for any peer we ship — but keeping it identical makes
+	// the derived schema byte-comparable with the other SDKs, which is how a
+	// drifted declaration gets caught at all.
+	BindCall       BindRequestWire `vgirpc:"bind_call"`
+	OutputSchema   []byte          `vgirpc:"output_schema"`
+	BindOpaqueData *[]byte         `vgirpc:"bind_opaque_data"`
+
+	// ProjectionIDs are int64 on the wire, not int32. Declaring []int32 here
+	// derived list<int32>, so a worker validating its parameter contract would
+	// reject every projected scan the C++ client sends.
+	ProjectionIDs *[]int64 `vgirpc:"projection_ids"`
+
+	// PushdownFilters / JoinKeys / SplitTokens are LARGE binary: a serialized
+	// filter tree, a set of join keys, or a batch of split tokens can exceed the
+	// 2 GiB that 32-bit offsets address. `elem=` is what carries the override to
+	// a list's ITEM — a bare option would describe the field, which is a list.
+	PushdownFilters *[]byte   `vgirpc:"pushdown_filters,large_binary"`
+	JoinKeys        *[][]byte `vgirpc:"join_keys,elem=large_binary"`
+
+	// SplitTokens carries the framework-stamped envelopes this init redeems.
+	// A LIST because DataFusion's partition_count() is its concurrency, so it
+	// bin-packs at planning time and must read a whole group per partition;
+	// DuckDB always sends exactly one. A worker handed several concatenates
+	// them into one stream in the order given.
+	SplitTokens *[][]byte `vgirpc:"split_tokens,elem=large_binary"`
+	RowLimit    *int64    `vgirpc:"row_limit"`
+
+	Phase           *string `vgirpc:"phase,enum"`
+	FinalizeStateID *[]byte `vgirpc:"finalize_state_id"`
+	ExecutionID     *[]byte `vgirpc:"execution_id"`
+	InitOpaqueData  *[]byte `vgirpc:"init_opaque_data"`
+
 	// SubstreamID is the stable, CLIENT-minted per-substream id for parallel
 	// streaming table-in-out functions. The extension threads it on every init
 	// of one substream (INPUT + FINALIZE), so a worker can key that substream's
@@ -174,29 +210,24 @@ type InitRequestWire struct {
 	// requests across backends (unlike the worker-minted execution_id). Nil when
 	// the client did not supply one (serial path, non-table-in-out functions,
 	// old clients). Mirrors vgi-python's InitRequest.substream_id.
-	SubstreamID           *[]byte  `vgirpc:"substream_id"`
+	SubstreamID *[]byte `vgirpc:"substream_id"`
+
 	OrderByColumnName     *string  `vgirpc:"order_by_column_name"`
 	OrderByDirection      *string  `vgirpc:"order_by_direction,enum"`
 	OrderByNullOrder      *string  `vgirpc:"order_by_null_order,enum"`
 	OrderByLimit          *int64   `vgirpc:"order_by_limit"`
 	TablesamplePercentage *float64 `vgirpc:"tablesample_percentage"`
 	TablesampleSeed       *int64   `vgirpc:"tablesample_seed"`
-	FinalizeStateID       *[]byte  `vgirpc:"finalize_state_id"`
-
-	// SplitTokens carries the framework-stamped envelopes this init redeems.
-	// A LIST because DataFusion's partition_count() is its concurrency, so it
-	// bin-packs at planning time and must read a whole group per partition;
-	// DuckDB always sends exactly one. A worker handed several concatenates
-	// them into one stream in the order given.
-	SplitTokens *[][]byte `vgirpc:"split_tokens"`
-	RowLimit    *int64    `vgirpc:"row_limit"`
 }
 
 // GlobalInitResponseWire is the wire format for global init responses.
 type GlobalInitResponseWire struct {
+	// Field ORDER matches generated.GlobalInitResponseSchema — see
+	// InitRequestWire for why order is kept identical even though the wire is
+	// read by name.
 	ExecutionID []byte  `vgirpc:"execution_id"`
-	MaxWorkers  int64   `vgirpc:"max_workers"`
 	OpaqueData  *[]byte `vgirpc:"opaque_data"`
+	MaxWorkers  int64   `vgirpc:"max_workers"`
 }
 
 // CardinalityRequestWire is the wire format for cardinality requests.
@@ -623,7 +654,16 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		Secrets:      bindParams.Secrets,
 	}
 	if req.ProjectionIDs != nil {
-		initParams.ProjectionIDs = *req.ProjectionIDs
+		// int64 on the wire, int32 in the worker-facing API. A projection id is
+		// a column index, so it is bounded by the table's column count and the
+		// narrowing cannot lose information — but it is done explicitly here
+		// rather than by declaring the wire field int32, which would derive
+		// list<int32> and break the parameter contract.
+		ids := make([]int32, len(*req.ProjectionIDs))
+		for i, v := range *req.ProjectionIDs {
+			ids[i] = int32(v)
+		}
+		initParams.ProjectionIDs = ids
 	}
 	if req.BindOpaqueData != nil {
 		initParams.BindOpaqueData = *req.BindOpaqueData

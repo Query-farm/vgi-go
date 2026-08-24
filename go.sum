@@ -6,6 +6,12 @@ github.com/Query-farm/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4 h1:hH37wA
 github.com/Query-farm/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4/go.mod h1:IJTMBTlHe7cDOhRh0ioGuEKBl5iTR6xPfl5BN4AgirU=
 github.com/Query-farm/vgi-rpc-go v0.21.0 h1:sXl+L/mPdqmWR3S8cXPjgBTDc/jI2VLf6/JlPxZVGko=
 github.com/Query-farm/vgi-rpc-go v0.21.0/go.mod h1:Uo9sYXjw7ETs3Q8APCC4JWe0Jnz3Tm7N3HsJ211hbT8=
+github.com/Query-farm/vgi-rpc-go v0.24.0 h1:EQ+mvxGkS5eG1lMpnZu5l1Ux+yfNDNkiYO9Kfrjlz9c=
+github.com/Query-farm/vgi-rpc-go v0.24.0/go.mod h1:O/zhtr/bKhYZL/LSjsz6iwL46o92GQzEondFLDJOync=
+github.com/Query-farm/vgi-rpc-go v0.25.0 h1:+RFx5hgDDfxcMyt0npsVFu5mwU6u1x1qncnL5MupkN8=
+github.com/Query-farm/vgi-rpc-go v0.25.0/go.mod h1:O/zhtr/bKhYZL/LSjsz6iwL46o92GQzEondFLDJOync=
+github.com/Query-farm/vgi-rpc-go v0.26.0 h1:4Ul+r8XmCs6nh37EEGNiPVfAAGc3cQu0Ssg+88ZxAZc=
+github.com/Query-farm/vgi-rpc-go v0.26.0/go.mod h1:O/zhtr/bKhYZL/LSjsz6iwL46o92GQzEondFLDJOync=
 github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.0 h1:Av+r55X18WVsJDiutKz0FD2N7lAuyN8GHDc1vDt9DYE=
 github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.0/go.mod h1:kmNX5o0qcvMyFFeAgdnbodJeuQizm6Br8+fDcQj223s=
 github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtnceM=

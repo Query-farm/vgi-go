@@ -1,6 +1,6 @@
 module github.com/Query-farm/vgi-go
 
-go 1.25.0
+go 1.26.0
 
 // The Arrow fork adds RecordBatch custom-metadata support required by the SHM
 // zero-copy transport (the shm pointer-batch metadata). Required only for the
@@ -10,7 +10,7 @@ go 1.25.0
 replace github.com/apache/arrow-go/v18 => github.com/Query-farm/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4
 
 require (
-	github.com/Query-farm/vgi-rpc-go v0.21.0
+	github.com/Query-farm/vgi-rpc-go v0.26.0
 	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.0
 	github.com/apache/arrow-go/v18 v18.7.0
 	github.com/duckdb/duckdb-go/v2 v2.10505.0
