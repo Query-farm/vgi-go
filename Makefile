@@ -181,6 +181,45 @@ new-worker:
 # observe a single connection. Default async mode is fine for production
 # (async hides RPC latency); the tests assert what max_workers _should_
 # yield, so we run the suite with sync init to exercise that path.
+# Coverage gates — see the note in vgi/Makefile (VGI_EXPECTED_SKIPS). A lane
+# that stops running tests reports GREEN: it has fewer results, and every one
+# of them passes. That is how a fixture worker silently dropping out of the
+# environment goes unnoticed, so a bare `unittest` invocation (which this
+# target used until now) cannot tell "everything passed" from "nothing ran".
+#
+#   --min-executed   a floor on tests that actually ran. Set just under the
+#                    lane's current count; if a drop is intentional, lower it
+#                    in the same commit that causes it.
+#   --allow-skip     the skip reasons this lane expects. An UNLISTED reason
+#                    fails the run, so a newly-gated test cannot quietly leave
+#                    the lane.
+#
+# Go runs 294 today.
+GO_MIN_EXECUTED ?= 290
+COVERAGE_GATE := --min-executed $(GO_MIN_EXECUTED) \
+	--allow-skip 'require spatial' \
+	--allow-skip 'require-env VGI_DOCKER_IMAGE' \
+	--allow-skip 'require-env VGI_DOCKER_TCP_IMAGE' \
+	--allow-skip 'require-env VGI_GITHUB_NETWORK_TESTS' \
+	--allow-skip 'require-env VGI_TEST_ICEBERG' \
+	--allow-skip 'require-env VGI_TEST_COMPANION_TARGET' \
+	--allow-skip 'require-env VGI_TEST_BEARER_TOKEN' \
+	--allow-skip 'require-env VGI_TEST_DEDICATED_WORKER' \
+	--allow-skip 'require-env VGI_TEST_BRANCH_DIR' \
+	--allow-skip 'require-env VGI_HTTP_TRANSPORT' \
+	--allow-skip 'require-env VGI_HTTP_DISABLE_ZSTD' \
+	--allow-skip 'require-env VGI_HTTP_NO_COMPRESSION' \
+	--allow-skip 'require-env VGI_VERSIONED_HTTP_WORKER' \
+	--allow-skip 'require-env VGI_VERSIONED_TABLES_HTTP_WORKER' \
+	--allow-skip 'require-env VGI_WORKER_SUPPORTS_DYNAMIC_CODE' \
+	--allow-skip 'require-env VGI_SIMPLE_WRITABLE_WORKER' \
+	--allow-skip 'require-env VGI_SCHEMA_RECONCILE_DB' \
+	--allow-skip 'require-env VGI_RULES_WORKER' \
+	--allow-skip 'require-env VGI_REQUIRE_LAUNCHER_TRANSPORT' \
+	--allow-skip 'require-env VGI_ATTACH_OPTIONS_REQUIRED_WORKER' \
+	--allow-skip 'require-env VGI_BAD_ENUM_WORKER' \
+	--allow-skip 'require-env VGI_BAD_PROTOCOL_WORKER'
+
 test: build
 	cd $(VGI_EXT_DIR) && \
 	    VGI_SYNC_INIT_GLOBAL=1 \
@@ -189,7 +228,8 @@ test: build
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
-	    $(UNITTEST) "test/*" "~test/sql/integration/writable/*"
+	    python3 scripts/run_tests.py -j 6 $(COVERAGE_GATE) \
+	        "test/*" "~test/sql/integration/writable/*"
 
 # Run a single integration test file.
 # Example:
