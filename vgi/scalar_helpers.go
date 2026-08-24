@@ -243,6 +243,7 @@ type UnsupportedColumnTypeError struct {
 	Hint string
 }
 
+// Error renders the accessor, the column type it was handed, and the hint.
 func (e *UnsupportedColumnTypeError) Error() string {
 	actual := "<nil>"
 	if e.Actual != nil {

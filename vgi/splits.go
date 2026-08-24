@@ -280,7 +280,7 @@ func SerializeScanSplit(split *ScanSplit) ([]byte, error) {
 		}
 	}()
 
-	rec := array.NewRecord(generated.ScanSplitSchema, cols, 1)
+	rec := array.NewRecordBatch(generated.ScanSplitSchema, cols, 1)
 	defer rec.Release()
 	return SerializeRecordBatch(rec)
 }
