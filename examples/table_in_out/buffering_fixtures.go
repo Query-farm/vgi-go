@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -35,7 +36,24 @@ func (f *CrashOnProcessFunction) Process(ctx context.Context, params *vgi.Proces
 	if p, err := os.FindProcess(os.Getpid()); err == nil {
 		_ = p.Kill()
 	}
-	return params.ExecutionID, nil // unreachable
+	// Killing YOURSELF is not synchronous. kill(2) returns on the calling thread
+	// and the kernel tears the task down asynchronously; measured on macOS this
+	// process keeps running for tens of microseconds to ~1ms after the syscall.
+	// Returning here hands that window to the framework, which then races to
+	// serialize and write the table_buffering_process response — and frequently
+	// wins. The client consequently sees one of FOUR outcomes for the same crash
+	// (nothing written -> "RPC response stream EOF"; schema only -> "Empty
+	// response from table_buffering_process"; schema + a truncated batch message
+	// -> "expected N bytes for message body, got 0"; the whole response, and even
+	// the FOLLOWING combine call answered -> the query SUCCEEDS with 0 rows).
+	// That is the intermittent failure of table_buffering_{pool_recovery,
+	// worker_crash}.test. Park the handler instead: after the kill this worker
+	// must never write another byte, so every client observes the one thing the
+	// fixture promises — a mid-RPC death with no response. The sleep is bounded
+	// (rather than forever) so a platform where the kill silently fails reports
+	// that as an error instead of hanging the suite.
+	time.Sleep(5 * time.Second)
+	return nil, fmt.Errorf("crash_on_process: SIGKILL did not terminate the worker")
 }
 
 // CrashOnCombineFunction buffers normally but raises during combine.
