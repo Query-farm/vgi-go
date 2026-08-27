@@ -1,4 +1,19 @@
-# vgi-go
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Query-farm/vgi-go/main/docs/vgi-logo.png" alt="Vector Gateway Interface logo" width="320">
+</p>
+
+<h1 align="center">VGI for Go</h1>
+
+<p align="center">
+  Add your own functions and tables to DuckDB with Go and Apache Arrow.<br>
+  Built by <a href="https://query.farm">🚜 Query.Farm</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Query-farm/vgi-go/actions/workflows/ci.yml"><img src="https://github.com/Query-farm/vgi-go/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://pkg.go.dev/github.com/Query-farm/vgi-go/vgi"><img src="https://pkg.go.dev/badge/github.com/Query-farm/vgi-go/vgi.svg" alt="Go Reference"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Query%20Farm%20Source--Available-blue" alt="License"></a>
+</p>
 
 Go SDK for the **VGI** (Vector Gateway Interface) protocol. VGI lets DuckDB
 call user-defined scalar / table / aggregate / table-in-out functions hosted
