@@ -24,7 +24,20 @@ env:
   # The Query-farm/vgi commit whose test/sql/integration suite we run. Pinned for
   # reproducibility; bump deliberately and re-validate against the then-current
   # community extension (see ci/README.md).
-  VGI_REF: main
+  #
+  # Pinned 2026-08-27 to the last commit that passed here (40891ac). vgi main
+  # moved on to 27b6deda/a0eb66b3 ("fix(cache): exclude secret-dependent
+  # results" / "propagate bind secret provenance") and f10b9bcf/30b25347
+  # ("fix(macros): share callable discovery" / "discover dependencies beyond
+  # estimates"), which added test/sql/integration/cache/secret_ineligible.test
+  # and test/sql/integration/macro/macros.test assertions for C++-extension-side
+  # fixes. CI installs the SIGNED community vgi extension build, not one built
+  # from this vgi-go checkout, so those assertions red until the community
+  # channel republishes with the fix baked in — no vgi-go/worker change can fix
+  # them. Re-pin forward once that release ships (and re-validate — 474dd3b5
+  # also bumps the example-worker scalar function count, which needs new
+  # fixtures on this side).
+  VGI_REF: 40891ac19b84ad8d545e6d3853104cebfaef8cb3
   # The Haybarn release providing the prebuilt haybarn-unittest binary is
   # resolved to the latest release at run time (see the "Resolve latest haybarn
   # release" step) so the unittest host stays ABI-compatible with the rebuilt
