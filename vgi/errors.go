@@ -190,9 +190,69 @@ func AsRpcError(err error) *vgirpc.RpcError {
 		return &vgirpc.RpcError{Type: "CatalogReadOnlyError", Message: err.Error()}
 	case *WorkerPanicError:
 		return &vgirpc.RpcError{Type: "WorkerPanicError", Message: err.Error()}
+	case *FunctionShapeMismatchError:
+		return &vgirpc.RpcError{Type: "FunctionShapeMismatchError", Message: err.Error()}
 	}
 	return &vgirpc.RpcError{
 		Type:    "RuntimeError",
 		Message: err.Error(),
+	}
+}
+
+// FunctionShapeMismatchError is returned when a function is dispatched via
+// the RPC call shape belonging to a *different* kind of function -- e.g. a
+// table-in-out function (which requires an input row stream) invoked via the
+// plain producer path (table_function(), no input_schema/phase), or a plain
+// table function invoked via the table-in-out path (table_in_out_function(),
+// which sends an init phase and/or an input schema).
+//
+// Left unguarded, this used to produce a silent, non-terminating hang against
+// a real deployed worker instead of a clean error: both sides were
+// independently, locally correct. A table-in-out function only stops once its
+// Finalize is reached, which happens only after input batches drain -- input
+// that never arrives when the wrong RPC method sent no input stream. A plain
+// producer only stops once it calls out.Finish() on its own accord, which a
+// row-transform function never does (it is designed to consume input rows
+// that likewise never arrive). Each side waited on a completion signal only
+// the *other*, mismatched side could have produced.
+//
+// Checked at both bind (handleBind, before OnBind runs) and init (handleInit,
+// before OnInit/NewState run) -- the earliest point in each RPC where the
+// incoming request's shape can be compared against the function's actual
+// registered shape, and before any user code executes. Mirrors the identical
+// fix in vgi-python's Worker._validate_bind_shape() (commit d0f26a0) and
+// vgi-typescript's table.ts/table-in-out.ts guards (commit 008c164).
+type FunctionShapeMismatchError struct {
+	// FunctionName is the name of the function that was dispatched.
+	FunctionName string
+	// Detail explains the mismatch and names the correct call to use.
+	Detail string
+}
+
+// Error implements the error interface.
+func (e *FunctionShapeMismatchError) Error() string {
+	return fmt.Sprintf("%s: %s", e.FunctionName, e.Detail)
+}
+
+// errTableInOutMissingInputSchema builds the FunctionShapeMismatchError for a
+// table-in-out function dispatched with no input schema -- the signature of a
+// caller that used the plain-producer RPC path instead of the table-in-out one.
+func errTableInOutMissingInputSchema(functionName string) error {
+	return &FunctionShapeMismatchError{
+		FunctionName: functionName,
+		Detail: "is a table-in-out function (it requires an input row stream) but no input " +
+			"schema was supplied -- call it via table_in_out_function(input=...), not table_function().",
+	}
+}
+
+// errPlainTableUnexpectedInOutShape builds the FunctionShapeMismatchError for
+// a plain table function dispatched with table-in-out-shaped signals (an init
+// phase, or an input schema) -- the signature of a caller that used the
+// table-in-out RPC path instead of the plain-producer one.
+func errPlainTableUnexpectedInOutShape(functionName string) error {
+	return &FunctionShapeMismatchError{
+		FunctionName: functionName,
+		Detail: "is a plain table function (it takes no input row stream) but was called via " +
+			"table_in_out_function() -- call it via table_function(), not table_in_out_function(input=...).",
 	}
 }

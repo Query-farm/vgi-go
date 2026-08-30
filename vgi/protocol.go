@@ -554,8 +554,25 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 	case ScalarFunction:
 		bindResp, err = f.OnBind(bindParams)
 	case TableFunction:
+		// Mirror-image guard: a plain producer takes no input row stream, so
+		// a bind that carries one means the caller drove this function via
+		// table_in_out_function() instead of table_function(). See
+		// FunctionShapeMismatchError for why this must fail here rather than
+		// silently proceed (it previously deadlocked instead of erroring).
+		if bindParams.InputSchema != nil {
+			return BindResponseWire{}, errPlainTableUnexpectedInOutShape(req.FunctionName)
+		}
 		bindResp, err = f.OnBind(bindParams)
 	case TableInOutFunction:
+		// A table-in-out function requires an input row stream to determine
+		// its shape (most on_bind implementations echo the input schema back
+		// as the output schema). A nil InputSchema here means the caller
+		// drove this function via table_function() instead of
+		// table_in_out_function(input=...) -- checked before OnBind runs so
+		// the mismatch fails immediately instead of deadlocking later.
+		if bindParams.InputSchema == nil {
+			return BindResponseWire{}, errTableInOutMissingInputSchema(req.FunctionName)
+		}
 		bindResp, err = f.OnBind(bindParams)
 	case TableBufferingFunction:
 		bindResp, err = f.OnBind(bindParams)
@@ -813,6 +830,15 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		}
 		return result, err
 	case TableFunction:
+		// Defense-in-depth mirror of the bind-time guard: a plain producer
+		// takes no input row stream and has no init phase, so a request
+		// carrying either signals a call via table_in_out_function() instead
+		// of table_function(). Covers a caller (or a rehydrated HTTP state
+		// token) that reaches init without the corresponding bind-time check
+		// having run against this exact request.
+		if req.Phase != nil || bindParams.InputSchema != nil {
+			return nil, errPlainTableUnexpectedInOutShape(bindReq.FunctionName)
+		}
 		result, err := w.initTable(ctx, f, initParams, processParams, projectedSchema, autoProjectIDs, &recipe)
 		if err != nil {
 			LogRPC.Debug("init: table init failed", "err", err)
@@ -821,6 +847,14 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		}
 		return result, err
 	case TableInOutFunction:
+		// Defense-in-depth mirror of the bind-time guard: a table-in-out
+		// function always carries either an INPUT or FINALIZE phase (and an
+		// input schema on the INPUT phase). A request with no phase at all
+		// means the caller drove this function via table_function() instead
+		// of table_in_out_function(input=...).
+		if req.Phase == nil {
+			return nil, errTableInOutMissingInputSchema(bindReq.FunctionName)
+		}
 		result, err := w.initTableInOut(ctx, f, initParams, processParams, projectedSchema, phase, &recipe)
 		if err != nil {
 			LogRPC.Debug("init: table-in-out init failed", "err", err)
