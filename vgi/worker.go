@@ -372,6 +372,7 @@ type Worker struct {
 	logLoggers           []string     // empty means all known loggers
 	logConfigured        bool         // true once any logging WorkerOption fires
 	httpSigningKey       []byte       // HMAC key for HTTP state tokens (explicit via WithHttpSigningKey, else ephemeral per-process)
+	irohBridge           *IrohBridgeOptions
 	// sealOpaqueData gates AEAD sealing of catalog opaque-data envelopes. It is
 	// enabled only when an explicit signing key is configured (WithHttpSigningKey),
 	// matching vgi-python: an anonymous worker with an ephemeral, per-process key
@@ -385,6 +386,26 @@ type Worker struct {
 	// worker (one per RegisterCopyFrom). Surfaced via catalog_copy_from_formats
 	// so the VGI extension can register a DuckDB CopyFunction per entry.
 	copyFromFormats []copyFromFormatRecord
+}
+
+// IrohBridgeOptions configures identity forwarded by the narrow
+// vgi-iroh-bridge process. TrustedProxyAddresses must contain exact immediate
+// IP addresses, never CIDRs. Authenticate promotes the stable EndpointId to
+// the request/connection AuthContext; false leaves it as observable evidence.
+type IrohBridgeOptions struct {
+	Issuer                string
+	TrustedProxyAddresses []string
+	Authenticate          bool
+}
+
+// SetIrohBridge enables trusted HTTP bridge identity for the next RunHttp.
+func (w *Worker) SetIrohBridge(options IrohBridgeOptions) {
+	copy := options
+	copy.TrustedProxyAddresses = append([]string(nil), options.TrustedProxyAddresses...)
+	if len(copy.TrustedProxyAddresses) == 0 {
+		copy.TrustedProxyAddresses = []string{"127.0.0.1"}
+	}
+	w.irohBridge = &copy
 }
 
 // WorkerOption configures a Worker.
@@ -1241,6 +1262,40 @@ func (w *Worker) RunTcp(host string, port int, idleTimeout time.Duration) error 
 	})
 }
 
+// RunIrohTcpUpstream serves a loopback-only raw upstream for
+// vgi-iroh-bridge. The listener requires the bridge's PROXY-v2 EndpointId
+// preamble and rejects every immediate peer outside the exact trust list.
+func (w *Worker) RunIrohTcpUpstream(host string, port int, idleTimeout time.Duration, options IrohBridgeOptions) error {
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	if host != "127.0.0.1" && host != "::1" && host != "localhost" {
+		return fmt.Errorf("Iroh raw upstream must bind loopback, got %q", host)
+	}
+	if options.Issuer == "" {
+		return fmt.Errorf("Iroh bridge issuer is required")
+	}
+	if len(options.TrustedProxyAddresses) == 0 {
+		options.TrustedProxyAddresses = []string{"127.0.0.1"}
+	}
+	s := w.buildServer(transportTCP)
+	policy := vgirpc.ObservePeerIdentity
+	if options.Authenticate {
+		policy = vgirpc.PeerIdentityPrimary("iroh")
+	}
+	return s.RunTcpWithOptions(host, port, vgirpc.TcpServerOptions{
+		IdleTimeout: idleTimeout,
+		OnBound: func(boundHost string, boundPort int) {
+			fmt.Printf("TCP:%s:%d\n", boundHost, boundPort)
+			_ = os.Stdout.Sync()
+		},
+		ProxyProtocolV2Required:  true,
+		TrustedProxyAddresses:    append([]string(nil), options.TrustedProxyAddresses...),
+		IrohProxyIssuer:          options.Issuer,
+		PeerAuthenticationPolicy: policy,
+	})
+}
+
 // RunHttp runs the worker serving RPC over HTTP. It listens on the given
 // address (e.g. "127.0.0.1:0" for a random port) and prints "PORT:<n>" to
 // stdout so callers can discover the assigned port.
@@ -1262,6 +1317,21 @@ func (w *Worker) RunHttp(addr string) error {
 		return fmt.Errorf("http signing key: %w", err)
 	}
 	hs.SetRehydrateFunc(w.rehydrateState)
+	if w.irohBridge != nil {
+		provider, providerErr := vgirpc.NewIrohForwardedHeaderIdentityProvider(vgirpc.IrohForwardedHeaderOptions{
+			Issuer:                w.irohBridge.Issuer,
+			TrustedProxyAddresses: append([]string(nil), w.irohBridge.TrustedProxyAddresses...),
+		})
+		if providerErr != nil {
+			return fmt.Errorf("Iroh bridge identity: %w", providerErr)
+		}
+		hs.SetPeerIdentityProviders(provider)
+		if w.irohBridge.Authenticate {
+			hs.SetPeerAuthenticationPolicy(vgirpc.PeerIdentityPrimary("iroh"))
+		} else {
+			hs.SetPeerAuthenticationPolicy(vgirpc.ObservePeerIdentity)
+		}
+	}
 	// One Arrow batch per producer-stream HTTP response (matching vgi-python's
 	// default — see vgi_rpc serve's max_stream_response_bytes, which defaults to
 	// one-batch-per-response). A higher count lets a single connection greedily
