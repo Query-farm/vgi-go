@@ -138,6 +138,15 @@ type ScanFunctionResult struct {
 	NamedArguments map[string]ScanArg
 	// RequiredExtensions lists DuckDB extensions that must be loaded.
 	RequiredExtensions []string
+	// SchemaName is the catalog schema FunctionName is registered in. A function
+	// name is unique only within a schema, so a client that does not know this
+	// cannot tell which implementation a colliding name refers to — set it
+	// whenever the resolving code already knows the schema. Added in protocol
+	// 1.5.0; nil for a pre-1.5.0 peer, or when the resolved function is a native
+	// DuckDB function with no VGI-side schema of its own (read_parquet and
+	// friends), in which case the client falls back to its own table-schema /
+	// default-schema heuristic. Trailing field of the wire schema.
+	SchemaName *string
 }
 
 // ScanArg is a single argument value with its Arrow type.
@@ -186,6 +195,13 @@ type ScanBranch struct {
 	// may be any Arrow type, so no static schema could describe it), but that
 	// encoding is the serializer's business, not the caller's.
 	FormatOptions map[string]ScanArg
+	// SchemaName is the catalog schema FunctionName is registered in — function
+	// branches only. Nil for a catalog-table or format branch, which has no
+	// VGI-side function schema of its own, for a pre-1.5.0 peer, and for a
+	// native DuckDB function. Not to be confused with SourceSchema above, which
+	// names a catalog-table branch's *source table's* schema, a different and
+	// older field. Added in protocol 1.5.0; trailing field of the wire schema.
+	SchemaName *string
 }
 
 // ScanBranchesResult is the list of physical sources backing a multi-branch
@@ -288,6 +304,7 @@ func SerializeScanBranch(branch *ScanBranch) ([]byte, error) {
 			return lb.NewArray()
 		}(),
 		appendNullableBinary(formatOptionBytes),
+		appendNullableString(branch.SchemaName),
 	}
 	defer func() {
 		for _, c := range cols {
@@ -343,10 +360,21 @@ func SerializeScanFunctionResult(result *ScanFunctionResult) ([]byte, error) {
 		}
 	}
 
+	// schema_name — nullable; nil reads as "worker has no schema to report"
+	// and sends the client back to its pre-1.5.0 resolution heuristic.
+	schemaBuilder := array.NewStringBuilder(mem)
+	defer schemaBuilder.Release()
+	if result.SchemaName != nil {
+		schemaBuilder.Append(*result.SchemaName)
+	} else {
+		schemaBuilder.AppendNull()
+	}
+
 	cols := []arrow.Array{
 		fnNameBuilder.NewArray(),
 		argBuilder.NewArray(),
 		extBuilder.NewArray(),
+		schemaBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

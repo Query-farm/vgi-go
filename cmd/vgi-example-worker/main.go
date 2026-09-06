@@ -267,6 +267,24 @@ func main() {
 		Comment:            "Version-specific cacheable rows (AT-keyed cache isolation)",
 	})
 
+	// Schema-disambiguation probe (table dispatch): one declarative table name
+	// declared in BOTH schemas, each backed by that schema's own
+	// test_same_name_table_scan implementation (registered in examples/all).
+	// The only catalog table declared in `main` — the point is that the pair
+	// straddles two schemas, so catalog_table_scan_function_get /
+	// catalog_table_scan_branches_get must name the right one. Drives
+	// ../vgi/test/sql/integration/table/same_name_schemas.test.
+	w.RegisterCatalogTable("main", vgi.CatalogTable{
+		Name:     table.SameNameTableName,
+		Comment:  "Schema-disambiguation probe; the main-schema table",
+		Function: table.NewSameNameTableScanFunction("main"),
+	})
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:     table.SameNameTableName,
+		Comment:  "Schema-disambiguation probe; the data-schema table",
+		Function: table.NewSameNameTableScanFunction("data"),
+	})
+
 	// Multi-branch (scan-branches) tables. Their physical sources are resolved
 	// by multiBranchScanBranchesGet via catalog_table_scan_branches_get.
 	{

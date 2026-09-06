@@ -913,6 +913,39 @@ func (w *Worker) originOf(kind funcKind, name string, idx int) funcOrigin {
 	return funcOrigin{catalog: w.catalogName, schema: defaultFunctionSchema}
 }
 
+// resolveFunctionSchema resolves which schema the registered implementation of
+// (kind, functionName) actually lives in, for ScanFunctionResult.SchemaName /
+// ScanBranch.SchemaName (protocol 1.5.0). It answers from the registration
+// registry rather than assuming the function shares the schema of the table it
+// backs: RegisterCatalogTable homes an auto-registered backing function in the
+// catalog's default schema regardless of which schema declares the table, so
+// "tables in data are scanned by functions in main" is a real, existing shape.
+//
+// tableSchema is the schema of the table being resolved, and only breaks ties:
+// it wins when the function IS registered there (the common case), otherwise
+// the function's single real home is used. Returns nil — leaving schema_name
+// unset, which sends the client back to its own pre-1.5.0 heuristic — when the
+// registry has no unambiguous answer, including the case that matters most:
+// a name the worker merely delegates to (read_parquet, iceberg_scan) is
+// registered nowhere here and has no VGI-side schema to report, permanently.
+func (w *Worker) resolveFunctionSchema(kind funcKind, functionName, tableSchema string) *string {
+	origins := w.funcOrigins[funcKey{kind: kind, name: functionName}]
+	if len(origins) == 0 {
+		return nil
+	}
+	for _, o := range origins {
+		if strings.EqualFold(o.schema, tableSchema) {
+			schema := o.schema
+			return &schema
+		}
+	}
+	if len(origins) == 1 {
+		schema := origins[0].schema
+		return &schema
+	}
+	return nil
+}
+
 // RegisterScalar registers a scalar function in the catalog's default schema.
 func (w *Worker) RegisterScalar(f ScalarFunction) {
 	w.RegisterScalarInSchema(defaultFunctionSchema, f)
@@ -1138,8 +1171,11 @@ const (
 // added it to the unary requests that re-resolve a function by name; 1.3.0
 // adds global_functions and global_function_prefix to CatalogAttachResult;
 // 1.4.0 adds table_function_plan (split-based scan planning) plus split_tokens
-// and row_limit on InitRequest.
-const ProtocolVersion = "1.4.0"
+// and row_limit on InitRequest; 1.5.0 adds schema_name to ScanFunctionResult
+// and ScanBranch — the worker's own authoritative schema for the function it
+// just resolved, so a client no longer has to guess (the table's own schema,
+// then default_schema) when one function name is registered in two schemas.
+const ProtocolVersion = "1.5.0"
 
 func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 	// Configure structured logging.
