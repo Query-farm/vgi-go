@@ -94,7 +94,7 @@ func (f *Flags) Parse(args []string) error {
 		return fmt.Errorf("--unix, --tcp, --iroh-raw-upstream, and --http are mutually exclusive")
 	}
 	if (*f.irohRaw != "" || *f.irohIssuer != "") && *f.irohIssuer == "" {
-		return fmt.Errorf("Iroh bridge options require --iroh-issuer")
+		return fmt.Errorf("iroh bridge options require --iroh-issuer")
 	}
 	// Flush coverage on SIGTERM (+ periodic) during integration coverage runs
 	// (no-op otherwise); the harness kills pooled/long-lived workers with SIGTERM.
