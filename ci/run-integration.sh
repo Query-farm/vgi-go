@@ -83,7 +83,11 @@ if [ "$TRANSPORT" = "http" ]; then
   #     EXCLUSION once a vgi-rpc-go release containing 01b080c is out and go.mod
   #     is bumped to it; the file then passes on both transports (proven in
   #     vgi-rust, whose Cargo patch already picks the equivalent fix up).
-  EXTRA_SKIP=(-not -name 'projection_pushdown_repro.test' -not -name 'dynamic_filter.test')
+  EXTRA_SKIP=(
+    -not -name 'projection_pushdown_repro.test'
+    -not -name 'dynamic_filter.test'
+    -not -path './database_worker/package.test'
+  )
 fi
 
 echo "Staging preprocessed tests into $STAGE (transport=$TRANSPORT) ..."
@@ -106,6 +110,18 @@ mkdir -p "$STAGE/test/sql/integration"
     mkdir -p "$STAGE/test/sql/integration/$(dirname "$f")"
     awk -v http="$AWK_HTTP" -f "$HERE/preprocess-require.awk" "$f" > "$STAGE/test/sql/integration/$f"
   done )
+
+# The database-worker tests package this executable through a path relative to
+# the staged unittest working directory. Staging only .test files leaves that
+# path unmatched, so preserve the fixture and its executable bit explicitly.
+DATABASE_WORKER_FIXTURE="$VGI_SRC/test/support/database_worker_fixture.sh"
+if [ ! -f "$DATABASE_WORKER_FIXTURE" ]; then
+  echo "::error::pinned VGI suite is missing $DATABASE_WORKER_FIXTURE" >&2
+  exit 1
+fi
+mkdir -p "$STAGE/test/support"
+install -m 0755 "$DATABASE_WORKER_FIXTURE" \
+  "$STAGE/test/support/database_worker_fixture.sh"
 
 # Empty VGI_RPC_SHM_SIZE_BYTES must not reach the C++ client (it would try to
 # attach a zero-size segment); only a real value enables the shm side channel.
