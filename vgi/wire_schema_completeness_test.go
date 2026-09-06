@@ -234,6 +234,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					FunctionName:        "read_parquet",
 					PositionalArguments: scanArgs,
 					RequiredExtensions:  []string{"parquet"},
+					SchemaName:          strPtr("main"),
 				})
 			},
 		},
@@ -252,6 +253,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					FormatName:          strPtr("acme_csv"),
 					FormatLocations:     []string{"s3://bucket/a.csv"},
 					FormatOptions:       map[string]ScanArg{"delim": {Value: "|", Type: arrow.BinaryTypes.String}},
+					SchemaName:          strPtr("main"),
 				})
 			},
 		},

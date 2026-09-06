@@ -267,6 +267,10 @@ type TableScanFunctionGetResponseWire struct {
 	FunctionName       string   `vgirpc:"function_name"`
 	Arguments          []byte   `vgirpc:"arguments"`
 	RequiredExtensions []string `vgirpc:"required_extensions"`
+	// SchemaName is the catalog schema FunctionName is registered in (protocol
+	// 1.5.0). Nullable: nil means "no VGI-side schema to report" and the client
+	// falls back to its pre-1.5.0 table-schema/default-schema heuristic.
+	SchemaName *string `vgirpc:"schema_name"`
 }
 
 // TableScanBranchesGetRequestWire is for catalog_table_scan_branches_get.
@@ -1595,6 +1599,11 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 					FunctionName:        sf.FunctionName,
 					PositionalArguments: sf.PositionalArguments,
 					NamedArguments:      sf.NamedArguments,
+					// Propagate whatever schema the scan_function_get path
+					// already resolved; this wrapper has no independent way to
+					// know the function's own schema (which is NOT necessarily
+					// req.SchemaName — see ScanBranch.SchemaName's own doc).
+					SchemaName: sf.SchemaName,
 				}},
 				RequiredExtensions: sf.RequiredExtensions,
 			})
@@ -1818,6 +1827,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 					{Value: req.SchemaName, Type: arrow.BinaryTypes.String},
 					{Value: req.Name, Type: arrow.BinaryTypes.String},
 				},
+				SchemaName: w.resolveFunctionSchema(kindTableInOut, writableInsertFunctionName, req.SchemaName),
 			})
 		})
 
@@ -1840,6 +1850,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 					{Value: req.SchemaName, Type: arrow.BinaryTypes.String},
 					{Value: req.Name, Type: arrow.BinaryTypes.String},
 				},
+				SchemaName: w.resolveFunctionSchema(kindTableInOut, writableUpdateFunctionName, req.SchemaName),
 			})
 		})
 
@@ -1862,6 +1873,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 					{Value: req.SchemaName, Type: arrow.BinaryTypes.String},
 					{Value: req.Name, Type: arrow.BinaryTypes.String},
 				},
+				SchemaName: w.resolveFunctionSchema(kindTableInOut, writableDeleteFunctionName, req.SchemaName),
 			})
 		})
 
@@ -2075,7 +2087,7 @@ func (w *Worker) serializeCatalogTable(schemaName string, ct *CatalogTable) ([]b
 	// skips catalog_table_scan_function_get. Explicit-columns tables (Function
 	// == nil) keep ScanFunction nil and continue to use the per-bind RPC path.
 	if ct.Function != nil {
-		sfBytes, err := SerializeScanFunctionResult(w.buildScanResultFromTable(ct))
+		sfBytes, err := SerializeScanFunctionResult(w.buildScanResultFromTable(schemaName, ct))
 		if err != nil {
 			return nil, fmt.Errorf("inlining scan_function for table %s: %w", ct.Name, err)
 		}
@@ -2158,10 +2170,14 @@ func serializeForeignKey(schemaName string, fk *ForeignKeyConstraint) ([]byte, e
 	return SerializeRecordBatch(batch)
 }
 
-// buildScanResultFromTable creates a ScanFunctionResult from a function-backed CatalogTable.
-func (w *Worker) buildScanResultFromTable(ct *CatalogTable) *ScanFunctionResult {
+// buildScanResultFromTable creates a ScanFunctionResult from a function-backed
+// CatalogTable. tableSchema is the schema the table itself is declared in; it
+// only seeds the registry lookup that resolves where the backing function
+// actually lives, which is not necessarily the same schema.
+func (w *Worker) buildScanResultFromTable(tableSchema string, ct *CatalogTable) *ScanFunctionResult {
 	result := &ScanFunctionResult{
 		FunctionName: ct.Function.Name(),
+		SchemaName:   w.resolveFunctionSchema(kindTable, ct.Function.Name(), tableSchema),
 	}
 
 	for _, arg := range ct.FuncArgs {
@@ -2194,6 +2210,7 @@ func buildScanFunctionGetResponse(result *ScanFunctionResult) (TableScanFunction
 		FunctionName:       result.FunctionName,
 		Arguments:          argBytes,
 		RequiredExtensions: result.RequiredExtensions,
+		SchemaName:         result.SchemaName,
 	}, nil
 }
 
@@ -2220,6 +2237,7 @@ func (w *Worker) resolveScanFunction(req TableScanFunctionGetRequestWire) (*Scan
 				{Value: req.SchemaName, Type: arrow.BinaryTypes.String},
 				{Value: req.Name, Type: arrow.BinaryTypes.String},
 			},
+			SchemaName: w.resolveFunctionSchema(kindTable, writableScanFunctionName, req.SchemaName),
 		}, nil
 	}
 	LogCatalog.Debug("catalog: scan function get", "schema", req.SchemaName, "table", req.Name)
@@ -2231,7 +2249,7 @@ func (w *Worker) resolveScanFunction(req TableScanFunctionGetRequestWire) (*Scan
 		if si, ok := w.catalog.schemas[req.SchemaName]; ok {
 			for i := range si.tables {
 				if si.tables[i].Name == req.Name && si.tables[i].Function != nil {
-					return w.buildScanResultFromTable(&si.tables[i]), nil
+					return w.buildScanResultFromTable(req.SchemaName, &si.tables[i]), nil
 				}
 			}
 		}
