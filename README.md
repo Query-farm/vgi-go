@@ -209,6 +209,8 @@ go test ./...           # pure Go unit tests
 Integration tests live in the sibling DuckDB extension repo at `../vgi` and
 use the DuckDB sqllogictest format.
 
+See [Iroh operations](docs/iroh.md) for bridge-ready raw and HTTP workers.
+
 ## Repo layout
 
 ```

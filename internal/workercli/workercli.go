@@ -30,10 +30,14 @@ type Flags struct {
 	// need to install HTTP-only hooks (auth, OAuth metadata) before serving.
 	HTTP *bool
 
-	unixPath *string
-	tcpAddr  *string
-	idle     *float64
-	logFlags *vgi.LoggingFlags
+	unixPath         *string
+	tcpAddr          *string
+	irohRaw          *string
+	irohIssuer       *string
+	irohTrustedProxy *string
+	irohObserve      *bool
+	idle             *float64
+	logFlags         *vgi.LoggingFlags
 }
 
 // Register defines the standard worker transport + logging flags on
@@ -43,6 +47,10 @@ func Register() *Flags {
 	f.HTTP = flag.Bool("http", false, "Run as HTTP server instead of stdio")
 	f.unixPath = flag.String("unix", "", "Bind to this AF_UNIX socket path (launcher transport); mutually exclusive with --http")
 	f.tcpAddr = flag.String("tcp", "", "Bind a raw TCP socket ([HOST:]PORT, host defaults to 127.0.0.1, port 0 auto-selects); mutually exclusive with --http/--unix")
+	f.irohRaw = flag.String("iroh-raw-upstream", "", "Bind a loopback bridge-ready raw TCP upstream at [HOST:]PORT")
+	f.irohIssuer = flag.String("iroh-issuer", "", "Identity namespace for a trusted Iroh bridge")
+	f.irohTrustedProxy = flag.String("iroh-trusted-proxy", "127.0.0.1", "Comma-separated exact immediate bridge IPs")
+	f.irohObserve = flag.Bool("iroh-observe", false, "Expose verified Iroh identity without promoting it to authentication")
 	f.idle = flag.Float64("idle-timeout", 300, "Self-shutdown after N seconds idle when serving --unix/--tcp (0 = never)")
 	// --describe / --no-describe: accepted for launcher compatibility (the VGI
 	// extension passes it through). Description pages aren't served over the
@@ -61,12 +69,15 @@ func (f *Flags) Parse(args []string) error {
 	// distinct cache keys for the same binary; tolerate unknown flags rather
 	// than failing to start. Flags named here consume a value token.
 	if err := flag.CommandLine.Parse(FilterKnownFlags(args, map[string]bool{
-		"unix":         true,
-		"tcp":          true,
-		"idle-timeout": true,
-		"log-level":    true,
-		"log-format":   true,
-		"log-logger":   true,
+		"unix":               true,
+		"tcp":                true,
+		"iroh-raw-upstream":  true,
+		"iroh-issuer":        true,
+		"iroh-trusted-proxy": true,
+		"idle-timeout":       true,
+		"log-level":          true,
+		"log-format":         true,
+		"log-logger":         true,
 	})); err != nil {
 		return err
 	}
@@ -74,13 +85,16 @@ func (f *Flags) Parse(args []string) error {
 		return fmt.Errorf("logging flags: %w", err)
 	}
 	n := 0
-	for _, on := range []bool{*f.unixPath != "", *f.tcpAddr != "", *f.HTTP} {
+	for _, on := range []bool{*f.unixPath != "", *f.tcpAddr != "", *f.irohRaw != "", *f.HTTP} {
 		if on {
 			n++
 		}
 	}
 	if n > 1 {
-		return fmt.Errorf("--unix, --tcp, and --http are mutually exclusive")
+		return fmt.Errorf("--unix, --tcp, --iroh-raw-upstream, and --http are mutually exclusive")
+	}
+	if (*f.irohRaw != "" || *f.irohIssuer != "") && *f.irohIssuer == "" {
+		return fmt.Errorf("Iroh bridge options require --iroh-issuer")
 	}
 	// Flush coverage on SIGTERM (+ periodic) during integration coverage runs
 	// (no-op otherwise); the harness kills pooled/long-lived workers with SIGTERM.
@@ -91,6 +105,11 @@ func (f *Flags) Parse(args []string) error {
 // Serve runs w on the transport the flags selected, blocking until it stops.
 // The default is stdio.
 func (f *Flags) Serve(w *vgi.Worker) error {
+	irohOptions := vgi.IrohBridgeOptions{
+		Issuer:                *f.irohIssuer,
+		TrustedProxyAddresses: splitExactAddresses(*f.irohTrustedProxy),
+		Authenticate:          !*f.irohObserve,
+	}
 	switch {
 	case *f.unixPath != "":
 		return w.RunUnix(*f.unixPath, f.idleDuration())
@@ -100,12 +119,31 @@ func (f *Flags) Serve(w *vgi.Worker) error {
 			return err
 		}
 		return w.RunTcp(host, port, f.idleDuration())
+	case *f.irohRaw != "":
+		host, port, err := ParseTCPAddr(*f.irohRaw)
+		if err != nil {
+			return err
+		}
+		return w.RunIrohTcpUpstream(host, port, f.idleDuration(), irohOptions)
 	case *f.HTTP:
+		if *f.irohIssuer != "" {
+			w.SetIrohBridge(irohOptions)
+		}
 		return w.RunHttp("127.0.0.1:0")
 	default:
 		w.RunStdio()
 		return nil
 	}
+}
+
+func splitExactAddresses(raw string) []string {
+	var addresses []string
+	for _, value := range strings.Split(raw, ",") {
+		if value = strings.TrimSpace(value); value != "" {
+			addresses = append(addresses, value)
+		}
+	}
+	return addresses
 }
 
 func (f *Flags) idleDuration() time.Duration {
