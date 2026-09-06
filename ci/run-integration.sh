@@ -380,6 +380,9 @@ EXPECTED_SKIP_REASONS=(
   'require-env VGI_DOCKER_IMAGE'                 # containerised worker lane
   'require-env VGI_DOCKER_TCP_IMAGE'             # containerised worker over TCP
   'require-env VGI_GITHUB_NETWORK_TESTS'         # hits github.com; opt-in only
+  'require-env VGI_DATABASE_BUN_WORKER'          # Bun package fixture belongs to its SDK lane
+  'require-env VGI_DATABASE_PYTHON_WORKER'       # Python package fixture belongs to its SDK lane
+  'require-env VGI_DATABASE_RUST_WORKER'         # Rust package fixture belongs to its SDK lane
 )
 # Lane-specific additions — a skip that is expected on one lane is a red flag on
 # another (e.g. VGI_TEST_DEDICATED_WORKER skipping on stdio would mean the crash
