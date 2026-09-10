@@ -58,13 +58,14 @@ func (f *SpatialFilterExampleFunction) Name() string { return "spatial_filter_ex
 
 func (f *SpatialFilterExampleFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description:                "Generates points on a grid with WKB geometry for spatial filter testing",
-		Stability:                  vgi.StabilityConsistent,
-		ProjectionPushdown:         true,
-		FilterPushdown:             true,
-		AutoApplyFilters:           true,
-		SupportedExpressionFilters: []string{"&&", "st_intersects_extent"},
-		Categories:                 []string{"generator", "spatial", "testing"},
+		Description:               "Generates points on a grid with WKB geometry for spatial filter testing",
+		Stability:                 vgi.StabilityConsistent,
+		ProjectionPushdown:        true,
+		FilterPushdown:            true,
+		AutoApplyFilters:          true,
+		FilterSemanticProfiles:    []string{"vgi.duckdb.standard.v1"},
+		AdditionalFilterFunctions: []vgi.FilterFunctionCapability{{Namespace: "duckdb.spatial", Name: "intersects_extent", Version: 1}},
+		Categories:                []string{"generator", "spatial", "testing"},
 	}
 }
 

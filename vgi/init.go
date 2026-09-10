@@ -47,6 +47,8 @@ type InitParams struct {
 	// JoinKeys maps keys_column name -> Arrow array carrying the join keys
 	// referenced by FilterJoinKeys entries in PushdownFilters.
 	JoinKeys map[string]arrow.Array
+	// JoinKeyBatches preserves v2 external-set batch and column identity.
+	JoinKeyBatches []arrow.RecordBatch
 	// OrderByHint, when non-nil, carries an ORDER BY + LIMIT pushdown
 	// hint set by DuckDB's RowGroupPruner optimizer.
 	OrderByHint *OrderByHint

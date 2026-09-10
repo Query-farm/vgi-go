@@ -26,6 +26,9 @@ type ProcessParams struct {
 	Args *Arguments
 	// OutputSchema is the output schema (may be projected).
 	OutputSchema *arrow.Schema
+	// BindOutputSchema is the authoritative unprojected output schema used to
+	// validate Filter Encoding v2 column and nested-field identities.
+	BindOutputSchema *arrow.Schema
 	// InputSchema is the source/input table schema (nil for table functions
 	// with no input). For a COPY ... TO sink it carries the source columns, so a
 	// CopyToFunction can write a header even when zero rows are buffered.
@@ -54,11 +57,16 @@ type ProcessParams struct {
 	AttachScope []byte
 	// InitOpaqueData is the opaque data from the init response.
 	InitOpaqueData []byte
-	// PushdownFilters is the pushdown filter batch (nil if none).
+	// PushdownFilters is the original serialized snapshot, retained for
+	// transport and diagnostics. Applications should consume
+	// CurrentPushdownFilters; reparsing this batch lacks the authoritative bind
+	// schema and omits subsequent tick deltas.
 	PushdownFilters arrow.RecordBatch
 	// JoinKeys maps keys_column name -> Arrow array carrying the join keys
 	// referenced by FilterJoinKeys entries in PushdownFilters.
 	JoinKeys map[string]arrow.Array
+	// JoinKeyBatches preserves v2 external-set batch and column identity.
+	JoinKeyBatches []arrow.RecordBatch
 	// AtUnit/AtValue carry the AT (TIMESTAMP|VERSION ...) time-travel clause for
 	// this scan, threaded onto the bind request embedded in init. Both nil when
 	// the scan has no AT clause. Function-backed time-travel tables resolve the
@@ -75,12 +83,11 @@ type ProcessParams struct {
 	// FilePath here in Process (per-shard write) and Combine (terminal write).
 	// Mirrors Python's ProcessParams.init_call.bind_call.copy_to.
 	CopyTo *CopyToContext
-	// CurrentPushdownFilters is the filter state for the *current* Produce
-	// tick. It starts at the init-time pushdown filters and is replaced
-	// whenever DuckDB's dynamic filter tightens (DynamicFilter pushdown).
-	// Functions that want to react to filter updates per batch should read
-	// this field; functions that only care about static filters should use
-	// PushdownFilters.
+	// CurrentPushdownFilters is the strictly decoded Filter Encoding v2 state
+	// for the current Produce tick. It is validated against BindOutputSchema,
+	// resolves external-IN side batches, and is updated atomically whenever
+	// DuckDB's dynamic filter tightens. Function implementations should use this
+	// field for both static and dynamic filters.
 	CurrentPushdownFilters *PushdownFilters
 	// OrderByHint, when non-nil, carries an ORDER BY + LIMIT pushdown hint.
 	OrderByHint *OrderByHint

@@ -87,20 +87,17 @@ func (f *FilteredColumnsEchoFunction) NewState(params *vgi.ProcessParams) (*filt
 		TagValues:  "(none)",
 	}
 
-	if params.PushdownFilters != nil {
-		pf, err := vgi.DeserializeFilters(params.PushdownFilters, params.JoinKeys)
-		if err == nil && pf != nil {
-			cols := make([]string, 0)
-			for c := range pf.FilteredColumns() {
-				cols = append(cols, c)
-			}
-			sort.Strings(cols)
-			st.FilteredCols = strings.Join(cols, ",")
-			st.HasN = pf.HasFilterForColumn("n")
-			st.HasTag = pf.HasFilterForColumn("tag")
-			if vals := pf.GetColumnValues("tag"); vals != nil {
-				st.TagValues = renderColumnValues(vals)
-			}
+	if pf := params.CurrentPushdownFilters; pf != nil {
+		cols := make([]string, 0)
+		for c := range pf.FilteredColumns() {
+			cols = append(cols, c)
+		}
+		sort.Strings(cols)
+		st.FilteredCols = strings.Join(cols, ",")
+		st.HasN = pf.HasFilterForColumn("n")
+		st.HasTag = pf.HasFilterForColumn("tag")
+		if vals := pf.GetColumnValues("tag"); vals != nil {
+			st.TagValues = renderColumnValues(vals)
 		}
 	}
 

@@ -71,6 +71,16 @@ func (w *Worker) rehydrateTableProducer(s *TableProducerState) error {
 	}
 	s.fn = tableFn
 	s.params = params
+	if params.PushdownFilters != nil {
+		parsed, err := deserializeFiltersForMetadata(params.PushdownFilters, params.JoinKeys, params.JoinKeyBatches, tableFn.Metadata(), params.BindOutputSchema)
+		if err != nil {
+			return err
+		}
+		params.CurrentPushdownFilters = parsed
+	}
+	if err := replayFilterDeltas(params, s.FilterDeltaIPC); err != nil {
+		return err
+	}
 
 	// Restore user state from gob bytes
 	if len(s.UserStateBytes) > 0 {
@@ -93,10 +103,7 @@ func (w *Worker) rehydrateTableProducer(s *TableProducerState) error {
 
 	// Restore auto-apply filters
 	if tableFn.Metadata().AutoApplyFilters && params.PushdownFilters != nil {
-		parsed, err := DeserializeFilters(params.PushdownFilters, params.JoinKeys)
-		if err == nil && len(parsed.Filters) > 0 {
-			s.autoApply = parsed
-		}
+		s.autoApply = params.CurrentPushdownFilters
 	}
 
 	return nil
@@ -113,6 +120,16 @@ func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
 	}
 	s.fn = tioFn
 	s.params = params
+	if params.PushdownFilters != nil {
+		parsed, err := deserializeFiltersForMetadata(params.PushdownFilters, params.JoinKeys, params.JoinKeyBatches, tioFn.Metadata(), params.BindOutputSchema)
+		if err != nil {
+			return err
+		}
+		params.CurrentPushdownFilters = parsed
+	}
+	if err := replayFilterDeltas(params, s.FilterDeltaIPC); err != nil {
+		return err
+	}
 
 	// Restore user state from gob bytes
 	if len(s.UserStateBytes) > 0 {
@@ -135,12 +152,30 @@ func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
 
 	// Restore auto-apply filters
 	if tioFn.Metadata().AutoApplyFilters && params.PushdownFilters != nil {
-		parsed, err := DeserializeFilters(params.PushdownFilters, params.JoinKeys)
-		if err == nil && len(parsed.Filters) > 0 {
-			s.autoApply = parsed
-		}
+		s.autoApply = params.CurrentPushdownFilters
 	}
 
+	return nil
+}
+
+func replayFilterDeltas(params *ProcessParams, deltas [][]byte) error {
+	if len(deltas) == 0 {
+		return nil
+	}
+	if params.CurrentPushdownFilters == nil {
+		return fmt.Errorf("filter delta history requires an initial snapshot")
+	}
+	for _, encoded := range deltas {
+		batch, err := DeserializeRecordBatch(encoded)
+		if err != nil {
+			return err
+		}
+		err = params.CurrentPushdownFilters.ApplyDelta(batch, params.JoinKeys)
+		batch.Release()
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -215,22 +250,23 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 	}
 
 	params := &ProcessParams{
-		FunctionName:   recipe.FunctionName,
-		FunctionType:   recipe.FunctionType,
-		Args:           bindParams.Args,
-		OutputSchema:   processOutputSchema,
-		InputSchema:    bindParams.InputSchema,
-		ProjectionIDs:  recipe.ProjectionIDs,
-		Settings:       bindParams.Settings,
-		Secrets:        bindParams.Secrets,
-		ExecutionID:    recipe.ExecutionID,
-		SubstreamID:    recipe.SubstreamID,
-		InitOpaqueData: recipe.InitOpaqueData,
-		AtUnit:         bindParams.AtUnit,
-		AtValue:        bindParams.AtValue,
-		AttachScope:    coldAttachScope(bindParams.AttachOpaqueData),
-		CopyFrom:       bindParams.CopyFrom,
-		CopyTo:         bindParams.CopyTo,
+		FunctionName:     recipe.FunctionName,
+		FunctionType:     recipe.FunctionType,
+		Args:             bindParams.Args,
+		OutputSchema:     processOutputSchema,
+		BindOutputSchema: outputSchema,
+		InputSchema:      bindParams.InputSchema,
+		ProjectionIDs:    recipe.ProjectionIDs,
+		Settings:         bindParams.Settings,
+		Secrets:          bindParams.Secrets,
+		ExecutionID:      recipe.ExecutionID,
+		SubstreamID:      recipe.SubstreamID,
+		InitOpaqueData:   recipe.InitOpaqueData,
+		AtUnit:           bindParams.AtUnit,
+		AtValue:          bindParams.AtValue,
+		AttachScope:      coldAttachScope(bindParams.AttachOpaqueData),
+		CopyFrom:         bindParams.CopyFrom,
+		CopyTo:           bindParams.CopyTo,
 	}
 
 	// Restore pushdown filters
@@ -239,6 +275,14 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		if err == nil {
 			params.PushdownFilters = batch
 		}
+	}
+	if len(recipe.JoinKeyIPC) > 0 {
+		batches, err := deserializeJoinKeyBatches(recipe.JoinKeyIPC)
+		if err != nil {
+			return nil, nil, err
+		}
+		params.JoinKeyBatches = batches
+		params.JoinKeys = flattenJoinKeyBatches(batches)
 	}
 
 	// Restore storage — reuse the shard key the recipe persisted at init so a

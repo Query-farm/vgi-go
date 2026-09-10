@@ -79,21 +79,33 @@ func DeserializeRecordBatch(data []byte) (arrow.RecordBatch, error) {
 // map from column name to Arrow array. Each batch should be a single-column
 // batch; all columns across batches are flattened into one map by field name.
 func deserializeJoinKeys(entries [][]byte) map[string]arrow.Array {
-	out := map[string]arrow.Array{}
-	for _, data := range entries {
+	batches, _ := deserializeJoinKeyBatches(entries)
+	return flattenJoinKeyBatches(batches)
+}
+
+func deserializeJoinKeyBatches(entries [][]byte) ([]arrow.RecordBatch, error) {
+	out := make([]arrow.RecordBatch, 0, len(entries))
+	for index, data := range entries {
 		if len(data) == 0 {
-			continue
+			return nil, fmt.Errorf("join-key batch %d is empty", index)
 		}
 		batch, err := DeserializeRecordBatch(data)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("join-key batch %d: %w", index, err)
 		}
+		out = append(out, batch)
+	}
+	return out, nil
+}
+
+func flattenJoinKeyBatches(batches []arrow.RecordBatch) map[string]arrow.Array {
+	out := map[string]arrow.Array{}
+	for _, batch := range batches {
 		for i, field := range batch.Schema().Fields() {
 			col := batch.Column(i)
 			col.Retain()
 			out[field.Name] = col
 		}
-		batch.Release()
 	}
 	return out
 }

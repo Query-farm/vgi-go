@@ -84,11 +84,8 @@ func (f *ValuePruneFunction) NewState(params *vgi.ProcessParams) (*valuePruneSta
 	}
 
 	var discrete arrow.Array
-	if params.PushdownFilters != nil {
-		pf, err := vgi.DeserializeFilters(params.PushdownFilters, params.JoinKeys)
-		if err == nil && len(pf.Filters) > 0 {
-			discrete = pf.GetColumnValues("n")
-		}
+	if pf := params.CurrentPushdownFilters; pf != nil && len(pf.Filters) > 0 {
+		discrete = pf.GetColumnValues("n")
 	}
 
 	resolved := "(scan)"

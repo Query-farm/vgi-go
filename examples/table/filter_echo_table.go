@@ -43,13 +43,13 @@ func (f *FilterEchoTableScanFunction) Name() string { return "filter_echo_table_
 
 func (f *FilterEchoTableScanFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description:                "Catalog-table scan echoing pushed-down filters (backs example.data.filter_echo_table)",
-		Stability:                  vgi.StabilityConsistent,
-		FilterPushdown:             true,
-		AutoApplyFilters:           true,
-		ProjectionPushdown:         true,
-		SupportedExpressionFilters: []string{"prefix", "starts_with"},
-		Categories:                 []string{"generator", "diagnostic", "testing"},
+		Description:            "Catalog-table scan echoing pushed-down filters (backs example.data.filter_echo_table)",
+		Stability:              vgi.StabilityConsistent,
+		FilterPushdown:         true,
+		AutoApplyFilters:       true,
+		ProjectionPushdown:     true,
+		FilterSemanticProfiles: []string{"vgi.duckdb.standard.v1"},
+		Categories:             []string{"generator", "diagnostic", "testing"},
 	}
 }
 
@@ -70,11 +70,8 @@ type filterEchoTableState struct {
 
 func (f *FilterEchoTableScanFunction) NewState(params *vgi.ProcessParams) (*filterEchoTableState, error) {
 	filterStr := "(none)"
-	if params.PushdownFilters != nil {
-		pf, err := vgi.DeserializeFilters(params.PushdownFilters, params.JoinKeys)
-		if err == nil && pf != nil && len(pf.Filters) > 0 {
-			filterStr = formatFiltersInline(pf)
-		}
+	if pf := params.CurrentPushdownFilters; pf != nil && len(pf.Filters) > 0 {
+		filterStr = formatFiltersInline(pf)
 	}
 	return &filterEchoTableState{FilterStr: filterStr}, nil
 }

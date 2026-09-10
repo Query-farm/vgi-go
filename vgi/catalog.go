@@ -556,6 +556,16 @@ type catalogSchemaInfo struct {
 	macros    []CatalogMacro
 }
 
+func resolvedFilterSemanticProfiles(meta FunctionMetadata) []string {
+	if len(meta.FilterSemanticProfiles) != 0 {
+		return meta.FilterSemanticProfiles
+	}
+	if meta.FilterPushdown {
+		return []string{"vgi.duckdb.standard.v1"}
+	}
+	return nil
+}
+
 // NewDefaultReadOnlyCatalog creates a catalog from registered functions.
 func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCatalog {
 	cat := &DefaultReadOnlyCatalog{
@@ -627,9 +637,10 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			v := true
 			fi.LateMaterialization = &v
 		}
-		if len(meta.SupportedExpressionFilters) > 0 {
-			fi.SupportedExpressionFilters = meta.SupportedExpressionFilters
-		}
+		fi.FilterSemanticProfiles = resolvedFilterSemanticProfiles(meta)
+		fi.AdditionalFilterFunctions = meta.AdditionalFilterFunctions
+		fi.RuntimeFilterAlgorithms = meta.RuntimeFilterAlgorithms
+		fi.FilterEvaluationContexts = meta.FilterEvaluationContexts
 		if meta.OrderPreservation != "" {
 			fi.OrderPreservation = meta.OrderPreservation
 		}

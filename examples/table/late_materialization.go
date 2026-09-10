@@ -110,11 +110,8 @@ func (f *LateMaterializationFunction) NewState(params *vgi.ProcessParams) (*late
 	// the init-time pushdown filters. Process() additionally latches anything
 	// that shows up per-tick.
 	witness := lateMatNoFilterWitness
-	if params.PushdownFilters != nil {
-		pf, err := vgi.DeserializeFilters(params.PushdownFilters, params.JoinKeys)
-		if err == nil && pf != nil {
-			witness = lateMatRowIDWitness(pf)
-		}
+	if params.CurrentPushdownFilters != nil {
+		witness = lateMatRowIDWitness(params.CurrentPushdownFilters)
 	}
 
 	return &lateMaterializationState{

@@ -214,6 +214,13 @@ func (w *Worker) initTableBuffering(ctx context.Context, fn TableBufferingFuncti
 		return nil, err
 	}
 	processParams.Storage = storage
+	if processParams.PushdownFilters != nil {
+		parsed, err := deserializeProcessFiltersForMetadata(processParams, fn.Metadata())
+		if err != nil {
+			return nil, err
+		}
+		processParams.CurrentPushdownFilters = parsed
+	}
 
 	header := &GlobalInitResponseWire{ExecutionID: execID, MaxWorkers: 1}
 
@@ -224,6 +231,27 @@ func (w *Worker) initTableBuffering(ctx context.Context, fn TableBufferingFuncti
 		batches, err := fn.Finalize(ctx, processParams, *finalizeStateID)
 		if err != nil {
 			return nil, err
+		}
+		if fn.Metadata().AutoApplyFilters && processParams.CurrentPushdownFilters != nil {
+			for i, batch := range batches {
+				filtered, filterErr := processParams.CurrentPushdownFilters.Apply(ctx, batch)
+				if filterErr != nil {
+					return nil, filterErr
+				}
+				batch.Release()
+				batches[i] = filtered
+			}
+		}
+		for i, batch := range batches {
+			if batch.Schema().Equal(outputSchema) {
+				continue
+			}
+			projected, projectErr := selectColumnsByName(batch, outputSchema)
+			if projectErr != nil {
+				return nil, projectErr
+			}
+			batch.Release()
+			batches[i] = projected
 		}
 		batchIPC := make([][]byte, 0, len(batches))
 		for _, b := range batches {

@@ -289,6 +289,7 @@ type TableProducerState struct {
 	Recipe         InitRecipe       // exported, serialized
 	UserStateBytes []byte           // exported, gob-serialized user state
 	AutoProjectIDs []int32          // exported
+	FilterDeltaIPC [][]byte         // exported, replayed after HTTP rehydration
 	fn             TableFunction    // transient
 	params         *ProcessParams   // transient
 	state          interface{}      // transient (reconstructed from UserStateBytes)
@@ -303,7 +304,13 @@ func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputColl
 	// Decode any dynamic filter update carried on this tick's custom metadata.
 	// DuckDB's dynamic-filter pushdown ships a fresh, tightened filter batch
 	// per tick under the vgi_pushdown_filters key (base64-encoded IPC stream).
-	applyTickFilters(s.params, callCtx.InputMetadata)
+	delta, err := applyTickFilters(s.params, callCtx.InputMetadata)
+	if err != nil {
+		return err
+	}
+	if delta != nil {
+		s.FilterDeltaIPC = append(s.FilterDeltaIPC, delta)
+	}
 	applyTickValidators(s.params, callCtx.InputMetadata)
 	if s.autoApply != nil || s.AutoProjectIDs != nil {
 		if s.AutoProjectIDs != nil {
@@ -314,15 +321,23 @@ func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputColl
 		}
 		out.EmitInterceptor = func(batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 			result := batch
-			if s.AutoProjectIDs != nil {
-				result = projectBatch(result, s.AutoProjectIDs)
-			}
 			applied := s.autoApply
-			if s.params.CurrentPushdownFilters != nil {
+			if applied != nil && s.params.CurrentPushdownFilters != nil {
 				applied = s.params.CurrentPushdownFilters
 			}
 			if applied != nil {
-				return applied.Apply(ctx, result)
+				filtered, err := applied.Apply(ctx, result)
+				if err != nil {
+					return nil, err
+				}
+				result = filtered
+			}
+			if s.AutoProjectIDs != nil {
+				projected := projectBatch(result, s.AutoProjectIDs)
+				if result != batch {
+					result.Release()
+				}
+				result = projected
 			}
 			return result, nil
 		}
@@ -331,44 +346,47 @@ func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputColl
 }
 
 // applyTickFilters checks the tick-level custom metadata for a dynamic filter
-// update and, if present, replaces params.CurrentPushdownFilters with the
-// freshly decoded filter state. Silent on decode errors — the previous filter
-// state is retained (DuckDB falls back to client-side filtering).
-func applyTickFilters(params *ProcessParams, meta arrow.Metadata) {
+// update and atomically applies it to params.CurrentPushdownFilters. Malformed
+// or unsupported updates fail closed without mutating the previous state.
+func applyTickFilters(params *ProcessParams, meta arrow.Metadata) ([]byte, error) {
 	// First tick after init: seed CurrentPushdownFilters from the static
 	// PushdownFilters so handlers see a consistent view. This must not depend on
 	// the tick carrying no metadata at all — over HTTP the first tick also
 	// carries the init request's metadata (cache-revalidation validators).
 	if params.CurrentPushdownFilters == nil && params.PushdownFilters != nil {
-		if pf, err := DeserializeFilters(params.PushdownFilters, params.JoinKeys); err == nil {
-			params.CurrentPushdownFilters = pf
+		pf, err := deserializeFiltersV2(params.PushdownFilters, params.JoinKeys, params.JoinKeyBatches, false, params.BindOutputSchema)
+		if err != nil {
+			return nil, err
 		}
+		params.CurrentPushdownFilters = pf
 	}
 	if meta.Len() == 0 {
-		return
+		return nil, nil
 	}
 	idx := meta.FindKey("vgi_pushdown_filters")
 	if idx < 0 {
-		return
+		return nil, nil
 	}
 	encoded := meta.Values()[idx]
 	if encoded == "" {
 		// Empty string signals "no dynamic filter yet" — keep the static one.
-		return
+		return nil, nil
 	}
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return
+		return nil, fmt.Errorf("decode dynamic filter base64: %w", err)
 	}
 	batch, err := DeserializeRecordBatch(raw)
 	if err != nil {
-		return
+		return nil, err
 	}
-	pf, err := DeserializeFilters(batch, params.JoinKeys)
-	if err != nil {
-		return
+	if params.CurrentPushdownFilters == nil {
+		return nil, fmt.Errorf("filter delta requires an initial snapshot")
 	}
-	params.CurrentPushdownFilters = pf
+	if err := params.CurrentPushdownFilters.ApplyDelta(batch, params.JoinKeys); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 // applyTickValidators lifts the conditional-revalidation validators off a
@@ -406,6 +424,7 @@ func projectBatch(batch arrow.RecordBatch, ids []int32) arrow.RecordBatch {
 type TableInOutExchangeState struct {
 	Recipe         InitRecipe         // exported, serialized
 	UserStateBytes []byte             // exported, gob-serialized user state
+	FilterDeltaIPC [][]byte           // exported, replayed after HTTP rehydration
 	fn             TableInOutFunction // transient
 	params         *ProcessParams     // transient
 	state          interface{}        // transient
@@ -416,6 +435,19 @@ type TableInOutExchangeState struct {
 // the resulting batches to the output collector.
 func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
 	s.params.Auth = callCtx.Auth
+	delta, err := applyTickFilters(s.params, callCtx.InputMetadata)
+	if err != nil {
+		return err
+	}
+	if bwm, ok := input.(arrow.RecordBatchWithMetadata); ok && delta == nil {
+		delta, err = applyTickFilters(s.params, bwm.Metadata())
+		if err != nil {
+			return err
+		}
+	}
+	if delta != nil {
+		s.FilterDeltaIPC = append(s.FilterDeltaIPC, delta)
+	}
 	// Conditional-revalidation validators (exchange-mode result cache): the
 	// client holds a stale cached result for THIS input unit and asks the
 	// worker to confirm freshness cheaply. Surfaced on params so Process can
@@ -429,23 +461,36 @@ func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.Reco
 	if bwm, ok := input.(arrow.RecordBatchWithMetadata); ok {
 		applyTickValidators(s.params, bwm.Metadata())
 	}
-	// Projection pushdown: a function declaring projection_pushdown emits a
-	// full-width batch but its output schema is narrowed to the projected
-	// columns. Select those columns by name before the (filter) auto-apply and
-	// the wire write. Mirrors vgi-python's batch.select(target_names) in emit.
+	// Apply filters to the function's full unprojected batch, then narrow the
+	// surviving rows to the requested wire schema. This preserves filter-only
+	// columns that are absent from the projection.
 	needsProject := s.params.ProjectionIDs != nil
 	if needsProject || s.autoApply != nil {
 		out.EmitInterceptor = func(batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 			b := batch
-			if needsProject && int(b.NumCols()) > s.params.OutputSchema.NumFields() {
-				nb, err := selectColumnsByName(b, s.params.OutputSchema)
+			applied := s.autoApply
+			if applied != nil && s.params.CurrentPushdownFilters != nil {
+				applied = s.params.CurrentPushdownFilters
+			}
+			if applied != nil {
+				filtered, err := applied.Apply(ctx, b)
 				if err != nil {
 					return nil, err
 				}
-				b = nb
+				b = filtered
 			}
-			if s.autoApply != nil {
-				return s.autoApply.Apply(ctx, b)
+			if needsProject && int(b.NumCols()) > s.params.OutputSchema.NumFields() {
+				projected, err := selectColumnsByName(b, s.params.OutputSchema)
+				if err != nil {
+					if b != batch {
+						b.Release()
+					}
+					return nil, err
+				}
+				if b != batch {
+					b.Release()
+				}
+				b = projected
 			}
 			return b, nil
 		}
@@ -700,12 +745,18 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	}
 	if req.PushdownFilters != nil {
 		batch, err := DeserializeRecordBatch(*req.PushdownFilters)
-		if err == nil {
-			initParams.PushdownFilters = batch
+		if err != nil {
+			return nil, fmt.Errorf("deserializing pushdown filters: %w", err)
 		}
+		initParams.PushdownFilters = batch
 	}
 	if req.JoinKeys != nil && len(*req.JoinKeys) > 0 {
-		initParams.JoinKeys = deserializeJoinKeys(*req.JoinKeys)
+		batches, err := deserializeJoinKeyBatches(*req.JoinKeys)
+		if err != nil {
+			return nil, err
+		}
+		initParams.JoinKeyBatches = batches
+		initParams.JoinKeys = flattenJoinKeyBatches(batches)
 	}
 	if req.OrderByColumnName != nil {
 		hint := &OrderByHint{ColumnName: *req.OrderByColumnName, RowLimit: -1}
@@ -766,23 +817,25 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 
 	// Build process params
 	processParams := &ProcessParams{
-		FunctionName:    bindReq.FunctionName,
-		FunctionType:    FunctionType(bindReq.FunctionType),
-		Args:            bindParams.Args,
-		OutputSchema:    processOutputSchema,
-		InputSchema:     bindParams.InputSchema,
-		ProjectionIDs:   initParams.ProjectionIDs,
-		Settings:        bindParams.Settings,
-		Secrets:         bindParams.Secrets,
-		PushdownFilters: initParams.PushdownFilters,
-		JoinKeys:        initParams.JoinKeys,
-		OrderByHint:     initParams.OrderByHint,
-		TableSampleHint: initParams.TableSampleHint,
-		AtUnit:          bindParams.AtUnit,
-		AtValue:         bindParams.AtValue,
-		AttachScope:     bindParams.AttachOpaqueData,
-		CopyFrom:        bindParams.CopyFrom,
-		CopyTo:          bindParams.CopyTo,
+		FunctionName:     bindReq.FunctionName,
+		FunctionType:     FunctionType(bindReq.FunctionType),
+		Args:             bindParams.Args,
+		OutputSchema:     processOutputSchema,
+		BindOutputSchema: outputSchema,
+		InputSchema:      bindParams.InputSchema,
+		ProjectionIDs:    initParams.ProjectionIDs,
+		Settings:         bindParams.Settings,
+		Secrets:          bindParams.Secrets,
+		PushdownFilters:  initParams.PushdownFilters,
+		JoinKeys:         initParams.JoinKeys,
+		JoinKeyBatches:   initParams.JoinKeyBatches,
+		OrderByHint:      initParams.OrderByHint,
+		TableSampleHint:  initParams.TableSampleHint,
+		AtUnit:           bindParams.AtUnit,
+		AtValue:          bindParams.AtValue,
+		AttachScope:      bindParams.AttachOpaqueData,
+		CopyFrom:         bindParams.CopyFrom,
+		CopyTo:           bindParams.CopyTo,
 	}
 	if req.SubstreamID != nil {
 		processParams.SubstreamID = *req.SubstreamID
@@ -804,6 +857,9 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	}
 	if req.PushdownFilters != nil {
 		recipe.PushdownFilterIPC = *req.PushdownFilters
+	}
+	if req.JoinKeys != nil {
+		recipe.JoinKeyIPC = *req.JoinKeys
 	}
 
 	// Derive the per-attach shard key once (from the unwrapped attach UUID) and
@@ -982,6 +1038,13 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 		return nil, err
 	}
 	processParams.Storage = processStorage
+	if processParams.PushdownFilters != nil {
+		parsed, err := deserializeProcessFiltersForMetadata(processParams, fn.Metadata())
+		if err != nil {
+			return nil, err
+		}
+		processParams.CurrentPushdownFilters = parsed
+	}
 
 	userState, err := fn.NewState(processParams)
 	if err != nil {
@@ -1013,10 +1076,7 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 
 	// Set up auto-apply if the function opts in and filters are present
 	if fn.Metadata().AutoApplyFilters && processParams.PushdownFilters != nil {
-		parsed, err := DeserializeFilters(processParams.PushdownFilters, processParams.JoinKeys)
-		if err == nil && len(parsed.Filters) > 0 {
-			state.autoApply = parsed
-		}
+		state.autoApply = processParams.CurrentPushdownFilters
 	}
 
 	return &vgirpc.StreamResult{
@@ -1069,6 +1129,13 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 		return nil, err
 	}
 	processParams.Storage = processStorage
+	if processParams.PushdownFilters != nil {
+		parsed, err := deserializeProcessFiltersForMetadata(processParams, fn.Metadata())
+		if err != nil {
+			return nil, err
+		}
+		processParams.CurrentPushdownFilters = parsed
+	}
 
 	header := &GlobalInitResponseWire{
 		ExecutionID: resp.ExecutionID,
@@ -1087,6 +1154,27 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 		batches, err := fn.Finalize(ctx, processParams, userState)
 		if err != nil {
 			return nil, err
+		}
+		if fn.Metadata().AutoApplyFilters && processParams.CurrentPushdownFilters != nil {
+			for i, batch := range batches {
+				filtered, filterErr := processParams.CurrentPushdownFilters.Apply(ctx, batch)
+				if filterErr != nil {
+					return nil, filterErr
+				}
+				batch.Release()
+				batches[i] = filtered
+			}
+		}
+		for i, batch := range batches {
+			if batch.Schema().Equal(outputSchema) {
+				continue
+			}
+			projected, projectErr := selectColumnsByName(batch, outputSchema)
+			if projectErr != nil {
+				return nil, projectErr
+			}
+			batch.Release()
+			batches[i] = projected
 		}
 
 		// Serialize each finalize batch to IPC bytes
@@ -1134,10 +1222,7 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 
 	// Set up auto-apply if the function opts in and filters are present
 	if fn.Metadata().AutoApplyFilters && processParams.PushdownFilters != nil {
-		parsed, err := DeserializeFilters(processParams.PushdownFilters, processParams.JoinKeys)
-		if err == nil && len(parsed.Filters) > 0 {
-			state.autoApply = parsed
-		}
+		state.autoApply = processParams.CurrentPushdownFilters
 	}
 
 	return &vgirpc.StreamResult{

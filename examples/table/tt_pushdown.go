@@ -89,14 +89,10 @@ func ResolveTtVersion(atUnit, atValue *string) (int64, error) {
 
 // ttPushedFiltersStr formats the init-time pushdown filters for the echo column.
 func ttPushedFiltersStr(params *vgi.ProcessParams) string {
-	if params.PushdownFilters == nil {
+	if params.CurrentPushdownFilters == nil || len(params.CurrentPushdownFilters.Filters) == 0 {
 		return "(none)"
 	}
-	pf, err := vgi.DeserializeFilters(params.PushdownFilters, params.JoinKeys)
-	if err != nil || pf == nil || len(pf.Filters) == 0 {
-		return "(none)"
-	}
-	return formatFiltersInline(pf)
+	return formatFiltersInline(params.CurrentPushdownFilters)
 }
 
 // ttState carries the resolved version, cached filter string, and emit cursor.

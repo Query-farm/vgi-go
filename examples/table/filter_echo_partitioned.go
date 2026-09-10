@@ -96,11 +96,8 @@ type filterEchoPartitionedState struct {
 
 func (f *FilterEchoPartitionedFunction) NewState(params *vgi.ProcessParams) (*filterEchoPartitionedState, error) {
 	filterStr := "(none)"
-	if params.PushdownFilters != nil {
-		pf, err := vgi.DeserializeFilters(params.PushdownFilters, params.JoinKeys)
-		if err == nil && len(pf.Filters) > 0 {
-			filterStr = formatFiltersInline(pf)
-		}
+	if pf := params.CurrentPushdownFilters; pf != nil && len(pf.Filters) > 0 {
+		filterStr = formatFiltersInline(pf)
 	}
 	return &filterEchoPartitionedState{
 		FilterStr: filterStr,

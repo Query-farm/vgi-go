@@ -17,6 +17,7 @@ type InitRecipe struct {
 	BindOpaqueData    []byte
 	InitOpaqueData    []byte
 	PushdownFilterIPC []byte
+	JoinKeyIPC        [][]byte
 	Phase             Phase
 	IsSecondary       bool
 	// SubstreamID is the client-minted per-substream id folded into the recipe

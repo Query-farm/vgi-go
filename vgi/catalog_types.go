@@ -4,6 +4,7 @@ package vgi
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -20,38 +21,54 @@ type CatalogExample struct {
 	ExpectedOutput *string
 }
 
+type FilterFunctionCapability struct {
+	Namespace, Name string
+	Version         uint64
+}
+type RuntimeFilterAlgorithmCapability struct {
+	Namespace, Name string
+	Version         uint64
+}
+type EvaluationContextCapability struct {
+	Profile             string
+	ProviderFingerprint *string
+}
+
 // FunctionInfo describes a function in the catalog.
 type FunctionInfo struct {
-	Name                       string
-	SchemaPath                 []string
-	FunctionType               FunctionType
-	ArgSchema                  *arrow.Schema // argument schema
-	OutputSchema               *arrow.Schema // return schema
-	Stability                  FunctionStability
-	NullHandling               NullHandling
-	Description                string
-	Comment                    string
-	Tags                       map[string]string
-	Examples                   []CatalogExample
-	Categories                 []string
-	ProjectionPushdown         *bool
-	FilterPushdown             *bool
-	SamplingPushdown           *bool
-	LateMaterialization        *bool
-	SupportedExpressionFilters []string
-	OrderPreservation          OrderPreservation // "" = null
-	MaxWorkers                 int32
-	SupportsBatchIndex         bool               // opt-in per-batch batch_index tagging
-	SupportsSplits             bool               // opt-in to plan()/on_split(): named, redeemable scan units
-	FiltersExactlyApplied      bool               // worker applies pushed filters exactly; engine may drop its own
-	SupportsPositions          bool               // addressable positions in the data (incremental/streaming reads)
-	SplitTokenTTLSeconds       *int64             // nil = UNBOUNDED, not "expires immediately"
-	PartitionKind              PartitionKind      // default PartitionKindNotPartitioned
-	OrderDependent             OrderDependence    // default NOT_ORDER_DEPENDENT
-	DistinctDependent          DistinctDependence // default NOT_DISTINCT_DEPENDENT
-	SupportsWindow             bool
-	StreamingPartitioned       bool
-	HasFinalize                bool
+	Name                      string
+	SchemaPath                []string
+	FunctionType              FunctionType
+	ArgSchema                 *arrow.Schema // argument schema
+	OutputSchema              *arrow.Schema // return schema
+	Stability                 FunctionStability
+	NullHandling              NullHandling
+	Description               string
+	Comment                   string
+	Tags                      map[string]string
+	Examples                  []CatalogExample
+	Categories                []string
+	ProjectionPushdown        *bool
+	FilterPushdown            *bool
+	SamplingPushdown          *bool
+	LateMaterialization       *bool
+	FilterSemanticProfiles    []string
+	AdditionalFilterFunctions []FilterFunctionCapability
+	RuntimeFilterAlgorithms   []RuntimeFilterAlgorithmCapability
+	FilterEvaluationContexts  []EvaluationContextCapability
+	OrderPreservation         OrderPreservation // "" = null
+	MaxWorkers                int32
+	SupportsBatchIndex        bool               // opt-in per-batch batch_index tagging
+	SupportsSplits            bool               // opt-in to plan()/on_split(): named, redeemable scan units
+	FiltersExactlyApplied     bool               // worker applies pushed filters exactly; engine may drop its own
+	SupportsPositions         bool               // addressable positions in the data (incremental/streaming reads)
+	SplitTokenTTLSeconds      *int64             // nil = UNBOUNDED, not "expires immediately"
+	PartitionKind             PartitionKind      // default PartitionKindNotPartitioned
+	OrderDependent            OrderDependence    // default NOT_ORDER_DEPENDENT
+	DistinctDependent         DistinctDependence // default NOT_DISTINCT_DEPENDENT
+	SupportsWindow            bool
+	StreamingPartitioned      bool
+	HasFinalize               bool
 	// Table-buffering (sink/source) ordering hints. Default false.
 	SourceOrderDependent    bool
 	SinkOrderDependent      bool
@@ -93,10 +110,30 @@ var requiredSecretStructType = arrow.StructOf(
 	arrow.Field{Name: "secret_name", Type: arrow.BinaryTypes.String, Nullable: true},
 )
 
+var filterIdentityStructType = arrow.StructOf(
+	arrow.Field{Name: "namespace", Type: arrow.BinaryTypes.String},
+	arrow.Field{Name: "name", Type: arrow.BinaryTypes.String},
+	arrow.Field{Name: "version", Type: arrow.PrimitiveTypes.Uint64},
+)
+
+var evaluationContextCapabilityStructType = arrow.StructOf(
+	arrow.Field{Name: "profile", Type: arrow.BinaryTypes.String},
+	arrow.Field{Name: "provider_fingerprint", Type: arrow.BinaryTypes.String, Nullable: true},
+)
+
 var functionInfoSchema = generated.FunctionInfoSchema
 
 // SerializeFunctionInfo serializes a FunctionInfo to IPC bytes.
 func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
+	unsupportedExtension := false
+	for _, capability := range info.AdditionalFilterFunctions {
+		if capability.Namespace != "duckdb.spatial" || capability.Name != "intersects_extent" || capability.Version != 1 {
+			unsupportedExtension = true
+		}
+	}
+	if unsupportedExtension || len(info.RuntimeFilterAlgorithms) != 0 || len(info.FilterEvaluationContexts) != 0 {
+		return nil, fmt.Errorf("filter capability advertised without a registered Go evaluator")
+	}
 	mem := memory.NewGoAllocator()
 
 	// comment
@@ -248,13 +285,49 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		lmBuilder.AppendNull()
 	}
 
-	// supported_expression_filters
-	sefBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
-	defer sefBuilder.Release()
-	sefBuilder.Append(true)
-	sefVb := sefBuilder.ValueBuilder().(*array.StringBuilder)
-	for _, f := range info.SupportedExpressionFilters {
-		sefVb.Append(f)
+	profilesBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer profilesBuilder.Release()
+	profilesBuilder.Append(true)
+	profilesValues := profilesBuilder.ValueBuilder().(*array.StringBuilder)
+	for _, profile := range info.FilterSemanticProfiles {
+		profilesValues.Append(profile)
+	}
+
+	functionsBuilder := array.NewListBuilder(mem, filterIdentityStructType)
+	defer functionsBuilder.Release()
+	functionsBuilder.Append(true)
+	functionsValues := functionsBuilder.ValueBuilder().(*array.StructBuilder)
+	for _, capability := range info.AdditionalFilterFunctions {
+		functionsValues.Append(true)
+		functionsValues.FieldBuilder(0).(*array.StringBuilder).Append(capability.Namespace)
+		functionsValues.FieldBuilder(1).(*array.StringBuilder).Append(capability.Name)
+		functionsValues.FieldBuilder(2).(*array.Uint64Builder).Append(capability.Version)
+	}
+
+	runtimeBuilder := array.NewListBuilder(mem, filterIdentityStructType)
+	defer runtimeBuilder.Release()
+	runtimeBuilder.Append(true)
+	runtimeValues := runtimeBuilder.ValueBuilder().(*array.StructBuilder)
+	for _, capability := range info.RuntimeFilterAlgorithms {
+		runtimeValues.Append(true)
+		runtimeValues.FieldBuilder(0).(*array.StringBuilder).Append(capability.Namespace)
+		runtimeValues.FieldBuilder(1).(*array.StringBuilder).Append(capability.Name)
+		runtimeValues.FieldBuilder(2).(*array.Uint64Builder).Append(capability.Version)
+	}
+
+	contextsBuilder := array.NewListBuilder(mem, evaluationContextCapabilityStructType)
+	defer contextsBuilder.Release()
+	contextsBuilder.Append(true)
+	contextsValues := contextsBuilder.ValueBuilder().(*array.StructBuilder)
+	for _, capability := range info.FilterEvaluationContexts {
+		contextsValues.Append(true)
+		contextsValues.FieldBuilder(0).(*array.StringBuilder).Append(capability.Profile)
+		fingerprint := contextsValues.FieldBuilder(1).(*array.StringBuilder)
+		if capability.ProviderFingerprint == nil {
+			fingerprint.AppendNull()
+		} else {
+			fingerprint.Append(*capability.ProviderFingerprint)
+		}
 	}
 
 	// order_preservation
@@ -406,7 +479,10 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		fpBuilder.NewArray(),
 		spBuilder.NewArray(),
 		lmBuilder.NewArray(),
-		sefBuilder.NewArray(),
+		profilesBuilder.NewArray(),
+		functionsBuilder.NewArray(),
+		runtimeBuilder.NewArray(),
+		contextsBuilder.NewArray(),
 		opBuilder.NewArray(),
 		mwBuilder.NewArray(),
 		sbiBuilder.NewArray(),

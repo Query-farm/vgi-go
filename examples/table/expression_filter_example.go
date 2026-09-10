@@ -25,13 +25,13 @@ func (*ExpressionFilterTestFunction) Name() string { return "expression_filter_t
 
 func (*ExpressionFilterTestFunction) Metadata() vgi.FunctionMetadata {
 	return vgi.FunctionMetadata{
-		Description:                "Generates rows for non-spatial expression-filter pushdown tests",
-		Stability:                  vgi.StabilityConsistent,
-		ProjectionPushdown:         true,
-		FilterPushdown:             true,
-		AutoApplyFilters:           true,
-		SupportedExpressionFilters: []string{"list_contains", "starts_with", "contains"},
-		Categories:                 []string{"generator", "diagnostic", "testing"},
+		Description:            "Generates rows for non-spatial expression-filter pushdown tests",
+		Stability:              vgi.StabilityConsistent,
+		ProjectionPushdown:     true,
+		FilterPushdown:         true,
+		AutoApplyFilters:       true,
+		FilterSemanticProfiles: []string{"vgi.duckdb.standard.v1"},
+		Categories:             []string{"generator", "diagnostic", "testing"},
 	}
 }
 

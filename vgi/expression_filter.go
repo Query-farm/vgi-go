@@ -251,6 +251,9 @@ func evalExpressionAgainstBatch(ctx context.Context, batch arrow.RecordBatch, sq
 		return nil, err
 	}
 	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "SET default_collation = 'binary'"); err != nil {
+		return nil, fmt.Errorf("configure binary filter collation: %w", err)
+	}
 
 	tableName := fmt.Sprintf("vgi_filter_eval_%d", nextEvalID())
 	createSQL, err := buildCreateTableSQL(tableName, batch.Schema())
@@ -328,6 +331,9 @@ func duckDBTypeFor(f arrow.Field) (string, error) {
 	if isWKBField(f) {
 		return "BLOB", nil
 	}
+	if dictionary, ok := f.Type.(*arrow.DictionaryType); ok {
+		return duckDBTypeFor(arrow.Field{Name: f.Name, Type: dictionary.ValueType})
+	}
 	switch f.Type.ID() {
 	case arrow.INT64:
 		return "BIGINT", nil
@@ -354,6 +360,18 @@ func duckDBTypeFor(f arrow.Field) (string, error) {
 			return "", err
 		}
 		return elem + "[]", nil
+	case arrow.STRUCT:
+		st := f.Type.(*arrow.StructType)
+		parts := make([]string, st.NumFields())
+		for i := 0; i < st.NumFields(); i++ {
+			child := st.Field(i)
+			childType, err := duckDBTypeFor(child)
+			if err != nil {
+				return "", err
+			}
+			parts[i] = fmt.Sprintf(`"%s" %s`, escapeIdent(child.Name), childType)
+		}
+		return "STRUCT(" + strings.Join(parts, ", ") + ")", nil
 	}
 	return "", fmt.Errorf("unsupported column type %s in expression filter", f.Type)
 }
@@ -418,6 +436,10 @@ func arrowToDriverValue(col arrow.Array, i int, field arrow.Field) (interface{},
 	}
 	_ = isWKBField(field) // presence matters for type mapping only
 	switch a := col.(type) {
+	case *array.Dictionary:
+		valueField := field
+		valueField.Type = a.Dictionary().DataType()
+		return arrowToDriverValue(a.Dictionary(), a.GetValueIndex(i), valueField)
 	case *array.Int64:
 		return a.Value(i), nil
 	case *array.Int32:
@@ -446,6 +468,18 @@ func arrowToDriverValue(col arrow.Array, i int, field arrow.Field) (interface{},
 				return nil, err
 			}
 			out[j-start] = v
+		}
+		return out, nil
+	case *array.Struct:
+		st := a.DataType().(*arrow.StructType)
+		out := make(map[string]interface{}, st.NumFields())
+		for j := 0; j < st.NumFields(); j++ {
+			child := st.Field(j)
+			value, err := arrowToDriverValue(a.Field(j), i, child)
+			if err != nil {
+				return nil, err
+			}
+			out[child.Name] = value
 		}
 		return out, nil
 	}

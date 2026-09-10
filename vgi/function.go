@@ -221,10 +221,13 @@ type FunctionMetadata struct {
 	// also exposes a rowid virtual column and supports projection + filter
 	// pushdown; the rowid must be unique, deterministic, and snapshot-stable.
 	LateMaterialization bool
-	// SupportedExpressionFilters lists DuckDB expression names that the
-	// function can absorb into its scan (e.g. "&&", "list_contains",
-	// "starts_with"). Without this, DuckDB inserts a separate FILTER node.
-	SupportedExpressionFilters []string
+	// Filter Encoding v2 capabilities. The standard semantic profile is
+	// vgi.duckdb.standard.v1; additional functions and runtime algorithms are
+	// versioned identities rather than unqualified expression names.
+	FilterSemanticProfiles    []string
+	AdditionalFilterFunctions []FilterFunctionCapability
+	RuntimeFilterAlgorithms   []RuntimeFilterAlgorithmCapability
+	FilterEvaluationContexts  []EvaluationContextCapability
 	// SupportsWindow indicates an aggregate also implements the windowed
 	// callbacks (window_init, window, window_destructor). Ignored for
 	// non-aggregate functions.

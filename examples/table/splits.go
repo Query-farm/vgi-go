@@ -1039,18 +1039,9 @@ func (f *SplitDynamicFilterFunction) Cardinality(params *vgi.BindParams) (*vgi.T
 
 func (f *SplitDynamicFilterFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *splitState, out *vgirpc.OutputCollector) error {
 	const maxBatch = int64(4)
-	// Read the same way the Python and Rust twins do: the INIT request carries
-	// both the serialized filters and the join keys, and MERGING them is what
-	// produces the IN filter a join pushes down. CurrentPushdownFilters alone
-	// carries the per-tick filters but not the join keys, so a join rendered as
-	// "(none)" — the pushdown arrived and the fixture could not see it.
-	merged := params.CurrentPushdownFilters
-	if params.PushdownFilters != nil {
-		if pf, err := vgi.DeserializeFilters(params.PushdownFilters, params.JoinKeys); err == nil && pf != nil {
-			merged = pf
-		}
-	}
-	rendered := renderFiltersCanonical(merged)
+	// CurrentPushdownFilters is schema-bound, resolves external-IN side
+	// batches, and includes every atomic tick delta applied so far.
+	rendered := renderFiltersCanonical(params.CurrentPushdownFilters)
 	for state.Idx < len(state.Ranges) {
 		r := state.Ranges[state.Idx]
 		if state.Cur >= r.Hi {

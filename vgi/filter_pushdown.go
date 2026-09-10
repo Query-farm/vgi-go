@@ -15,7 +15,7 @@ import (
 )
 
 // supportedFilterVersion is the filter protocol version we handle.
-const supportedFilterVersion = "1"
+const supportedFilterVersion = "2"
 
 // ---------------------------------------------------------------------------
 // Filter type and comparison operator enums
@@ -435,13 +435,23 @@ func (f *StructFilter) Evaluate(ctx context.Context, batch arrow.RecordBatch) (a
 
 // PushdownFilters holds the deserialized pushdown filters for a function call.
 type PushdownFilters struct {
-	Filters []Filter
-	Version string
+	Filters          []Filter
+	Version          string
+	v2Predicates     []v2Predicate
+	v2Revisions      map[string]uint64
+	v2Required       map[string]struct{}
+	v2Context        evaluationContext
+	v2JoinKeyBatches []arrow.RecordBatch
+	v2Spatial        bool
+	v2OutputSchema   *arrow.Schema
 }
 
 // Evaluate evaluates all filters against the batch, returning a boolean mask.
 // Filters are combined with AND at the top level.
 func (pf *PushdownFilters) Evaluate(ctx context.Context, batch arrow.RecordBatch) (arrow.Array, error) {
+	if pf.v2Predicates != nil {
+		return pf.evaluateV2(ctx, batch)
+	}
 	if len(pf.Filters) == 0 {
 		return makeBoolArray(true, int(batch.NumRows())), nil
 	}
@@ -587,81 +597,31 @@ func (pf *PushdownFilters) GetColumnFilters(name string) []Filter {
 // Deserialization
 // ---------------------------------------------------------------------------
 
-// DeserializeFilters deserializes a pushdown filters record batch into a
-// PushdownFilters container with a typed filter AST. Join-keys InFilters are
-// resolved by name against joinKeys (name -> column) when provided.
+// DeserializeFilters rejects every nonempty v2 snapshot because it has no
+// authoritative bind output schema.
+//
+// Deprecated: use DeserializeFiltersWithSchema, or consume
+// ProcessParams.CurrentPushdownFilters in a function implementation.
 func DeserializeFilters(batch arrow.RecordBatch, joinKeys ...map[string]arrow.Array) (*PushdownFilters, error) {
-	if batch.NumCols() == 0 {
-		return nil, fmt.Errorf("filter batch has no columns")
-	}
-
-	// Check version from field 0 metadata
-	field0 := batch.Schema().Field(0)
-	version := ""
-	if field0.Metadata.Len() > 0 {
-		idx := field0.Metadata.FindKey("vgi_filter_version")
-		if idx >= 0 {
-			version = field0.Metadata.Values()[idx]
-		}
-	}
-	if version != supportedFilterVersion {
-		return nil, fmt.Errorf("unsupported filter version: %q (expected %q)", version, supportedFilterVersion)
-	}
-
-	// Parse JSON specs from column 0, row 0
-	jsonCol, ok := batch.Column(0).(*array.String)
-	if !ok {
-		return nil, fmt.Errorf("filter column 0 is not a string column")
-	}
-	if jsonCol.Len() == 0 {
-		return nil, fmt.Errorf("filter column 0 is empty")
-	}
-
-	var specs []filterSpec
-	if err := json.Unmarshal([]byte(jsonCol.Value(0)), &specs); err != nil {
-		return nil, fmt.Errorf("parsing filter JSON: %w", err)
-	}
-
-	// Value resolver: value_ref N → scalar from column N+1
-	getValue := func(ref int) (scalar.Scalar, error) {
-		colIdx := ref + 1
-		if colIdx >= int(batch.NumCols()) {
-			return nil, fmt.Errorf("value_ref %d out of range (batch has %d columns)", ref, batch.NumCols())
-		}
-		col := batch.Column(colIdx)
-		if col.Len() == 0 {
-			return nil, fmt.Errorf("value column %d is empty", colIdx)
-		}
-		return scalar.GetScalar(col, 0)
-	}
-
 	var joinKeysMap map[string]arrow.Array
 	if len(joinKeys) > 0 {
 		joinKeysMap = joinKeys[0]
 	}
-	getJoinKey := func(name string) arrow.Array {
-		if joinKeysMap == nil {
-			return nil
-		}
-		return joinKeysMap[name]
-	}
+	return deserializeFiltersV2(batch, joinKeysMap, nil, false, nil)
+}
 
-	filters := make([]Filter, 0, len(specs))
-	for i, spec := range specs {
-		f, err := parseFilterWithBatch(spec, getValue, getJoinKey, batch)
-		if err != nil {
-			return nil, fmt.Errorf("parsing filter %d: %w", i, err)
-		}
-		if f == nil {
-			continue // graceful degradation (e.g., join_keys without keys batch)
-		}
-		filters = append(filters, f)
-	}
+// DeserializeFiltersWithJoinKeyBatches rejects every nonempty v2 snapshot
+// because it has no authoritative bind output schema.
+//
+// Deprecated: use DeserializeFiltersWithSchema.
+func DeserializeFiltersWithJoinKeyBatches(batch arrow.RecordBatch, joinKeys []arrow.RecordBatch) (*PushdownFilters, error) {
+	return deserializeFiltersV2(batch, flattenJoinKeyBatches(joinKeys), joinKeys, false, nil)
+}
 
-	return &PushdownFilters{
-		Filters: filters,
-		Version: version,
-	}, nil
+// DeserializeFiltersWithSchema validates all column and nested-field
+// identities against the authoritative unprojected bind output schema.
+func DeserializeFiltersWithSchema(batch arrow.RecordBatch, outputSchema *arrow.Schema, joinKeys []arrow.RecordBatch) (*PushdownFilters, error) {
+	return deserializeFiltersV2(batch, flattenJoinKeyBatches(joinKeys), joinKeys, false, outputSchema)
 }
 
 // ---------------------------------------------------------------------------
