@@ -5,6 +5,7 @@ package vgi
 import (
 	"bytes"
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
@@ -13,16 +14,16 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 )
 
-// schema_name (protocol 1.5.0) is the one field on ScanFunctionResult and
+// schema_path (protocol 2.0.0) is the one field on ScanFunctionResult and
 // ScanBranch whose ABSENCE is meaningful: nil tells the client to fall back to
 // its pre-1.5.0 table-schema/default-schema guess, which is the permanently
 // correct answer for a branch that delegates to a native DuckDB function. So
 // both states have to survive the round trip distinguishably — a serializer
 // that wrote "" for nil would silently claim a schema named "".
 
-// readScanSchemaName reads back the trailing schema_name column of a one-row
+// readScanSchemaPath reads back the trailing schema_path column of a one-row
 // IPC record, returning nil when the cell is Arrow-null.
-func readScanSchemaName(t *testing.T, origin string, data []byte) *string {
+func readScanSchemaPath(t *testing.T, origin string, data []byte) *SchemaPath {
 	t.Helper()
 
 	reader, err := ipc.NewReader(bytes.NewReader(data))
@@ -31,9 +32,9 @@ func readScanSchemaName(t *testing.T, origin string, data []byte) *string {
 	}
 	defer reader.Release()
 
-	idx := reader.Schema().FieldIndices("schema_name")
+	idx := reader.Schema().FieldIndices("schema_path")
 	if len(idx) != 1 {
-		t.Fatalf("%s: expected exactly one schema_name column, got %d", origin, len(idx))
+		t.Fatalf("%s: expected exactly one schema_path column, got %d", origin, len(idx))
 	}
 	if !reader.Next() {
 		t.Fatalf("%s: the IPC stream carried no record batch", origin)
@@ -42,29 +43,34 @@ func readScanSchemaName(t *testing.T, origin string, data []byte) *string {
 	if col.IsNull(0) {
 		return nil
 	}
-	str, ok := col.(*array.String)
+	list, ok := col.(*array.List)
 	if !ok {
-		t.Fatalf("%s: schema_name decoded as %T, want *array.String", origin, col)
+		t.Fatalf("%s: schema_path decoded as %T, want *array.List", origin, col)
 	}
-	v := str.Value(0)
-	return &v
+	start, end := list.ValueOffsets(0)
+	values := list.ListValues().(*array.String)
+	path := make(SchemaPath, 0, end-start)
+	for i := start; i < end; i++ {
+		path = append(path, values.Value(int(i)))
+	}
+	return &path
 }
 
-func TestSerializeScanFunctionResultSchemaName(t *testing.T) {
+func TestSerializeScanFunctionResultSchemaPath(t *testing.T) {
 	b, err := SerializeScanFunctionResult(&ScanFunctionResult{
 		FunctionName: "test_same_name_table_scan",
-		SchemaName:   strPtr("data"),
+		SchemaPath:   pathPtr("analytics", "data"),
 	})
 	if err != nil {
 		t.Fatalf("SerializeScanFunctionResult: %v", err)
 	}
-	got := readScanSchemaName(t, "ScanFunctionResult", b)
-	if got == nil || *got != "data" {
-		t.Errorf("schema_name round-tripped as %v, want \"data\"", got)
+	got := readScanSchemaPath(t, "ScanFunctionResult", b)
+	if got == nil || !slices.Equal(*got, SchemaPath{"analytics", "data"}) {
+		t.Errorf("schema_path round-tripped as %v, want analytics.data", got)
 	}
 }
 
-func TestSerializeScanFunctionResultSchemaNameAbsent(t *testing.T) {
+func TestSerializeScanFunctionResultSchemaPathAbsent(t *testing.T) {
 	// A worker that only names a native DuckDB function has no VGI-side schema
 	// to report — the null must stay null rather than becoming "".
 	b, err := SerializeScanFunctionResult(&ScanFunctionResult{
@@ -74,66 +80,68 @@ func TestSerializeScanFunctionResultSchemaNameAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SerializeScanFunctionResult: %v", err)
 	}
-	if got := readScanSchemaName(t, "ScanFunctionResult", b); got != nil {
-		t.Errorf("schema_name round-tripped as %q, want an Arrow null", *got)
+	if got := readScanSchemaPath(t, "ScanFunctionResult", b); got != nil {
+		t.Errorf("schema_path round-tripped as %q, want an Arrow null", *got)
 	}
 }
 
-func TestSerializeScanBranchSchemaName(t *testing.T) {
+func TestSerializeScanBranchSchemaPath(t *testing.T) {
 	b, err := SerializeScanBranch(&ScanBranch{
 		FunctionName: "test_same_name_table_scan",
-		SchemaName:   strPtr("data"),
+		SchemaPath:   pathPtr("analytics", "data"),
 	})
 	if err != nil {
 		t.Fatalf("SerializeScanBranch: %v", err)
 	}
-	got := readScanSchemaName(t, "ScanBranch", b)
-	if got == nil || *got != "data" {
-		t.Errorf("schema_name round-tripped as %v, want \"data\"", got)
+	got := readScanSchemaPath(t, "ScanBranch", b)
+	if got == nil || !slices.Equal(*got, SchemaPath{"analytics", "data"}) {
+		t.Errorf("schema_path round-tripped as %v, want analytics.data", got)
 	}
 }
 
-func TestSerializeScanBranchSchemaNameAbsent(t *testing.T) {
+func TestSerializeScanBranchSchemaPathAbsent(t *testing.T) {
 	// A format branch names no function at all, so it has no function schema —
-	// and source_schema, which it may well carry, is a different field.
-	src := "main"
+	// and source_schema_path, which it may well carry, is a different field.
+	src := SchemaPath{"catalog", "main"}
 	b, err := SerializeScanBranch(&ScanBranch{
-		FormatName:      strPtr("parquet"),
-		FormatLocations: []string{"s3://bucket/a.parquet"},
-		SourceSchema:    &src,
+		FormatName:       strPtr("parquet"),
+		FormatLocations:  []string{"s3://bucket/a.parquet"},
+		SourceSchemaPath: &src,
 	})
 	if err != nil {
 		t.Fatalf("SerializeScanBranch: %v", err)
 	}
-	if got := readScanSchemaName(t, "ScanBranch", b); got != nil {
-		t.Errorf("schema_name round-tripped as %q, want an Arrow null", *got)
+	if got := readScanSchemaPath(t, "ScanBranch", b); got != nil {
+		t.Errorf("schema_path round-tripped as %q, want an Arrow null", *got)
 	}
 }
 
 // TestResolveFunctionSchema covers the registry lookup that populates
-// schema_name: which schema a table's backing function ACTUALLY lives in, which
+// schema_path: which schema a table's backing function ACTUALLY lives in, which
 // is not necessarily the schema the table is declared in.
 func TestResolveFunctionSchema(t *testing.T) {
 	w := NewWorker(WithCatalogName("example"))
 	// One name homed in both schemas — the schema-disambiguation case.
 	w.RegisterTable(AsTableFunction[struct{}](&namedTable{name: "test_resolve_probe"}))
 	w.RegisterTableInSchema("data", AsTableFunction[struct{}](&namedTable{name: "test_resolve_probe"}))
+	w.RegisterTableInSchemaPath(SchemaPath{"analytics", "data"}, AsTableFunction[struct{}](&namedTable{name: "nested_probe"}))
 	// One name homed only in main, backing a table declared in data.
 	w.RegisterTable(AsTableFunction[struct{}](&namedTable{name: "lonely_scan"}))
 
 	cases := []struct {
 		name        string
 		function    string
-		tableSchema string
-		want        *string
+		tableSchema SchemaPath
+		want        *SchemaPath
 	}{
-		{"same name, main table", "test_resolve_probe", "main", strPtr("main")},
-		{"same name, data table", "test_resolve_probe", "data", strPtr("data")},
-		{"main-homed function backing a data table", "lonely_scan", "data", strPtr("main")},
-		{"schema name case-insensitive", "test_resolve_probe", "DATA", strPtr("data")},
+		{"same name, main table", "test_resolve_probe", SchemaPath{"main"}, pathPtr("main")},
+		{"same name, data table", "test_resolve_probe", SchemaPath{"data"}, pathPtr("data")},
+		{"main-homed function backing a data table", "lonely_scan", SchemaPath{"data"}, pathPtr("main")},
+		{"schema name case-insensitive", "test_resolve_probe", SchemaPath{"DATA"}, pathPtr("data")},
+		{"arbitrarily nested schema", "nested_probe", SchemaPath{"analytics", "data"}, pathPtr("analytics", "data")},
 		// Nothing registered: the worker only NAMES this function (read_parquet
 		// and friends), so it has no schema of its own to report — ever.
-		{"native delegation", "read_parquet", "data", nil},
+		{"native delegation", "read_parquet", SchemaPath{"data"}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -143,7 +151,7 @@ func TestResolveFunctionSchema(t *testing.T) {
 				t.Errorf("resolved %q, want no schema at all", *got)
 			case tc.want != nil && got == nil:
 				t.Errorf("resolved no schema, want %q", *tc.want)
-			case tc.want != nil && got != nil && *got != *tc.want:
+			case tc.want != nil && got != nil && !slices.Equal(*got, *tc.want):
 				t.Errorf("resolved %q, want %q", *got, *tc.want)
 			}
 		})
@@ -190,35 +198,35 @@ func sameNameProbeWorker(t *testing.T) *Worker {
 
 // The lazy RPC path: catalog_table_scan_function_get must name the schema whose
 // implementation actually backs the table it was asked about.
-func TestResolveScanFunctionCarriesSchemaName(t *testing.T) {
+func TestResolveScanFunctionCarriesSchemaPath(t *testing.T) {
 	w := sameNameProbeWorker(t)
 	for _, schema := range []string{"main", "data"} {
 		result, err := w.resolveScanFunction(TableScanFunctionGetRequestWire{
-			SchemaName: schema,
+			SchemaPath: SchemaPath{schema},
 			Name:       "test_same_name_table",
 		})
 		if err != nil {
 			t.Fatalf("resolveScanFunction(%s): %v", schema, err)
 		}
-		if result.SchemaName == nil || *result.SchemaName != schema {
-			t.Errorf("schema %s: resolved schema_name %v, want %q", schema, result.SchemaName, schema)
+		if result.SchemaPath == nil || !slices.Equal(*result.SchemaPath, SchemaPath{schema}) {
+			t.Errorf("schema %s: resolved schema_path %v, want %q", schema, result.SchemaPath, schema)
 		}
 	}
 }
 
 // The inline path: the ScanFunctionResult embedded in TableInfo at attach time
 // carries the same answer, since the extension uses it instead of the RPC.
-func TestInlineScanFunctionCarriesSchemaName(t *testing.T) {
+func TestInlineScanFunctionCarriesSchemaPath(t *testing.T) {
 	w := sameNameProbeWorker(t)
 	for _, schema := range []string{"main", "data"} {
 		ct := &w.catalogTables[schema][0]
-		infoBytes, err := w.serializeCatalogTable(schema, ct)
+		infoBytes, err := w.serializeCatalogTable(SchemaPath{schema}, ct)
 		if err != nil {
 			t.Fatalf("serializeCatalogTable(%s): %v", schema, err)
 		}
-		got := readScanSchemaName(t, "TableInfo.scan_function", inlineScanFunctionBytes(t, infoBytes))
-		if got == nil || *got != schema {
-			t.Errorf("schema %s: inlined schema_name %v, want %q", schema, got, schema)
+		got := readScanSchemaPath(t, "TableInfo.scan_function", inlineScanFunctionBytes(t, infoBytes))
+		if got == nil || !slices.Equal(*got, SchemaPath{schema}) {
+			t.Errorf("schema %s: inlined schema_path %v, want %q", schema, got, schema)
 		}
 	}
 }

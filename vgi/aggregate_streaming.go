@@ -54,11 +54,11 @@ type AggregateStreamingOpenRequestWire struct {
 	Settings          *[]byte `vgirpc:"settings"`
 	Secrets           *[]byte `vgirpc:"secrets"`
 	AttachOpaqueData  *[]byte `vgirpc:"attach_opaque_data"`
-	// SchemaName is the catalog schema that declares the function. A name is
+	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema. Protocol 1.2.0.
-	SchemaName *string `vgirpc:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 }
 
 // AggregateStreamingOpenResponseWire returns the execution_id keying the session.
@@ -72,11 +72,11 @@ type AggregateStreamingChunkRequestWire struct {
 	ExecutionID      []byte  `vgirpc:"execution_id"`
 	InputBatch       []byte  `vgirpc:"input_batch"`
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
-	// SchemaName is the catalog schema that declares the function. A name is
+	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema. Protocol 1.2.0.
-	SchemaName *string `vgirpc:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 }
 
 // AggregateStreamingChunkResponseWire returns the per-row output batch.
@@ -89,11 +89,11 @@ type AggregateStreamingCloseRequestWire struct {
 	FunctionName     string  `vgirpc:"function_name"`
 	ExecutionID      []byte  `vgirpc:"execution_id"`
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
-	// SchemaName is the catalog schema that declares the function. A name is
+	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema. Protocol 1.2.0.
-	SchemaName *string `vgirpc:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 }
 
 // AggregateStreamingCloseResponseWire is the empty ack.
@@ -148,7 +148,7 @@ func (w *Worker) registerAggregateStreamingRPCs(s *vgirpc.Server) {
 }
 
 func (w *Worker) handleAggregateStreamingOpen(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateStreamingOpenRequestWire) (AggregateStreamingOpenResponseWire, error) {
-	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaName, req.AttachOpaqueData, callCtx)
+	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateStreamingOpenResponseWire{}, err
 	}

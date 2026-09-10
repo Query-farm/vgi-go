@@ -99,19 +99,19 @@ func main() {
 		// Each option is single-valued, so the schema_reconcile and narrow_bind
 		// fixtures are composed: try the first, fall through to the second when
 		// it declines (returns false).
-		vgi.WithSchemaContentsHandler(func(attach []byte, schema string) ([]vgi.SerializedSchemaItem, bool) {
+		vgi.WithSchemaContentsHandler(func(attach []byte, schema vgi.SchemaPath) ([]vgi.SerializedSchemaItem, bool) {
 			if items, ok := schema_reconcile.SchemaContentsHandler(attach, schema); ok {
 				return items, true
 			}
 			return narrow_bind.SchemaContentsHandler(attach, schema)
 		}),
-		vgi.WithAttachTableGetHandler(func(attach []byte, schema, name string, atUnit, atValue *string) ([]byte, bool, error) {
+		vgi.WithAttachTableGetHandler(func(attach []byte, schema vgi.SchemaPath, name string, atUnit, atValue *string) ([]byte, bool, error) {
 			if data, ok, err := schema_reconcile.AttachTableGetHandler(attach, schema, name, atUnit, atValue); ok || err != nil {
 				return data, ok, err
 			}
 			return narrow_bind.AttachTableGetHandler(attach, schema, name, atUnit, atValue)
 		}),
-		vgi.WithAttachScanFunctionGetHandler(func(attach []byte, schema, name string, atUnit, atValue *string) (*vgi.ScanFunctionResult, bool, error) {
+		vgi.WithAttachScanFunctionGetHandler(func(attach []byte, schema vgi.SchemaPath, name string, atUnit, atValue *string) (*vgi.ScanFunctionResult, bool, error) {
 			if res, ok, err := schema_reconcile.AttachScanFunctionGetHandler(attach, schema, name, atUnit, atValue); ok || err != nil {
 				return res, ok, err
 			}
@@ -817,28 +817,28 @@ func main() {
 	})
 
 	// Handler for time-travel table_get (returns version-specific schemas)
-	w.SetTableGetHandler(func(schemaName, tableName string, atUnit, atValue *string) ([]byte, error) {
-		if schemaName == "data" && tableName == "versioned_data" && atUnit != nil && *atUnit != "" {
+	w.SetTableGetHandler(func(schemaPath vgi.SchemaPath, tableName string, atUnit, atValue *string) ([]byte, error) {
+		if schemaPathIs(schemaPath, "data") && tableName == "versioned_data" && atUnit != nil && *atUnit != "" {
 			version, err := table.ResolveVersion(atUnit, atValue)
 			if err != nil {
 				return nil, err
 			}
 			info := &vgi.TableInfo{
 				Name:       tableName,
-				SchemaName: schemaName,
+				SchemaPath: schemaPath,
 				Comment:    "Versioned data table demonstrating time travel with schema evolution",
 				Columns:    table.VersionedSchema(version),
 			}
 			return vgi.SerializeTableInfo(info)
 		}
-		if schemaName == "data" && tableName == "versioned_constraints" && atUnit != nil && *atUnit != "" {
+		if schemaPathIs(schemaPath, "data") && tableName == "versioned_constraints" && atUnit != nil && *atUnit != "" {
 			version, err := table.ResolveVersionedConstraintsVersion(atUnit, atValue)
 			if err != nil {
 				return nil, err
 			}
 			info := &vgi.TableInfo{
 				Name:       tableName,
-				SchemaName: schemaName,
+				SchemaPath: schemaPath,
 				Comment:    "Table with constraints that evolve across versions",
 				Columns:    table.VersionedConstraintsSchema(version),
 			}
@@ -863,9 +863,9 @@ func main() {
 			"null_ord_stride": {Value: int64(7), Type: arrow.PrimitiveTypes.Int64},
 		},
 	}
-	w.SetScanFunctionGetHandler(func(schemaName, tableName string, atUnit, atValue *string) (*vgi.ScanFunctionResult, error) {
+	w.SetScanFunctionGetHandler(func(schemaPath vgi.SchemaPath, tableName string, atUnit, atValue *string) (*vgi.ScanFunctionResult, error) {
 		// Handle versioned_data time travel
-		if schemaName == "data" && tableName == "versioned_data" {
+		if schemaPathIs(schemaPath, "data") && tableName == "versioned_data" {
 			version, err := table.ResolveVersion(atUnit, atValue)
 			if err != nil {
 				return nil, err
@@ -880,7 +880,7 @@ func main() {
 
 		// cache_versioned: AT → version arg, same as versioned_data but the scan
 		// function advertises cache metadata (for the AT cache-isolation test).
-		if schemaName == "data" && tableName == "cache_versioned" {
+		if schemaPathIs(schemaPath, "data") && tableName == "cache_versioned" {
 			version, err := table.ResolveVersion(atUnit, atValue)
 			if err != nil {
 				return nil, err
@@ -894,7 +894,7 @@ func main() {
 		}
 
 		// Handle versioned_constraints time travel
-		if schemaName == "data" && tableName == "versioned_constraints" {
+		if schemaPathIs(schemaPath, "data") && tableName == "versioned_constraints" {
 			version, err := table.ResolveVersionedConstraintsVersion(atUnit, atValue)
 			if err != nil {
 				return nil, err
@@ -909,7 +909,7 @@ func main() {
 
 		// Columns-based time-travel + pushdown: resolve AT → version and pass it
 		// as a scan-function argument (the native columns-based AT mechanism).
-		if schemaName == "data" && tableName == "tt_pushdown_cols" {
+		if schemaPathIs(schemaPath, "data") && tableName == "tt_pushdown_cols" {
 			version, err := table.ResolveTtVersion(atUnit, atValue)
 			if err != nil {
 				return nil, err
@@ -923,7 +923,7 @@ func main() {
 		}
 
 		// rff_parquet — single-branch native read_parquet delegation.
-		if schemaName == "data" && tableName == "rff_parquet" {
+		if schemaPathIs(schemaPath, "data") && tableName == "rff_parquet" {
 			return &vgi.ScanFunctionResult{
 				FunctionName: "read_parquet",
 				PositionalArguments: []vgi.ScanArg{
@@ -933,7 +933,7 @@ func main() {
 		}
 
 		// rff_hive / rff_hive_mixed — native read_parquet over a Hive glob.
-		if schemaName == "data" && (tableName == "rff_hive" || tableName == "rff_hive_mixed") {
+		if schemaPathIs(schemaPath, "data") && (tableName == "rff_hive" || tableName == "rff_hive_mixed") {
 			return &vgi.ScanFunctionResult{
 				FunctionName: "read_parquet",
 				PositionalArguments: []vgi.ScanArg{
@@ -947,11 +947,11 @@ func main() {
 
 		// Reject AT clause on tables that don't support time travel
 		if atUnit != nil && *atUnit != "" {
-			return nil, fmt.Errorf("Table '%s.%s' does not support time travel queries", schemaName, tableName)
+			return nil, fmt.Errorf("Table '%s.%s' does not support time travel queries", schemaPath, tableName)
 		}
 
 		// Handle static constraint tables
-		if schemaName == "data" {
+		if schemaPathIs(schemaPath, "data") {
 			switch tableName {
 			case "departments":
 				return &vgi.ScanFunctionResult{FunctionName: "departments_scan"}, nil
@@ -982,7 +982,7 @@ func main() {
 			}
 		}
 
-		if schemaName == "data" && tableName == "numbers" {
+		if schemaPathIs(schemaPath, "data") && tableName == "numbers" {
 			return &vgi.ScanFunctionResult{
 				FunctionName: "sequence",
 				PositionalArguments: []vgi.ScanArg{
@@ -990,7 +990,7 @@ func main() {
 				},
 			}, nil
 		}
-		if schemaName == "data" && tableName == "volatile_numbers" {
+		if schemaPathIs(schemaPath, "data") && tableName == "volatile_numbers" {
 			return &vgi.ScanFunctionResult{
 				FunctionName: "sequence",
 				PositionalArguments: []vgi.ScanArg{
@@ -998,7 +998,7 @@ func main() {
 				},
 			}, nil
 		}
-		if schemaName == "data" && tableName == "funny_numbers" {
+		if schemaPathIs(schemaPath, "data") && tableName == "funny_numbers" {
 			return &vgi.ScanFunctionResult{
 				FunctionName: "sequence",
 				PositionalArguments: []vgi.ScanArg{
@@ -1006,13 +1006,13 @@ func main() {
 				},
 			}, nil
 		}
-		if schemaName == "data" && tableName == "colors" {
+		if schemaPathIs(schemaPath, "data") && tableName == "colors" {
 			return &vgi.ScanFunctionResult{FunctionName: "colors_scan"}, nil
 		}
-		if schemaName == "data" && tableName == "geo_points" {
+		if schemaPathIs(schemaPath, "data") && tableName == "geo_points" {
 			return &vgi.ScanFunctionResult{FunctionName: "geo_points_scan"}, nil
 		}
-		if schemaName == "data" && tableName == "generated_sequence" {
+		if schemaPathIs(schemaPath, "data") && tableName == "generated_sequence" {
 			return &vgi.ScanFunctionResult{
 				FunctionName: "sequence",
 				PositionalArguments: []vgi.ScanArg{
@@ -1023,7 +1023,7 @@ func main() {
 		// Late-materialization tables → late_materialization scan function.
 		// 1000 rows is large enough that LIMIT k << count makes the rewrite a
 		// real win and that LIMIT 200 exceeds dynamic_or_filter_threshold (50).
-		if schemaName == "data" {
+		if schemaPathIs(schemaPath, "data") {
 			if named, ok := lateMatScanArgs[tableName]; ok {
 				return &vgi.ScanFunctionResult{
 					FunctionName: "late_materialization",
@@ -1035,7 +1035,7 @@ func main() {
 			}
 		}
 
-		if schemaName == "data" {
+		if schemaPathIs(schemaPath, "data") {
 			if opts, ok := rowIDTables[tableName]; ok {
 				return &vgi.ScanFunctionResult{
 					FunctionName: "rowid_sequence",
@@ -1049,7 +1049,7 @@ func main() {
 				}, nil
 			}
 		}
-		return nil, fmt.Errorf("no scan function for %s.%s", schemaName, tableName)
+		return nil, fmt.Errorf("no scan function for %s.%s", schemaPath, tableName)
 	})
 
 	// HTTP-only hooks: bearer/JWT auth and the OAuth resource metadata document
@@ -1079,6 +1079,10 @@ func int64Ptr(n int64) *int64 { return &n }
 
 func strPtr(s string) *string { return &s }
 
+func schemaPathIs(path vgi.SchemaPath, name string) bool {
+	return len(path) == 1 && strings.EqualFold(path[0], name)
+}
+
 // branchPath returns a native scan-branch file path under the shared scratch
 // dir. This fixture and the coupled `.test` files must name the SAME concrete
 // path: the tests write it via `${VGI_TEST_BRANCH_DIR}`, so this reads the same
@@ -1098,8 +1102,8 @@ func branchPath(name string) string {
 // multi_branch_* fixture tables. It mirrors vgi-python's
 // ExampleCatalog.table_scan_branches_get. Returns (nil, false) for any other
 // table so the C++ extension falls back to catalog_table_scan_function_get.
-func multiBranchScanBranchesGet(_ []byte, schemaName, name string, _, _ *string) (*vgi.ScanBranchesResult, bool, error) {
-	if !strings.EqualFold(schemaName, "data") {
+func multiBranchScanBranchesGet(_ []byte, schemaPath vgi.SchemaPath, name string, _, _ *string) (*vgi.ScanBranchesResult, bool, error) {
+	if len(schemaPath) != 1 || !strings.EqualFold(schemaPath[0], "data") {
 		return nil, false, nil
 	}
 	seq := func(n int64) vgi.ScanBranch {

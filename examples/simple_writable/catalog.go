@@ -34,8 +34,10 @@ import (
 // CatalogName is the SQL-visible catalog (tests ATTACH 'simple_writable').
 const CatalogName = "simple_writable"
 
-// SchemaName is the single schema the catalog exposes.
-const SchemaName = "main"
+// SchemaPath is the single schema the catalog exposes.
+const SchemaPath = "main"
+
+func isSchema(path vgi.SchemaPath) bool { return len(path) == 1 && path[0] == SchemaPath }
 
 // rowIDMeta marks the worker-declared rowid pseudocolumn so the C++ extension
 // tracks it for UPDATE/DELETE row addressing.
@@ -111,7 +113,7 @@ func tableInfo(table string) (*vgi.TableInfo, bool) {
 	ud := supportsUpdateDelete(table)
 	return &vgi.TableInfo{
 		Name:              table,
-		SchemaName:        SchemaName,
+		SchemaPath:        vgi.SchemaPath{SchemaPath},
 		Columns:           arrow.NewSchema(fields, nil),
 		SupportsInsert:    true,
 		SupportsUpdate:    ud,
@@ -133,8 +135,8 @@ func serializeTableInfo(table string) ([]byte, error) {
 // ---------------------------------------------------------------------------
 
 // SchemaContentsHandler lists the four tables for the main schema.
-func SchemaContentsHandler(attachOpaqueData []byte, schemaName string) ([]vgi.SerializedSchemaItem, bool) {
-	if !isOurs(attachOpaqueData) || schemaName != SchemaName {
+func SchemaContentsHandler(attachOpaqueData []byte, schemaPath vgi.SchemaPath) ([]vgi.SerializedSchemaItem, bool) {
+	if !isOurs(attachOpaqueData) || !isSchema(schemaPath) {
 		return nil, false
 	}
 	items := make([]vgi.SerializedSchemaItem, 0, len(tableOrder))
@@ -149,8 +151,8 @@ func SchemaContentsHandler(attachOpaqueData []byte, schemaName string) ([]vgi.Se
 }
 
 // AttachTableGetHandler answers single-table catalog_table_get RPCs.
-func AttachTableGetHandler(attachOpaqueData []byte, schemaName, name string, atUnit, atValue *string) ([]byte, bool, error) {
-	if !isOurs(attachOpaqueData) || schemaName != SchemaName {
+func AttachTableGetHandler(attachOpaqueData []byte, schemaPath vgi.SchemaPath, name string, atUnit, atValue *string) ([]byte, bool, error) {
+	if !isOurs(attachOpaqueData) || !isSchema(schemaPath) {
 		return nil, false, nil
 	}
 	if _, ok := userSchema(name); !ok {
@@ -164,8 +166,8 @@ func AttachTableGetHandler(attachOpaqueData []byte, schemaName, name string, atU
 }
 
 // AttachScanFunctionGetHandler routes SELECT to simple_writable_scan(<table>).
-func AttachScanFunctionGetHandler(attachOpaqueData []byte, schemaName, name string, atUnit, atValue *string) (*vgi.ScanFunctionResult, bool, error) {
-	if !isOurs(attachOpaqueData) || schemaName != SchemaName {
+func AttachScanFunctionGetHandler(attachOpaqueData []byte, schemaPath vgi.SchemaPath, name string, atUnit, atValue *string) (*vgi.ScanFunctionResult, bool, error) {
+	if !isOurs(attachOpaqueData) || !isSchema(schemaPath) {
 		return nil, false, nil
 	}
 	if _, ok := userSchema(name); !ok {
@@ -177,8 +179,8 @@ func AttachScanFunctionGetHandler(attachOpaqueData []byte, schemaName, name stri
 // AttachWriteFunctionGetHandler routes INSERT/UPDATE/DELETE. UPDATE/DELETE are
 // only offered for tables that support them; items_broken_returning routes its
 // INSERT to the misbehaving function.
-func AttachWriteFunctionGetHandler(op vgi.WriteOp, attachOpaqueData []byte, schemaName, name string) (*vgi.ScanFunctionResult, bool, error) {
-	if !isOurs(attachOpaqueData) || schemaName != SchemaName {
+func AttachWriteFunctionGetHandler(op vgi.WriteOp, attachOpaqueData []byte, schemaPath vgi.SchemaPath, name string) (*vgi.ScanFunctionResult, bool, error) {
+	if !isOurs(attachOpaqueData) || !isSchema(schemaPath) {
 		return nil, false, nil
 	}
 	if _, ok := userSchema(name); !ok {

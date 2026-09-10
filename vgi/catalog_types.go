@@ -23,7 +23,7 @@ type CatalogExample struct {
 // FunctionInfo describes a function in the catalog.
 type FunctionInfo struct {
 	Name                       string
-	SchemaName                 string
+	SchemaPath                 []string
 	FunctionType               FunctionType
 	ArgSchema                  *arrow.Schema // argument schema
 	OutputSchema               *arrow.Schema // return schema
@@ -126,14 +126,10 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	defer nameBuilder.Release()
 	nameBuilder.Append(info.Name)
 
-	// schema_name
-	schemaNameBuilder := array.NewStringBuilder(mem)
-	defer schemaNameBuilder.Release()
-	schemaName := info.SchemaName
-	if schemaName == "" {
-		schemaName = "main"
-	}
-	schemaNameBuilder.Append(schemaName)
+	// schema_path
+	schemaPathBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer schemaPathBuilder.Release()
+	appendSchemaPath(schemaPathBuilder, schemaPathOrMain(info.SchemaPath))
 
 	// function_type
 	ftBuilder := array.NewDictionaryBuilder(mem, dictType)
@@ -397,7 +393,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
 		nameBuilder.NewArray(),
-		schemaNameBuilder.NewArray(),
+		schemaPathBuilder.NewArray(),
 		ftBuilder.NewArray(),
 		argBuilder.NewArray(),
 		outputBuilder.NewArray(),
@@ -453,7 +449,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 
 // SchemaInfo describes a schema in the catalog.
 type SchemaInfo struct {
-	Name             string
+	Path             SchemaPath
 	Comment          string
 	Tags             map[string]string
 	AttachOpaqueData []byte
@@ -498,9 +494,9 @@ func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error) {
 		attachOpaqueDataBuilder.Append([]byte{})
 	}
 
-	nameBuilder := array.NewStringBuilder(mem)
-	defer nameBuilder.Release()
-	nameBuilder.Append(info.Name)
+	pathBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer pathBuilder.Release()
+	appendSchemaPath(pathBuilder, info.Path)
 
 	// estimated_object_count: nullable map<string, int64>
 	eocBuilder := array.NewMapBuilder(mem, arrow.BinaryTypes.String, arrow.PrimitiveTypes.Int64, false)
@@ -521,7 +517,7 @@ func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error) {
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
 		attachOpaqueDataBuilder.NewArray(),
-		nameBuilder.NewArray(),
+		pathBuilder.NewArray(),
 		eocBuilder.NewArray(),
 	}
 	defer func() {

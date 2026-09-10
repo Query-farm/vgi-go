@@ -16,7 +16,7 @@ import (
 // TableInfo describes a table in the catalog for wire serialization.
 type TableInfo struct {
 	Name                     string
-	SchemaName               string
+	SchemaPath               []string
 	Comment                  string
 	Tags                     map[string]string
 	Columns                  *arrow.Schema // serialized as IPC schema bytes
@@ -106,10 +106,10 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 	defer nameBuilder.Release()
 	nameBuilder.Append(info.Name)
 
-	// schema_name
-	schemaNameBuilder := array.NewStringBuilder(mem)
-	defer schemaNameBuilder.Release()
-	schemaNameBuilder.Append(info.SchemaName)
+	// schema_path
+	schemaPathBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer schemaPathBuilder.Release()
+	appendSchemaPath(schemaPathBuilder, info.SchemaPath)
 
 	// columns (serialized as IPC schema bytes)
 	columnsBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
@@ -266,7 +266,7 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
 		nameBuilder.NewArray(),
-		schemaNameBuilder.NewArray(),
+		schemaPathBuilder.NewArray(),
 		columnsBuilder.NewArray(),
 		notNullBuilder.NewArray(),
 		uniqueBuilder.NewArray(),

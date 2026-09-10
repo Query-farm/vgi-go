@@ -92,7 +92,7 @@ func splitExpired(format string, args ...any) *SplitTokenError {
 // fixtures do not cover it. 16 bytes is a binding check, not a MAC — forgery
 // resistance comes from the seal where a key exists, and from the uid trust
 // boundary where one does not.
-func BindFingerprint(schemaName, functionName string, argsRepr, settingsRepr, projectionRepr []byte) []byte {
+func BindFingerprint(schemaPath SchemaPath, functionName string, argsRepr, settingsRepr, projectionRepr []byte) []byte {
 	h := sha256.New()
 	h.Write(splitAADPrefix)
 	feed := func(label string, value []byte) {
@@ -101,7 +101,9 @@ func BindFingerprint(schemaName, functionName string, argsRepr, settingsRepr, pr
 		h.Write(value)
 		h.Write([]byte{0})
 	}
-	feed("schema_name", []byte(schemaName))
+	for _, component := range schemaPath {
+		feed("schema_path_component", []byte(component))
+	}
 	feed("function_name", []byte(functionName))
 	feed("arguments", argsRepr)
 	feed("settings", settingsRepr)
@@ -227,9 +229,9 @@ func OpenSplitToken(token, signingKey []byte, auth *vgirpc.AuthContext, expected
 // need only be self-consistent within one worker: the same worker that mints a
 // token verifies it, and no client ever computes this.
 func bindFingerprintFor(req *BindRequestWire) []byte {
-	schema := ""
-	if req.SchemaName != nil {
-		schema = *req.SchemaName
+	var schema SchemaPath
+	if req.SchemaPath != nil {
+		schema = *req.SchemaPath
 	}
 	var settingsRepr []byte
 	if req.Settings != nil {

@@ -19,8 +19,8 @@ import (
 // Schema:
 //
 //	wc_schema(catalog, name PK, comment, created_version)
-//	wc_table(catalog, schema_name, name PK, schema_ipc, meta_blob, comment)
-//	wc_row(catalog, schema_name, table_name, row_id INTEGER PK auto, data_blob)
+//	wc_table(catalog, schema_path, name PK, schema_ipc, meta_blob, comment)
+//	wc_row(catalog, schema_path, table_name, row_id INTEGER PK auto, data_blob)
 //
 // `meta_blob` is a gob-encoded writableTableMeta capturing not-null /
 // PK / unique / check / FK / defaults / column comments — keeps the
@@ -59,22 +59,22 @@ CREATE TABLE IF NOT EXISTS wc_schema (
 );
 CREATE TABLE IF NOT EXISTS wc_table (
     catalog TEXT NOT NULL,
-    schema_name TEXT NOT NULL,
+    schema_path TEXT NOT NULL,
     name TEXT NOT NULL,
     schema_ipc BLOB NOT NULL,
     meta_blob BLOB NOT NULL,
     comment TEXT,
-    PRIMARY KEY (catalog, schema_name, name)
+    PRIMARY KEY (catalog, schema_path, name)
 );
 CREATE TABLE IF NOT EXISTS wc_row (
     catalog TEXT NOT NULL,
-    schema_name TEXT NOT NULL,
+    schema_path TEXT NOT NULL,
     table_name TEXT NOT NULL,
     row_id INTEGER NOT NULL,
     data_blob BLOB NOT NULL,
-    PRIMARY KEY (catalog, schema_name, table_name, row_id)
+    PRIMARY KEY (catalog, schema_path, table_name, row_id)
 );
-CREATE INDEX IF NOT EXISTS wc_row_lookup ON wc_row(catalog, schema_name, table_name);`)
+CREATE INDEX IF NOT EXISTS wc_row_lookup ON wc_row(catalog, schema_path, table_name);`)
 		if err != nil {
 			s.openErr = fmt.Errorf("create wc schema: %w", err)
 			return
@@ -186,11 +186,11 @@ func (s *writableStore) schemaDrop(catalog, name string, cascade bool) error {
 		return err
 	}
 	if cascade {
-		if _, err := tx.Exec(`DELETE FROM wc_row WHERE catalog=? AND schema_name=?`, catalog, strings.ToLower(name)); err != nil {
+		if _, err := tx.Exec(`DELETE FROM wc_row WHERE catalog=? AND schema_path=?`, catalog, strings.ToLower(name)); err != nil {
 			tx.Rollback()
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM wc_table WHERE catalog=? AND schema_name=?`, catalog, strings.ToLower(name)); err != nil {
+		if _, err := tx.Exec(`DELETE FROM wc_table WHERE catalog=? AND schema_path=?`, catalog, strings.ToLower(name)); err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -225,7 +225,7 @@ func (s *writableStore) schemaList(catalog string) ([]struct{ Name, Comment stri
 }
 
 // tableUpsert writes a table definition record.
-func (s *writableStore) tableUpsert(catalog, schemaName string, t *writableTable) error {
+func (s *writableStore) tableUpsert(catalog, schemaPath string, t *writableTable) error {
 	if err := s.ensureOpen(); err != nil {
 		return err
 	}
@@ -237,13 +237,13 @@ func (s *writableStore) tableUpsert(catalog, schemaName string, t *writableTable
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err = s.db.Exec(
-		`INSERT INTO wc_table(catalog, schema_name, name, schema_ipc, meta_blob, comment) VALUES(?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(catalog, schema_name, name) DO UPDATE SET schema_ipc=excluded.schema_ipc, meta_blob=excluded.meta_blob, comment=excluded.comment`,
-		catalog, strings.ToLower(schemaName), strings.ToLower(t.name), schemaIPC, meta, t.comment)
+		`INSERT INTO wc_table(catalog, schema_path, name, schema_ipc, meta_blob, comment) VALUES(?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(catalog, schema_path, name) DO UPDATE SET schema_ipc=excluded.schema_ipc, meta_blob=excluded.meta_blob, comment=excluded.comment`,
+		catalog, strings.ToLower(schemaPath), strings.ToLower(t.name), schemaIPC, meta, t.comment)
 	return err
 }
 
-func (s *writableStore) tableDrop(catalog, schemaName, tableName string) error {
+func (s *writableStore) tableDrop(catalog, schemaPath, tableName string) error {
 	if err := s.ensureOpen(); err != nil {
 		return err
 	}
@@ -253,11 +253,11 @@ func (s *writableStore) tableDrop(catalog, schemaName, tableName string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM wc_row WHERE catalog=? AND schema_name=? AND table_name=?`, catalog, strings.ToLower(schemaName), strings.ToLower(tableName)); err != nil {
+	if _, err := tx.Exec(`DELETE FROM wc_row WHERE catalog=? AND schema_path=? AND table_name=?`, catalog, strings.ToLower(schemaPath), strings.ToLower(tableName)); err != nil {
 		tx.Rollback()
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM wc_table WHERE catalog=? AND schema_name=? AND name=?`, catalog, strings.ToLower(schemaName), strings.ToLower(tableName)); err != nil {
+	if _, err := tx.Exec(`DELETE FROM wc_table WHERE catalog=? AND schema_path=? AND name=?`, catalog, strings.ToLower(schemaPath), strings.ToLower(tableName)); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -265,7 +265,7 @@ func (s *writableStore) tableDrop(catalog, schemaName, tableName string) error {
 }
 
 // tableLoad fetches a table definition and rehydrates it (without rows).
-func (s *writableStore) tableLoad(catalog, schemaName, tableName string) (*writableTable, error) {
+func (s *writableStore) tableLoad(catalog, schemaPath, tableName string) (*writableTable, error) {
 	if err := s.ensureOpen(); err != nil {
 		return nil, err
 	}
@@ -274,8 +274,8 @@ func (s *writableStore) tableLoad(catalog, schemaName, tableName string) (*writa
 	var schemaIPC, metaBlob []byte
 	var comment string
 	err := s.db.QueryRow(
-		`SELECT schema_ipc, meta_blob, COALESCE(comment, '') FROM wc_table WHERE catalog=? AND schema_name=? AND name=?`,
-		catalog, strings.ToLower(schemaName), strings.ToLower(tableName),
+		`SELECT schema_ipc, meta_blob, COALESCE(comment, '') FROM wc_table WHERE catalog=? AND schema_path=? AND name=?`,
+		catalog, strings.ToLower(schemaPath), strings.ToLower(tableName),
 	).Scan(&schemaIPC, &metaBlob, &comment)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -299,13 +299,13 @@ func (s *writableStore) tableLoad(catalog, schemaName, tableName string) (*writa
 	}, nil
 }
 
-func (s *writableStore) tableList(catalog, schemaName string) ([]string, error) {
+func (s *writableStore) tableList(catalog, schemaPath string) ([]string, error) {
 	if err := s.ensureOpen(); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT name FROM wc_table WHERE catalog=? AND schema_name=?`, catalog, strings.ToLower(schemaName))
+	rows, err := s.db.Query(`SELECT name FROM wc_table WHERE catalog=? AND schema_path=?`, catalog, strings.ToLower(schemaPath))
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +322,7 @@ func (s *writableStore) tableList(catalog, schemaName string) ([]string, error) 
 }
 
 // rowsAppend writes new rows, returning the next row_id base.
-func (s *writableStore) rowsAppend(catalog, schemaName, tableName string, rows []map[string]interface{}) (int64, error) {
+func (s *writableStore) rowsAppend(catalog, schemaPath, tableName string, rows []map[string]interface{}) (int64, error) {
 	if err := s.ensureOpen(); err != nil {
 		return 0, err
 	}
@@ -334,8 +334,8 @@ func (s *writableStore) rowsAppend(catalog, schemaName, tableName string, rows [
 	}
 	var maxID sql.NullInt64
 	err = tx.QueryRow(
-		`SELECT MAX(row_id) FROM wc_row WHERE catalog=? AND schema_name=? AND table_name=?`,
-		catalog, strings.ToLower(schemaName), strings.ToLower(tableName),
+		`SELECT MAX(row_id) FROM wc_row WHERE catalog=? AND schema_path=? AND table_name=?`,
+		catalog, strings.ToLower(schemaPath), strings.ToLower(tableName),
 	).Scan(&maxID)
 	if err != nil && err != sql.ErrNoRows {
 		tx.Rollback()
@@ -345,7 +345,7 @@ func (s *writableStore) rowsAppend(catalog, schemaName, tableName string, rows [
 	if maxID.Valid {
 		next = maxID.Int64 + 1
 	}
-	stmt, err := tx.Prepare(`INSERT INTO wc_row(catalog, schema_name, table_name, row_id, data_blob) VALUES(?, ?, ?, ?, ?)`)
+	stmt, err := tx.Prepare(`INSERT INTO wc_row(catalog, schema_path, table_name, row_id, data_blob) VALUES(?, ?, ?, ?, ?)`)
 	if err != nil {
 		tx.Rollback()
 		return 0, err
@@ -361,7 +361,7 @@ func (s *writableStore) rowsAppend(catalog, schemaName, tableName string, rows [
 			tx.Rollback()
 			return 0, err
 		}
-		if _, err := stmt.Exec(catalog, strings.ToLower(schemaName), strings.ToLower(tableName), next+int64(i), buf.Bytes()); err != nil {
+		if _, err := stmt.Exec(catalog, strings.ToLower(schemaPath), strings.ToLower(tableName), next+int64(i), buf.Bytes()); err != nil {
 			tx.Rollback()
 			return 0, err
 		}
@@ -371,15 +371,15 @@ func (s *writableStore) rowsAppend(catalog, schemaName, tableName string, rows [
 
 // rowsScan returns all rows ordered by row_id, attaching the row_id under
 // rowIDFieldName.
-func (s *writableStore) rowsScan(catalog, schemaName, tableName string) ([]map[string]interface{}, error) {
+func (s *writableStore) rowsScan(catalog, schemaPath, tableName string) ([]map[string]interface{}, error) {
 	if err := s.ensureOpen(); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
-		`SELECT row_id, data_blob FROM wc_row WHERE catalog=? AND schema_name=? AND table_name=? ORDER BY row_id`,
-		catalog, strings.ToLower(schemaName), strings.ToLower(tableName))
+		`SELECT row_id, data_blob FROM wc_row WHERE catalog=? AND schema_path=? AND table_name=? ORDER BY row_id`,
+		catalog, strings.ToLower(schemaPath), strings.ToLower(tableName))
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +405,7 @@ func (s *writableStore) rowsScan(catalog, schemaName, tableName string) ([]map[s
 }
 
 // rowsCount returns the number of rows for cardinality estimates.
-func (s *writableStore) rowsCount(catalog, schemaName, tableName string) (int64, error) {
+func (s *writableStore) rowsCount(catalog, schemaPath, tableName string) (int64, error) {
 	if err := s.ensureOpen(); err != nil {
 		return 0, err
 	}
@@ -413,13 +413,13 @@ func (s *writableStore) rowsCount(catalog, schemaName, tableName string) (int64,
 	defer s.mu.Unlock()
 	var n int64
 	err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM wc_row WHERE catalog=? AND schema_name=? AND table_name=?`,
-		catalog, strings.ToLower(schemaName), strings.ToLower(tableName)).Scan(&n)
+		`SELECT COUNT(*) FROM wc_row WHERE catalog=? AND schema_path=? AND table_name=?`,
+		catalog, strings.ToLower(schemaPath), strings.ToLower(tableName)).Scan(&n)
 	return n, err
 }
 
 // rowsUpdate replaces specified columns in rows identified by row_id.
-func (s *writableStore) rowsUpdate(catalog, schemaName, tableName string, updates []map[string]interface{}) (int64, error) {
+func (s *writableStore) rowsUpdate(catalog, schemaPath, tableName string, updates []map[string]interface{}) (int64, error) {
 	if err := s.ensureOpen(); err != nil {
 		return 0, err
 	}
@@ -429,13 +429,13 @@ func (s *writableStore) rowsUpdate(catalog, schemaName, tableName string, update
 	if err != nil {
 		return 0, err
 	}
-	loadStmt, err := tx.Prepare(`SELECT data_blob FROM wc_row WHERE catalog=? AND schema_name=? AND table_name=? AND row_id=?`)
+	loadStmt, err := tx.Prepare(`SELECT data_blob FROM wc_row WHERE catalog=? AND schema_path=? AND table_name=? AND row_id=?`)
 	if err != nil {
 		tx.Rollback()
 		return 0, err
 	}
 	defer loadStmt.Close()
-	saveStmt, err := tx.Prepare(`UPDATE wc_row SET data_blob=? WHERE catalog=? AND schema_name=? AND table_name=? AND row_id=?`)
+	saveStmt, err := tx.Prepare(`UPDATE wc_row SET data_blob=? WHERE catalog=? AND schema_path=? AND table_name=? AND row_id=?`)
 	if err != nil {
 		tx.Rollback()
 		return 0, err
@@ -450,7 +450,7 @@ func (s *writableStore) rowsUpdate(catalog, schemaName, tableName string, update
 		}
 		rid := toInt64(ridV)
 		var blob []byte
-		err := loadStmt.QueryRow(catalog, strings.ToLower(schemaName), strings.ToLower(tableName), rid).Scan(&blob)
+		err := loadStmt.QueryRow(catalog, strings.ToLower(schemaPath), strings.ToLower(tableName), rid).Scan(&blob)
 		if err == sql.ErrNoRows {
 			continue
 		}
@@ -477,7 +477,7 @@ func (s *writableStore) rowsUpdate(catalog, schemaName, tableName string, update
 			tx.Rollback()
 			return 0, err
 		}
-		if _, err := saveStmt.Exec(buf.Bytes(), catalog, strings.ToLower(schemaName), strings.ToLower(tableName), rid); err != nil {
+		if _, err := saveStmt.Exec(buf.Bytes(), catalog, strings.ToLower(schemaPath), strings.ToLower(tableName), rid); err != nil {
 			tx.Rollback()
 			return 0, err
 		}
@@ -487,7 +487,7 @@ func (s *writableStore) rowsUpdate(catalog, schemaName, tableName string, update
 }
 
 // rowsDelete removes rows by row_id.
-func (s *writableStore) rowsDelete(catalog, schemaName, tableName string, rowIDs []int64) (int64, error) {
+func (s *writableStore) rowsDelete(catalog, schemaPath, tableName string, rowIDs []int64) (int64, error) {
 	if err := s.ensureOpen(); err != nil {
 		return 0, err
 	}
@@ -500,7 +500,7 @@ func (s *writableStore) rowsDelete(catalog, schemaName, tableName string, rowIDs
 	if err != nil {
 		return 0, err
 	}
-	stmt, err := tx.Prepare(`DELETE FROM wc_row WHERE catalog=? AND schema_name=? AND table_name=? AND row_id=?`)
+	stmt, err := tx.Prepare(`DELETE FROM wc_row WHERE catalog=? AND schema_path=? AND table_name=? AND row_id=?`)
 	if err != nil {
 		tx.Rollback()
 		return 0, err
@@ -508,7 +508,7 @@ func (s *writableStore) rowsDelete(catalog, schemaName, tableName string, rowIDs
 	defer stmt.Close()
 	count := int64(0)
 	for _, rid := range rowIDs {
-		res, err := stmt.Exec(catalog, strings.ToLower(schemaName), strings.ToLower(tableName), rid)
+		res, err := stmt.Exec(catalog, strings.ToLower(schemaPath), strings.ToLower(tableName), rid)
 		if err != nil {
 			tx.Rollback()
 			return 0, err

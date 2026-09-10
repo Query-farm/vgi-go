@@ -58,14 +58,14 @@ type BindRequestWire struct {
 	// duplicated here. Read at bind/init via CopyToContextWire.
 	CopyTo *CopyToContextWire `vgirpc:"copy_to,struct" arrow:"copy_to"`
 
-	// SchemaName is the catalog schema that owns the function being bound. A
+	// SchemaPath is the catalog schema that owns the function being bound. A
 	// worker may register the same function name in more than one schema, so
 	// the bare name is not a unique key — dispatch resolves
-	// (schema_name, function_name). The C++ extension sets it from the schema
+	// (schema_path, function_name). The C++ extension sets it from the schema
 	// entry the function was registered into; it is nil for callers with no
 	// schema to name (COPY handler binds, which are advertised at catalog
 	// level), where lookup falls back to a cross-schema search by name.
-	SchemaName *string `vgirpc:"schema_name" arrow:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path" arrow:"schema_path"`
 }
 
 // CopyFromContextWire is the wire form of a COPY ... FROM context, carried as a
@@ -141,13 +141,13 @@ var bindRequestWireSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "resolved_secrets_provided", Type: &arrow.BooleanType{}},
 	{Name: "at_unit", Type: arrow.BinaryTypes.String, Nullable: true},
 	{Name: "at_value", Type: arrow.BinaryTypes.String, Nullable: true},
-	// Protocol order: copy_from, copy_to, then schema_name last. Readers match
+	// Protocol order: copy_from, copy_to, then schema_path last. Readers match
 	// bind_call children by name, so order is not load-bearing here — but this
 	// schema is the shape a Go CLIENT emits, and it should agree with the
 	// struct-tag derivation above rather than drift from it.
 	{Name: "copy_from", Type: copyFromContextWireType, Nullable: true},
 	{Name: "copy_to", Type: copyToContextWireType, Nullable: true},
-	{Name: "schema_name", Type: arrow.BinaryTypes.String, Nullable: true},
+	{Name: "schema_path", Type: arrow.ListOf(arrow.BinaryTypes.String), Nullable: true},
 }, nil)
 
 // ArrowSchema makes BindRequestWire an ArrowSerializable. The framework then
@@ -1316,8 +1316,8 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 		FunctionType: FunctionType(req.FunctionType),
 		Args:         args,
 	}
-	if req.SchemaName != nil {
-		params.SchemaName = *req.SchemaName
+	if req.SchemaPath != nil {
+		params.SchemaPath = *req.SchemaPath
 	}
 
 	if req.InputSchema != nil {
@@ -1395,7 +1395,7 @@ func (w *Worker) lookupFor(req *BindRequestWire, params *BindParams) functionLoo
 	return functionLookup{
 		Name:        req.FunctionName,
 		Type:        FunctionType(req.FunctionType),
-		Schema:      params.SchemaName,
+		Schema:      schemaPathKey(params.SchemaPath),
 		Catalog:     w.catalogOfAttach(params.AttachOpaqueData),
 		Args:        params.Args,
 		InputSchema: params.InputSchema,

@@ -133,7 +133,7 @@ func (f *SameNameAggFunction) Finalize(gids []int64, states map[int64]interface{
 }
 
 // NewSameNameAggFunction builds the aggregate probe for registration into
-// schemaName, which is also the tag it stamps.
-func NewSameNameAggFunction(schemaName string) vgi.AggregateFunction {
-	return &SameNameAggFunction{schema: schemaName}
+// schemaPath, which is also the tag it stamps.
+func NewSameNameAggFunction(schemaPath string) vgi.AggregateFunction {
+	return &SameNameAggFunction{schema: schemaPath}
 }

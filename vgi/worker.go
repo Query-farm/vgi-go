@@ -342,10 +342,10 @@ type Worker struct {
 	fs                            FunctionStorage
 	fsErr                         error
 	settings                      []SettingSpec
-	catalogTables                 map[string][]CatalogTable // schema_name → tables
-	catalogViews                  map[string][]CatalogView  // schema_name → views
-	catalogMacros                 map[string][]CatalogMacro // schema_name → macros
-	dynamicSchemas                map[string]string         // schema_name → comment (for SchemaContentsHandler-only schemas)
+	catalogTables                 map[string][]CatalogTable // schema_path → tables
+	catalogViews                  map[string][]CatalogView  // schema_path → views
+	catalogMacros                 map[string][]CatalogMacro // schema_path → macros
+	dynamicSchemas                map[string]string         // schema_path → comment (for SchemaContentsHandler-only schemas)
 	scanFunctionGetHandler        ScanFunctionGetHandler
 	tableGetHandler               TableGetHandler
 	catalogInfoOverride           *CatalogInfo
@@ -553,7 +553,7 @@ func WithAttachValidator(v AttachValidator) WorkerOption {
 // on a per-attach-opaque-data basis (e.g. return different tables per resolved data
 // version). Return nil to fall through to the default registered-tables
 // behaviour.
-type SchemaContentsHandler func(attachOpaqueData []byte, schemaName string) ([]SerializedSchemaItem, bool)
+type SchemaContentsHandler func(attachOpaqueData []byte, schemaPath SchemaPath) ([]SerializedSchemaItem, bool)
 
 // SerializedSchemaItem is a single pre-serialized schema item (TableInfo or
 // ViewInfo IPC bytes).
@@ -571,7 +571,7 @@ func WithSchemaContentsHandler(h SchemaContentsHandler) WorkerOption {
 // Return (data, true) to override the default; return (nil, false) to fall
 // through. Used by version-aware workers where the attach_opaque_data encodes the
 // resolved version.
-type AttachTableGetHandler func(attachOpaqueData []byte, schemaName, name string, atUnit, atValue *string) (data []byte, handled bool, err error)
+type AttachTableGetHandler func(attachOpaqueData []byte, schemaPath SchemaPath, name string, atUnit, atValue *string) (data []byte, handled bool, err error)
 
 // WithAttachTableGetHandler installs an attach-opaque-data-aware table_get handler.
 func WithAttachTableGetHandler(h AttachTableGetHandler) WorkerOption {
@@ -583,7 +583,7 @@ func WithAttachTableGetHandler(h AttachTableGetHandler) WorkerOption {
 // AttachScanFunctionGetHandler is the attach-opaque-data-aware version of
 // ScanFunctionGetHandler. Return (result, true) to override; (nil, false) to
 // fall through.
-type AttachScanFunctionGetHandler func(attachOpaqueData []byte, schemaName, name string, atUnit, atValue *string) (result *ScanFunctionResult, handled bool, err error)
+type AttachScanFunctionGetHandler func(attachOpaqueData []byte, schemaPath SchemaPath, name string, atUnit, atValue *string) (result *ScanFunctionResult, handled bool, err error)
 
 // WithAttachScanFunctionGetHandler installs an attach-opaque-data-aware
 // scan_function_get handler.
@@ -597,7 +597,7 @@ func WithAttachScanFunctionGetHandler(h AttachScanFunctionGetHandler) WorkerOpti
 // catalog_table_scan_branches_get. Return (result, true) to serve a
 // multi-branch table; (nil, false) to fall through (the C++ extension then
 // falls back to catalog_table_scan_function_get).
-type AttachScanBranchesGetHandler func(attachOpaqueData []byte, schemaName, name string, atUnit, atValue *string) (result *ScanBranchesResult, handled bool, err error)
+type AttachScanBranchesGetHandler func(attachOpaqueData []byte, schemaPath SchemaPath, name string, atUnit, atValue *string) (result *ScanBranchesResult, handled bool, err error)
 
 // WithAttachScanBranchesGetHandler installs an attach-opaque-data-aware
 // scan_branches_get handler for multi-branch (UNION-of-sources) tables.
@@ -612,7 +612,7 @@ func WithAttachScanBranchesGetHandler(h AttachScanBranchesGetHandler) WorkerOpti
 // WriteOpUpdate, or WriteOpDelete. Return (result, true) to route; (nil, false)
 // to fall through to the built-in writable-catalog path or the read-only
 // rejection.
-type AttachWriteFunctionGetHandler func(op WriteOp, attachOpaqueData []byte, schemaName, name string) (result *ScanFunctionResult, handled bool, err error)
+type AttachWriteFunctionGetHandler func(op WriteOp, attachOpaqueData []byte, schemaPath SchemaPath, name string) (result *ScanFunctionResult, handled bool, err error)
 
 // WithAttachWriteFunctionGetHandler installs an attach-opaque-data-aware handler
 // that resolves the worker function backing INSERT/UPDATE/DELETE on a
@@ -914,8 +914,8 @@ func (w *Worker) originOf(kind funcKind, name string, idx int) funcOrigin {
 }
 
 // resolveFunctionSchema resolves which schema the registered implementation of
-// (kind, functionName) actually lives in, for ScanFunctionResult.SchemaName /
-// ScanBranch.SchemaName (protocol 1.5.0). It answers from the registration
+// (kind, functionName) actually lives in, for ScanFunctionResult.SchemaPath /
+// ScanBranch.SchemaPath (protocol 1.5.0). It answers from the registration
 // registry rather than assuming the function shares the schema of the table it
 // backs: RegisterCatalogTable homes an auto-registered backing function in the
 // catalog's default schema regardless of which schema declares the table, so
@@ -923,24 +923,24 @@ func (w *Worker) originOf(kind funcKind, name string, idx int) funcOrigin {
 //
 // tableSchema is the schema of the table being resolved, and only breaks ties:
 // it wins when the function IS registered there (the common case), otherwise
-// the function's single real home is used. Returns nil — leaving schema_name
+// the function's single real home is used. Returns nil — leaving schema_path
 // unset, which sends the client back to its own pre-1.5.0 heuristic — when the
 // registry has no unambiguous answer, including the case that matters most:
 // a name the worker merely delegates to (read_parquet, iceberg_scan) is
 // registered nowhere here and has no VGI-side schema to report, permanently.
-func (w *Worker) resolveFunctionSchema(kind funcKind, functionName, tableSchema string) *string {
+func (w *Worker) resolveFunctionSchema(kind funcKind, functionName string, tableSchema SchemaPath) *SchemaPath {
 	origins := w.funcOrigins[funcKey{kind: kind, name: functionName}]
 	if len(origins) == 0 {
 		return nil
 	}
 	for _, o := range origins {
-		if strings.EqualFold(o.schema, tableSchema) {
-			schema := o.schema
+		if o.schema == schemaPathKey(tableSchema) {
+			schema := strings.Split(o.schema, "\x00")
 			return &schema
 		}
 	}
 	if len(origins) == 1 {
-		schema := origins[0].schema
+		schema := strings.Split(origins[0].schema, "\x00")
 		return &schema
 	}
 	return nil
@@ -956,9 +956,14 @@ func (w *Worker) RegisterScalar(f ScalarFunction) {
 // The same name may be registered in more than one schema; a schema-qualified
 // call (`db.schema.fn(...)`) then dispatches to the implementation declared in
 // the schema it names, rather than colliding with the other as an overload.
-func (w *Worker) RegisterScalarInSchema(schemaName string, f ScalarFunction) {
+func (w *Worker) RegisterScalarInSchema(schemaPath string, f ScalarFunction) {
+	w.RegisterScalarInSchemaPath(singleSchemaPath(schemaPath), f)
+}
+
+// RegisterScalarInSchemaPath registers a scalar in an arbitrarily nested schema.
+func (w *Worker) RegisterScalarInSchemaPath(schemaPath SchemaPath, f ScalarFunction) {
 	w.scalars[f.Name()] = append(w.scalars[f.Name()], f)
-	w.recordOrigin(kindScalar, f.Name(), funcOrigin{schema: schemaName})
+	w.recordOrigin(kindScalar, f.Name(), funcOrigin{schema: schemaPathKey(schemaPath)})
 }
 
 // RegisterScalarForCatalog registers a scalar function scoped to a single
@@ -978,9 +983,14 @@ func (w *Worker) RegisterTable(f TableFunction) {
 
 // RegisterTableInSchema registers a table function in a named catalog schema.
 // See RegisterScalarInSchema for why the schema is part of the identity.
-func (w *Worker) RegisterTableInSchema(schemaName string, f TableFunction) {
+func (w *Worker) RegisterTableInSchema(schemaPath string, f TableFunction) {
+	w.RegisterTableInSchemaPath(singleSchemaPath(schemaPath), f)
+}
+
+// RegisterTableInSchemaPath registers a table function in an arbitrarily nested schema.
+func (w *Worker) RegisterTableInSchemaPath(schemaPath SchemaPath, f TableFunction) {
 	w.tables[f.Name()] = append(w.tables[f.Name()], f)
-	w.recordOrigin(kindTable, f.Name(), funcOrigin{schema: schemaName})
+	w.recordOrigin(kindTable, f.Name(), funcOrigin{schema: schemaPathKey(schemaPath)})
 }
 
 // RegisterTableForCatalog registers a table function scoped to a single
@@ -1013,9 +1023,14 @@ func (w *Worker) RegisterTableInOut(f TableInOutFunction) {
 // RegisterTableInOutInSchema registers a table-in-out function in a named
 // catalog schema. See RegisterScalarInSchema for why the schema is part of the
 // identity.
-func (w *Worker) RegisterTableInOutInSchema(schemaName string, f TableInOutFunction) {
+func (w *Worker) RegisterTableInOutInSchema(schemaPath string, f TableInOutFunction) {
+	w.RegisterTableInOutInSchemaPath(singleSchemaPath(schemaPath), f)
+}
+
+// RegisterTableInOutInSchemaPath registers a table-in-out function in an arbitrarily nested schema.
+func (w *Worker) RegisterTableInOutInSchemaPath(schemaPath SchemaPath, f TableInOutFunction) {
 	w.tableInOuts[f.Name()] = append(w.tableInOuts[f.Name()], f)
-	w.recordOrigin(kindTableInOut, f.Name(), funcOrigin{schema: schemaName})
+	w.recordOrigin(kindTableInOut, f.Name(), funcOrigin{schema: schemaPathKey(schemaPath)})
 }
 
 // RegisterTableInOutForCatalog is the catalog-scoped sibling of
@@ -1037,10 +1052,15 @@ func (w *Worker) RegisterAggregate(f AggregateFunction) {
 
 // RegisterAggregateInSchema registers an aggregate function in a named catalog
 // schema. See RegisterScalarInSchema for why the schema is part of the identity.
-func (w *Worker) RegisterAggregateInSchema(schemaName string, f AggregateFunction) {
+func (w *Worker) RegisterAggregateInSchema(schemaPath string, f AggregateFunction) {
+	w.RegisterAggregateInSchemaPath(singleSchemaPath(schemaPath), f)
+}
+
+// RegisterAggregateInSchemaPath registers an aggregate in an arbitrarily nested schema.
+func (w *Worker) RegisterAggregateInSchemaPath(schemaPath SchemaPath, f AggregateFunction) {
 	registerAggregateState(f)
 	w.aggregates[f.Name()] = append(w.aggregates[f.Name()], f)
-	w.recordOrigin(kindAggregate, f.Name(), funcOrigin{schema: schemaName})
+	w.recordOrigin(kindAggregate, f.Name(), funcOrigin{schema: schemaPathKey(schemaPath)})
 }
 
 // registerAggregateState gob-registers the concrete per-group state type, so an
@@ -1080,8 +1100,14 @@ func (w *Worker) RegisterWritableCatalog(c *WritableCatalog) {
 // dispatch table (deduped by name) so the scan resolves without a separate
 // RegisterTable call — mirroring vgi-python's _build_registry, which auto-scans
 // each Table.function.
-func (w *Worker) RegisterCatalogTable(schemaName string, table CatalogTable) {
-	w.catalogTables[schemaName] = append(w.catalogTables[schemaName], table)
+func (w *Worker) RegisterCatalogTable(schemaPath string, table CatalogTable) {
+	w.RegisterCatalogTablePath(singleSchemaPath(schemaPath), table)
+}
+
+// RegisterCatalogTablePath registers a table in an arbitrarily nested schema.
+func (w *Worker) RegisterCatalogTablePath(schemaPath SchemaPath, table CatalogTable) {
+	key := schemaPathKey(schemaPath)
+	w.catalogTables[key] = append(w.catalogTables[key], table)
 	if table.Function != nil {
 		if _, exists := w.tables[table.Function.Name()]; !exists {
 			w.tables[table.Function.Name()] = append(w.tables[table.Function.Name()], table.Function)
@@ -1095,8 +1121,14 @@ func (w *Worker) RegisterCatalogTable(schemaName string, table CatalogTable) {
 }
 
 // RegisterCatalogView registers a view in the given schema of the catalog.
-func (w *Worker) RegisterCatalogView(schemaName string, view CatalogView) {
-	w.catalogViews[schemaName] = append(w.catalogViews[schemaName], view)
+func (w *Worker) RegisterCatalogView(schemaPath string, view CatalogView) {
+	w.RegisterCatalogViewPath(singleSchemaPath(schemaPath), view)
+}
+
+// RegisterCatalogViewPath registers a view in an arbitrarily nested schema.
+func (w *Worker) RegisterCatalogViewPath(schemaPath SchemaPath, view CatalogView) {
+	key := schemaPathKey(schemaPath)
+	w.catalogViews[key] = append(w.catalogViews[key], view)
 }
 
 // RegisterCatalogSchema declares a schema that exists in the catalog but
@@ -1104,12 +1136,23 @@ func (w *Worker) RegisterCatalogView(schemaName string, view CatalogView) {
 // when there are no registered CatalogTable/View/Macro entries to "anchor"
 // the schema (otherwise it wouldn't appear in catalog_schemas).
 func (w *Worker) RegisterCatalogSchema(name, comment string) {
-	w.dynamicSchemas[name] = comment
+	w.RegisterCatalogSchemaPath(singleSchemaPath(name), comment)
+}
+
+// RegisterCatalogSchemaPath declares an arbitrarily nested dynamic schema.
+func (w *Worker) RegisterCatalogSchemaPath(path SchemaPath, comment string) {
+	w.dynamicSchemas[schemaPathKey(path)] = comment
 }
 
 // RegisterCatalogMacro registers a macro in the given schema of the catalog.
-func (w *Worker) RegisterCatalogMacro(schemaName string, macro CatalogMacro) {
-	w.catalogMacros[schemaName] = append(w.catalogMacros[schemaName], macro)
+func (w *Worker) RegisterCatalogMacro(schemaPath string, macro CatalogMacro) {
+	w.RegisterCatalogMacroPath(singleSchemaPath(schemaPath), macro)
+}
+
+// RegisterCatalogMacroPath registers a macro in an arbitrarily nested schema.
+func (w *Worker) RegisterCatalogMacroPath(schemaPath SchemaPath, macro CatalogMacro) {
+	key := schemaPathKey(schemaPath)
+	w.catalogMacros[key] = append(w.catalogMacros[key], macro)
 }
 
 // SetScanFunctionGetHandler sets a handler for resolving scan functions
@@ -1167,15 +1210,16 @@ const (
 //
 // It is carried in the vgi_rpc.protocol_version request metadata and enforced
 // as an exact major+minor match at the dispatch boundary, so it must track
-// vgi-python. Patch is ignored. 1.1.0 added schema_name to BindRequest; 1.2.0
+// vgi-python. Patch is ignored. 1.1.0 added schema_path to BindRequest; 1.2.0
 // added it to the unary requests that re-resolve a function by name; 1.3.0
 // adds global_functions and global_function_prefix to CatalogAttachResult;
 // 1.4.0 adds table_function_plan (split-based scan planning) plus split_tokens
-// and row_limit on InitRequest; 1.5.0 adds schema_name to ScanFunctionResult
+// and row_limit on InitRequest; 1.5.0 adds schema_path to ScanFunctionResult
 // and ScanBranch — the worker's own authoritative schema for the function it
 // just resolved, so a client no longer has to guess (the table's own schema,
 // then default_schema) when one function name is registered in two schemas.
-const ProtocolVersion = "1.5.0"
+// 2.0.0 represents every schema identity as a root-to-leaf list of components.
+const ProtocolVersion = "2.0.0"
 
 func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 	// Configure structured logging.

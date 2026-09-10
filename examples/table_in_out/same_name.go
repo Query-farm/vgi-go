@@ -27,7 +27,7 @@ import (
 //
 // That distinction is the point. The extension originally threaded the owning
 // schema onto the runtime exchange connections but not onto the bind-time one,
-// so an exchange-mode call reached the worker with no BindRequest.schema_name
+// so an exchange-mode call reached the worker with no BindRequest.schema_path
 // and could not be resolved when one name was declared in two schemas. The
 // scalar fixture cannot catch it — scalars bind through a separate call site.
 //
@@ -46,9 +46,9 @@ var sameNameOutputSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "tag", Type: arrow.BinaryTypes.String, Nullable: true},
 }, nil)
 
-// sameNameTagBatch renders "<schemaName>:<value>" for every row of the first
+// sameNameTagBatch renders "<schemaPath>:<value>" for every row of the first
 // input column, preserving nulls.
-func sameNameTagBatch(schemaName string, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+func sameNameTagBatch(schemaPath string, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 	col := batch.Column(0)
 	n := int(batch.NumRows())
 	b := array.NewStringBuilder(memory.NewGoAllocator())
@@ -59,7 +59,7 @@ func sameNameTagBatch(schemaName string, batch arrow.RecordBatch) (arrow.RecordB
 			b.AppendNull()
 			continue
 		}
-		b.Append(fmt.Sprintf("%s:%d", schemaName, vgi.GetInt64Value(col, i)))
+		b.Append(fmt.Sprintf("%s:%d", schemaPath, vgi.GetInt64Value(col, i)))
 	}
 	arr := b.NewArray()
 	defer arr.Release()
@@ -127,9 +127,9 @@ func (f *SameNameTransformFunction) Finalize(ctx context.Context, params *vgi.Pr
 }
 
 // NewSameNameTransformFunction wraps the transform for registration into
-// schemaName, which is also the tag it stamps.
-func NewSameNameTransformFunction(schemaName string) vgi.TableInOutFunction {
-	return vgi.AsTableInOutFunction[struct{}](&SameNameTransformFunction{schema: schemaName})
+// schemaPath, which is also the tag it stamps.
+func NewSameNameTransformFunction(schemaPath string) vgi.TableInOutFunction {
+	return vgi.AsTableInOutFunction[struct{}](&SameNameTransformFunction{schema: schemaPath})
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +213,7 @@ func (f *SameNameBufferedFunction) Finalize(ctx context.Context, params *vgi.Pro
 }
 
 // NewSameNameBufferedFunction builds the buffered probe for registration into
-// schemaName, which is also the tag it stamps.
-func NewSameNameBufferedFunction(schemaName string) vgi.TableBufferingFunction {
-	return &SameNameBufferedFunction{schema: schemaName}
+// schemaPath, which is also the tag it stamps.
+func NewSameNameBufferedFunction(schemaPath string) vgi.TableBufferingFunction {
+	return &SameNameBufferedFunction{schema: schemaPath}
 }

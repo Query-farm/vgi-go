@@ -28,10 +28,10 @@ import (
 // collision is the point.
 const sameNameFunctionName = "test_same_name_bind"
 
-// tagWithSchema renders "<schemaName>:<value>" for every row, preserving nulls.
-func tagWithSchema(schemaName string, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+// tagWithSchema renders "<schemaPath>:<value>" for every row, preserving nulls.
+func tagWithSchema(schemaPath string, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 	get := vgi.Int64Accessor(batch.Column(0)) // hoist the type switch out of the row loop
-	prefix := schemaName + ":"
+	prefix := schemaPath + ":"
 	return vgi.MapColumn(params, batch, 0, array.NewStringBuilder,
 		func(_ arrow.Array, i int) string {
 			return prefix + strconv.FormatInt(get(i), 10)

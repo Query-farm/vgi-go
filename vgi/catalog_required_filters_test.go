@@ -62,7 +62,7 @@ func TestSerializeTableInfoRequiredFiltersCNF(t *testing.T) {
 	// accession_number AND one of (ticker, cik).
 	info := &TableInfo{
 		Name:       "filings",
-		SchemaName: "company",
+		SchemaPath: []string{"company"},
 		RequiredFilters: [][]string{
 			{"accession_number"},
 			{"ticker", "cik"},
@@ -87,7 +87,7 @@ func TestSerializeTableInfoRequiredFiltersCNF(t *testing.T) {
 
 func TestSerializeTableInfoRequiredFiltersEmpty(t *testing.T) {
 	// Empty (default) => an empty, non-null outer list.
-	got := readRequiredFilters(t, &TableInfo{Name: "t", SchemaName: "s"})
+	got := readRequiredFilters(t, &TableInfo{Name: "t", SchemaPath: []string{"s"}})
 	if len(got) != 0 {
 		t.Fatalf("expected no groups, got %v", got)
 	}

@@ -99,7 +99,7 @@ func (f *SameNameCachedFunction) Process(ctx context.Context, params *vgi.Proces
 }
 
 // NewSameNameCachedFunction wraps the cacheable producer for registration into
-// schemaName, which is also the tag it stamps.
-func NewSameNameCachedFunction(schemaName string) vgi.TableFunction {
-	return vgi.AsTableFunction[cacheNonceState](&SameNameCachedFunction{schema: schemaName})
+// schemaPath, which is also the tag it stamps.
+func NewSameNameCachedFunction(schemaPath string) vgi.TableFunction {
+	return vgi.AsTableFunction[cacheNonceState](&SameNameCachedFunction{schema: schemaPath})
 }

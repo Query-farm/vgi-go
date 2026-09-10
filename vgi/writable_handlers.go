@@ -73,7 +73,8 @@ func parseOnConflict(s string) onConflictAction {
 	return onConflictError
 }
 
-func (w *Worker) writableSchemaCreate(c *WritableCatalog, name string, onConflict onConflictAction, comment *string) error {
+func (w *Worker) writableSchemaCreate(c *WritableCatalog, path SchemaPath, onConflict onConflictAction, comment *string) error {
+	name := schemaPathKey(path)
 	exists, err := c.store.schemaExists(c.Name, name)
 	if err != nil {
 		return err
@@ -96,7 +97,8 @@ func (w *Worker) writableSchemaCreate(c *WritableCatalog, name string, onConflic
 	return c.store.schemaUpsert(c.Name, name, cmt)
 }
 
-func (w *Worker) writableSchemaDrop(c *WritableCatalog, name string, ignoreNotFound, cascade bool) error {
+func (w *Worker) writableSchemaDrop(c *WritableCatalog, path SchemaPath, ignoreNotFound, cascade bool) error {
+	name := schemaPathKey(path)
 	exists, err := c.store.schemaExists(c.Name, name)
 	if err != nil {
 		return err
@@ -128,27 +130,28 @@ func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestW
 		return fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
 	}
 
-	exists, err := c.store.schemaExists(c.Name, req.SchemaName)
+	schemaKey := schemaPathKey(req.SchemaPath)
+	exists, err := c.store.schemaExists(c.Name, schemaKey)
 	if err != nil {
 		return err
 	}
 	if !exists {
-		return fmt.Errorf("schema %q does not exist", req.SchemaName)
+		return fmt.Errorf("schema %q does not exist", schemaPathDisplay(req.SchemaPath))
 	}
-	existing, err := c.store.tableLoad(c.Name, req.SchemaName, req.Name)
+	existing, err := c.store.tableLoad(c.Name, schemaKey, req.Name)
 	if err != nil {
 		return err
 	}
 	if existing != nil {
 		switch parseOnConflict(req.OnConflict) {
 		case onConflictReplace:
-			if err := c.store.tableDrop(c.Name, req.SchemaName, req.Name); err != nil {
+			if err := c.store.tableDrop(c.Name, schemaKey, req.Name); err != nil {
 				return err
 			}
 		case onConflictIgnore:
 			return nil
 		default:
-			return fmt.Errorf("table %q.%q already exists", req.SchemaName, req.Name)
+			return fmt.Errorf("table %q.%q already exists", schemaPathDisplay(req.SchemaPath), req.Name)
 		}
 	}
 
@@ -162,11 +165,12 @@ func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestW
 		defaults:      defaultsFromSchemaMetadata(schema),
 		columnComment: map[string]string{},
 	}
-	return c.store.tableUpsert(c.Name, req.SchemaName, t)
+	return c.store.tableUpsert(c.Name, schemaKey, t)
 }
 
-func (w *Worker) writableTableDrop(c *WritableCatalog, schemaName, name string, ignoreNotFound, cascade bool) error {
-	existing, err := c.store.tableLoad(c.Name, schemaName, name)
+func (w *Worker) writableTableDrop(c *WritableCatalog, schemaPath SchemaPath, name string, ignoreNotFound, cascade bool) error {
+	schemaKey := schemaPathKey(schemaPath)
+	existing, err := c.store.tableLoad(c.Name, schemaKey, name)
 	if err != nil {
 		return err
 	}
@@ -174,9 +178,9 @@ func (w *Worker) writableTableDrop(c *WritableCatalog, schemaName, name string, 
 		if ignoreNotFound {
 			return nil
 		}
-		return fmt.Errorf("table %q.%q does not exist", schemaName, name)
+		return fmt.Errorf("table %q.%q does not exist", schemaPath, name)
 	}
-	return c.store.tableDrop(c.Name, schemaName, name)
+	return c.store.tableDrop(c.Name, schemaKey, name)
 }
 
 func columnsByIndex(schema *arrow.Schema, idx []int32) []string {
@@ -309,7 +313,7 @@ func (w *Worker) writableSchemas(c *WritableCatalog) ([][]byte, error) {
 	}
 	out := make([][]byte, 0, len(list))
 	for _, s := range list {
-		info := &SchemaInfo{Name: s.Name, Comment: s.Comment, AttachOpaqueData: c.attachOpaqueData}
+		info := &SchemaInfo{Path: strings.Split(s.Name, "\x00"), Comment: s.Comment, AttachOpaqueData: c.attachOpaqueData}
 		data, err := SerializeSchemaInfo(info)
 		if err != nil {
 			return nil, err
@@ -319,7 +323,8 @@ func (w *Worker) writableSchemas(c *WritableCatalog) ([][]byte, error) {
 	return out, nil
 }
 
-func (w *Worker) writableSchemaGet(c *WritableCatalog, name string) ([][]byte, error) {
+func (w *Worker) writableSchemaGet(c *WritableCatalog, path SchemaPath) ([][]byte, error) {
+	name := schemaPathKey(path)
 	exists, err := c.store.schemaExists(c.Name, name)
 	if err != nil {
 		return nil, err
@@ -327,7 +332,7 @@ func (w *Worker) writableSchemaGet(c *WritableCatalog, name string) ([][]byte, e
 	if !exists {
 		return nil, nil
 	}
-	info := &SchemaInfo{Name: name, AttachOpaqueData: c.attachOpaqueData}
+	info := &SchemaInfo{Path: path, AttachOpaqueData: c.attachOpaqueData}
 	data, err := SerializeSchemaInfo(info)
 	if err != nil {
 		return nil, err
@@ -335,21 +340,22 @@ func (w *Worker) writableSchemaGet(c *WritableCatalog, name string) ([][]byte, e
 	return [][]byte{data}, nil
 }
 
-func (w *Worker) writableSchemaContentsTables(c *WritableCatalog, schemaName string) ([][]byte, error) {
-	names, err := c.store.tableList(c.Name, schemaName)
+func (w *Worker) writableSchemaContentsTables(c *WritableCatalog, schemaPath SchemaPath) ([][]byte, error) {
+	schemaKey := schemaPathKey(schemaPath)
+	names, err := c.store.tableList(c.Name, schemaKey)
 	if err != nil {
 		return nil, err
 	}
 	out := make([][]byte, 0, len(names))
 	for _, name := range names {
-		t, err := c.store.tableLoad(c.Name, schemaName, name)
+		t, err := c.store.tableLoad(c.Name, schemaKey, name)
 		if err != nil {
 			return nil, err
 		}
 		if t == nil {
 			continue
 		}
-		info, err := tableInfoFromWritable(t, schemaName)
+		info, err := tableInfoFromWritable(t, schemaPath)
 		if err != nil {
 			return nil, err
 		}
@@ -362,15 +368,15 @@ func (w *Worker) writableSchemaContentsTables(c *WritableCatalog, schemaName str
 	return out, nil
 }
 
-func (w *Worker) writableTableGet(c *WritableCatalog, schemaName, tableName string) ([][]byte, error) {
-	t, err := c.store.tableLoad(c.Name, schemaName, tableName)
+func (w *Worker) writableTableGet(c *WritableCatalog, schemaPath SchemaPath, tableName string) ([][]byte, error) {
+	t, err := c.store.tableLoad(c.Name, schemaPathKey(schemaPath), tableName)
 	if err != nil {
 		return nil, err
 	}
 	if t == nil {
 		return nil, nil
 	}
-	info, err := tableInfoFromWritable(t, schemaName)
+	info, err := tableInfoFromWritable(t, schemaPath)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +387,7 @@ func (w *Worker) writableTableGet(c *WritableCatalog, schemaName, tableName stri
 	return [][]byte{data}, nil
 }
 
-func tableInfoFromWritable(t *writableTable, schemaName string) (*TableInfo, error) {
+func tableInfoFromWritable(t *writableTable, schemaPath SchemaPath) (*TableInfo, error) {
 	cols := t.schema
 	// Inject a synthesized __row_id column at the end so DuckDB has a row
 	// reference for UPDATE/DELETE. DuckDB hides is_row_id columns from
@@ -399,7 +405,7 @@ func tableInfoFromWritable(t *writableTable, schemaName string) (*TableInfo, err
 	primaryKey := resolveColumnGroupIndices(cols, t.primaryKey)
 	var fkBytes [][]byte
 	for i := range t.foreignKey {
-		data, err := serializeForeignKey(schemaName, &t.foreignKey[i])
+		data, err := serializeForeignKey(schemaPath, &t.foreignKey[i])
 		if err != nil {
 			return nil, err
 		}
@@ -410,7 +416,7 @@ func tableInfoFromWritable(t *writableTable, schemaName string) (*TableInfo, err
 	}
 	return &TableInfo{
 		Name:                     t.name,
-		SchemaName:               schemaName,
+		SchemaPath:               schemaPath,
 		Comment:                  t.comment,
 		Columns:                  cols,
 		NotNullConstraints:       notNull,

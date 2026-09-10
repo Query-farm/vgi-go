@@ -45,8 +45,10 @@ import (
 // CatalogName is the SQL catalog name this fixture publishes.
 const CatalogName = "schema_reconcile"
 
-// SchemaName is the only schema this fixture publishes.
-const SchemaName = "main"
+// SchemaPath is the only schema this fixture publishes.
+const SchemaPath = "main"
+
+func isSchema(path vgi.SchemaPath) bool { return len(path) == 1 && path[0] == SchemaPath }
 
 // userFields is the user-facing column set shared by every table. The
 // awkward types (NOT NULL primitives, ms+UTC timestamps, NOT NULL leaves
@@ -866,7 +868,7 @@ func buildCountBatch(n int64) arrow.RecordBatch {
 func serializeTableInfo(spec tableSpec) ([]byte, error) {
 	info := &vgi.TableInfo{
 		Name:           spec.name,
-		SchemaName:     SchemaName,
+		SchemaPath:     vgi.SchemaPath{SchemaPath},
 		Comment:        fmt.Sprintf("schema_reconcile %s (rowid type %s)", spec.name, spec.rowidField.Type),
 		Columns:        spec.tableSchema(),
 		SupportsInsert: true,
@@ -878,11 +880,11 @@ func serializeTableInfo(spec tableSpec) ([]byte, error) {
 
 // SchemaContentsHandler returns the per-(attach, schema) table list. Wired
 // via vgi.WithSchemaContentsHandler.
-func SchemaContentsHandler(attachOpaqueData []byte, schemaName string) ([]vgi.SerializedSchemaItem, bool) {
+func SchemaContentsHandler(attachOpaqueData []byte, schemaPath vgi.SchemaPath) ([]vgi.SerializedSchemaItem, bool) {
 	if string(attachOpaqueData) != CatalogName {
 		return nil, false
 	}
-	if schemaName != SchemaName {
+	if !isSchema(schemaPath) {
 		return nil, false
 	}
 	items := make([]vgi.SerializedSchemaItem, 0, len(tableSpecs))
@@ -900,11 +902,11 @@ func SchemaContentsHandler(attachOpaqueData []byte, schemaName string) ([]vgi.Se
 
 // AttachTableGetHandler answers single-table catalog_table_get RPCs for the
 // schema_reconcile catalog. Wired via vgi.WithAttachTableGetHandler.
-func AttachTableGetHandler(attachOpaqueData []byte, schemaName, name string, atUnit, atValue *string) ([]byte, bool, error) {
+func AttachTableGetHandler(attachOpaqueData []byte, schemaPath vgi.SchemaPath, name string, atUnit, atValue *string) ([]byte, bool, error) {
 	if string(attachOpaqueData) != CatalogName {
 		return nil, false, nil
 	}
-	if schemaName != SchemaName {
+	if !isSchema(schemaPath) {
 		return nil, false, nil
 	}
 	spec, ok := tableSpecs[name]
@@ -921,11 +923,11 @@ func AttachTableGetHandler(attachOpaqueData []byte, schemaName, name string, atU
 // AttachScanFunctionGetHandler routes SELECT-time scan-function lookups to
 // schema_reconcile_scan(<table_name>). Wired via
 // vgi.WithAttachScanFunctionGetHandler.
-func AttachScanFunctionGetHandler(attachOpaqueData []byte, schemaName, name string, atUnit, atValue *string) (*vgi.ScanFunctionResult, bool, error) {
+func AttachScanFunctionGetHandler(attachOpaqueData []byte, schemaPath vgi.SchemaPath, name string, atUnit, atValue *string) (*vgi.ScanFunctionResult, bool, error) {
 	if string(attachOpaqueData) != CatalogName {
 		return nil, false, nil
 	}
-	if schemaName != SchemaName {
+	if !isSchema(schemaPath) {
 		return nil, false, nil
 	}
 	if _, ok := tableSpecs[name]; !ok {
@@ -942,11 +944,11 @@ func AttachScanFunctionGetHandler(attachOpaqueData []byte, schemaName, name stri
 // AttachWriteFunctionGetHandler routes INSERT/UPDATE/DELETE-time function
 // lookups to schema_reconcile_{insert,update,delete}(<table_name>). Wired
 // via vgi.WithAttachWriteFunctionGetHandler.
-func AttachWriteFunctionGetHandler(op vgi.WriteOp, attachOpaqueData []byte, schemaName, name string) (*vgi.ScanFunctionResult, bool, error) {
+func AttachWriteFunctionGetHandler(op vgi.WriteOp, attachOpaqueData []byte, schemaPath vgi.SchemaPath, name string) (*vgi.ScanFunctionResult, bool, error) {
 	if string(attachOpaqueData) != CatalogName {
 		return nil, false, nil
 	}
-	if schemaName != SchemaName {
+	if !isSchema(schemaPath) {
 		return nil, false, nil
 	}
 	if _, ok := tableSpecs[name]; !ok {

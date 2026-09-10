@@ -38,9 +38,9 @@ func (w *Worker) registerWritableFunctions(catalogName string) {
 // findWritableTable looks up a (schema, table) across all writable catalogs.
 // Reads from the SQLite store so DuckDB-spawned worker subprocesses see the
 // same state as the process that ran CREATE TABLE.
-func (w *Worker) findWritableTable(schemaName, tableName string) (*WritableCatalog, *writableTable, error) {
+func (w *Worker) findWritableTable(schemaPath, tableName string) (*WritableCatalog, *writableTable, error) {
 	for _, c := range w.extraCatalogs {
-		t, err := c.store.tableLoad(c.Name, schemaName, tableName)
+		t, err := c.store.tableLoad(c.Name, schemaPath, tableName)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -48,7 +48,7 @@ func (w *Worker) findWritableTable(schemaName, tableName string) (*WritableCatal
 			return c, t, nil
 		}
 	}
-	return nil, nil, fmt.Errorf("writable table %q.%q not found", schemaName, tableName)
+	return nil, nil, fmt.Errorf("writable table %q.%q not found", schemaPath, tableName)
 }
 
 // ---------------------------------------------------------------------------
@@ -73,11 +73,11 @@ func (f *writableScanFn) Metadata() FunctionMetadata {
 	}
 }
 
-// ArgumentSpecs declares the constant schema_name and table_name arguments
+// ArgumentSpecs declares the constant schema_path and table_name arguments
 // identifying the writable table to scan.
 func (f *writableScanFn) ArgumentSpecs() []ArgSpec {
 	return []ArgSpec{
-		{Name: "schema_name", Position: 0, ArrowType: "varchar", Doc: "Schema name", IsConst: true},
+		{Name: "schema_path", Position: 0, ArrowType: "varchar", Doc: "Schema name", IsConst: true},
 		{Name: "table_name", Position: 1, ArrowType: "varchar", Doc: "Table name", IsConst: true},
 	}
 }
@@ -85,9 +85,9 @@ func (f *writableScanFn) ArgumentSpecs() []ArgSpec {
 // OnBind looks up the target table and binds the output to its schema plus a
 // synthesized row-ID column.
 func (f *writableScanFn) OnBind(params *BindParams) (*BindResponse, error) {
-	schemaName, _ := params.Args.GetScalarString(0)
+	schemaPath, _ := params.Args.GetScalarString(0)
 	tableName, _ := params.Args.GetScalarString(1)
-	_, t, err := f.w.findWritableTable(schemaName, tableName)
+	_, t, err := f.w.findWritableTable(schemaPath, tableName)
 	if err != nil {
 		return nil, err
 	}
@@ -97,13 +97,13 @@ func (f *writableScanFn) OnBind(params *BindParams) (*BindResponse, error) {
 // Cardinality estimates the result size from the table's stored row count,
 // returning zero if the table cannot be found.
 func (f *writableScanFn) Cardinality(params *BindParams) (*TableCardinality, error) {
-	schemaName, _ := params.Args.GetScalarString(0)
+	schemaPath, _ := params.Args.GetScalarString(0)
 	tableName, _ := params.Args.GetScalarString(1)
-	c, _, err := f.w.findWritableTable(schemaName, tableName)
+	c, _, err := f.w.findWritableTable(schemaPath, tableName)
 	if err != nil {
 		return &TableCardinality{Estimate: 0}, nil
 	}
-	n, err := c.store.rowsCount(c.Name, schemaName, tableName)
+	n, err := c.store.rowsCount(c.Name, schemaPath, tableName)
 	if err != nil {
 		return &TableCardinality{Estimate: 0}, nil
 	}
@@ -126,13 +126,13 @@ func (f *writableScanFn) Process(ctx context.Context, params *ProcessParams, sta
 		out.Finish()
 		return nil
 	}
-	schemaName, _ := params.Args.GetScalarString(0)
+	schemaPath, _ := params.Args.GetScalarString(0)
 	tableName, _ := params.Args.GetScalarString(1)
-	c, t, err := f.w.findWritableTable(schemaName, tableName)
+	c, t, err := f.w.findWritableTable(schemaPath, tableName)
 	if err != nil {
 		return err
 	}
-	rows, err := c.store.rowsScan(c.Name, schemaName, tableName)
+	rows, err := c.store.rowsScan(c.Name, schemaPath, tableName)
 	if err != nil {
 		return err
 	}
@@ -177,7 +177,7 @@ func writableCountBatch(name string, n int64) arrow.RecordBatch {
 }
 
 type writableMutateState struct {
-	SchemaName string
+	SchemaPath string
 	TableName  string
 	Count      int64
 
@@ -195,7 +195,7 @@ func (st *writableMutateState) resolveCatalog(w *Worker) (*WritableCatalog, erro
 	if st.catalog != nil {
 		return st.catalog, nil
 	}
-	c, _, err := w.findWritableTable(st.SchemaName, st.TableName)
+	c, _, err := w.findWritableTable(st.SchemaPath, st.TableName)
 	if err != nil {
 		return nil, err
 	}
@@ -204,9 +204,9 @@ func (st *writableMutateState) resolveCatalog(w *Worker) (*WritableCatalog, erro
 }
 
 func writableArgs(args *Arguments) (string, string) {
-	schemaName, _ := args.GetScalarString(0)
+	schemaPath, _ := args.GetScalarString(0)
 	tableName, _ := args.GetScalarString(1)
-	return schemaName, tableName
+	return schemaPath, tableName
 }
 
 func writableMetadata(desc string) FunctionMetadata {
@@ -219,7 +219,7 @@ func writableMetadata(desc string) FunctionMetadata {
 
 func writableArgumentSpecs() []ArgSpec {
 	return []ArgSpec{
-		{Name: "schema_name", Position: 0, ArrowType: "varchar", IsConst: true},
+		{Name: "schema_path", Position: 0, ArrowType: "varchar", IsConst: true},
 		{Name: "table_name", Position: 1, ArrowType: "varchar", IsConst: true},
 	}
 }
@@ -238,7 +238,7 @@ func (f *writableInsertFn) Metadata() FunctionMetadata {
 	return writableMetadata("Generic INSERT into writable VGI table")
 }
 
-// ArgumentSpecs declares the constant schema_name and table_name arguments.
+// ArgumentSpecs declares the constant schema_path and table_name arguments.
 func (f *writableInsertFn) ArgumentSpecs() []ArgSpec { return writableArgumentSpecs() }
 
 // OnBind binds the output to a single-column "rows_inserted" count schema.
@@ -253,8 +253,8 @@ func (f *writableInsertFn) OnInit(p *InitParams) (*GlobalInitResponse, error) {
 
 // NewState creates the per-call state holding the target schema and table names.
 func (f *writableInsertFn) NewState(p *ProcessParams) (interface{}, error) {
-	schemaName, tableName := writableArgs(p.Args)
-	return &writableMutateState{SchemaName: schemaName, TableName: tableName}, nil
+	schemaPath, tableName := writableArgs(p.Args)
+	return &writableMutateState{SchemaPath: schemaPath, TableName: tableName}, nil
 }
 
 // Process appends the incoming batch rows to the table and emits the inserted
@@ -269,7 +269,7 @@ func (f *writableInsertFn) Process(ctx context.Context, p *ProcessParams, state 
 	if err != nil {
 		return err
 	}
-	if _, err := c.store.rowsAppend(c.Name, st.SchemaName, st.TableName, rows); err != nil {
+	if _, err := c.store.rowsAppend(c.Name, st.SchemaPath, st.TableName, rows); err != nil {
 		return err
 	}
 	st.Count += int64(len(rows))
@@ -297,7 +297,7 @@ func (f *writableUpdateFn) Metadata() FunctionMetadata {
 	return writableMetadata("Generic UPDATE on writable VGI table")
 }
 
-// ArgumentSpecs declares the constant schema_name and table_name arguments.
+// ArgumentSpecs declares the constant schema_path and table_name arguments.
 func (f *writableUpdateFn) ArgumentSpecs() []ArgSpec { return writableArgumentSpecs() }
 
 // OnBind binds the output to a single-column "rows_updated" count schema.
@@ -312,8 +312,8 @@ func (f *writableUpdateFn) OnInit(p *InitParams) (*GlobalInitResponse, error) {
 
 // NewState creates the per-call state holding the target schema and table names.
 func (f *writableUpdateFn) NewState(p *ProcessParams) (interface{}, error) {
-	schemaName, tableName := writableArgs(p.Args)
-	return &writableMutateState{SchemaName: schemaName, TableName: tableName}, nil
+	schemaPath, tableName := writableArgs(p.Args)
+	return &writableMutateState{SchemaPath: schemaPath, TableName: tableName}, nil
 }
 
 // Process applies the incoming batch rows as updates to the table and emits the
@@ -328,7 +328,7 @@ func (f *writableUpdateFn) Process(ctx context.Context, p *ProcessParams, state 
 	if err != nil {
 		return err
 	}
-	updated, err := c.store.rowsUpdate(c.Name, st.SchemaName, st.TableName, updates)
+	updated, err := c.store.rowsUpdate(c.Name, st.SchemaPath, st.TableName, updates)
 	if err != nil {
 		return err
 	}
@@ -357,7 +357,7 @@ func (f *writableDeleteFn) Metadata() FunctionMetadata {
 	return writableMetadata("Generic DELETE on writable VGI table")
 }
 
-// ArgumentSpecs declares the constant schema_name and table_name arguments.
+// ArgumentSpecs declares the constant schema_path and table_name arguments.
 func (f *writableDeleteFn) ArgumentSpecs() []ArgSpec { return writableArgumentSpecs() }
 
 // OnBind binds the output to a single-column "rows_deleted" count schema.
@@ -372,8 +372,8 @@ func (f *writableDeleteFn) OnInit(p *InitParams) (*GlobalInitResponse, error) {
 
 // NewState creates the per-call state holding the target schema and table names.
 func (f *writableDeleteFn) NewState(p *ProcessParams) (interface{}, error) {
-	schemaName, tableName := writableArgs(p.Args)
-	return &writableMutateState{SchemaName: schemaName, TableName: tableName}, nil
+	schemaPath, tableName := writableArgs(p.Args)
+	return &writableMutateState{SchemaPath: schemaPath, TableName: tableName}, nil
 }
 
 // Process deletes rows identified by their synthesized row IDs in the incoming
@@ -394,7 +394,7 @@ func (f *writableDeleteFn) Process(ctx context.Context, p *ProcessParams, state 
 			rids = append(rids, toInt64(v))
 		}
 	}
-	deleted, err := c.store.rowsDelete(c.Name, st.SchemaName, st.TableName, rids)
+	deleted, err := c.store.rowsDelete(c.Name, st.SchemaPath, st.TableName, rids)
 	if err != nil {
 		return err
 	}

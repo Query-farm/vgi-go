@@ -190,7 +190,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 	fn, err := w.resolveFunction(functionLookup{
 		Name:        recipe.FunctionName,
 		Type:        recipe.FunctionType,
-		Schema:      bindParams.SchemaName,
+		Schema:      schemaPathKey(bindParams.SchemaPath),
 		Catalog:     w.catalogOfAttach(coldAttachScope(bindParams.AttachOpaqueData)),
 		Args:        bindParams.Args,
 		InputSchema: bindParams.InputSchema,

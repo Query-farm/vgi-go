@@ -65,7 +65,7 @@ type CatalogMacro struct {
 // MacroInfo describes a macro in the catalog for wire serialization.
 type MacroInfo struct {
 	Name                   string
-	SchemaName             string
+	SchemaPath             []string
 	Comment                string
 	Tags                   map[string]string
 	MacroType              MacroType
@@ -112,10 +112,10 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 	defer nameBuilder.Release()
 	nameBuilder.Append(info.Name)
 
-	// schema_name
-	schemaNameBuilder := array.NewStringBuilder(mem)
-	defer schemaNameBuilder.Release()
-	schemaNameBuilder.Append(info.SchemaName)
+	// schema_path
+	schemaPathBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer schemaPathBuilder.Release()
+	appendSchemaPath(schemaPathBuilder, info.SchemaPath)
 
 	// macro_type (dictionary encoded)
 	mtBuilder := array.NewDictionaryBuilder(mem, dictType)
@@ -162,7 +162,7 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
 		nameBuilder.NewArray(),
-		schemaNameBuilder.NewArray(),
+		schemaPathBuilder.NewArray(),
 		mtBuilder.NewArray(),
 		paramsBuilder.NewArray(),
 		pdvBuilder.NewArray(),
@@ -192,14 +192,14 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 // macroInfoFromCatalogMacro builds the wire MacroInfo for a registered
 // CatalogMacro in the given schema, including the per-parameter arguments_schema
 // (carrying vgi_doc field metadata for documented parameters).
-func macroInfoFromCatalogMacro(cm CatalogMacro, schemaName string) (*MacroInfo, error) {
+func macroInfoFromCatalogMacro(cm CatalogMacro, schemaPath SchemaPath) (*MacroInfo, error) {
 	argsSchema, err := BuildMacroArgumentsSchema(cm.Parameters, cm.ParameterDefaultValues, cm.ParameterDocs)
 	if err != nil {
 		return nil, err
 	}
 	return &MacroInfo{
 		Name:                   cm.Name,
-		SchemaName:             schemaName,
+		SchemaPath:             schemaPath,
 		Comment:                cm.Comment,
 		Tags:                   cm.Tags,
 		MacroType:              cm.MacroType,

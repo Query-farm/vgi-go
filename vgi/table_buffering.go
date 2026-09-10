@@ -59,9 +59,14 @@ func (w *Worker) RegisterTableBuffering(f TableBufferingFunction) {
 // RegisterTableBufferingInSchema registers a table-buffering function in a
 // named catalog schema. See RegisterScalarInSchema for why the schema is part
 // of the identity.
-func (w *Worker) RegisterTableBufferingInSchema(schemaName string, f TableBufferingFunction) {
+func (w *Worker) RegisterTableBufferingInSchema(schemaPath string, f TableBufferingFunction) {
+	w.RegisterTableBufferingInSchemaPath(singleSchemaPath(schemaPath), f)
+}
+
+// RegisterTableBufferingInSchemaPath registers a buffering function in an arbitrarily nested schema.
+func (w *Worker) RegisterTableBufferingInSchemaPath(schemaPath SchemaPath, f TableBufferingFunction) {
 	w.tableBufferings[f.Name()] = append(w.tableBufferings[f.Name()], f)
-	w.recordOrigin(kindTableBuffering, f.Name(), funcOrigin{schema: schemaName})
+	w.recordOrigin(kindTableBuffering, f.Name(), funcOrigin{schema: schemaPathKey(schemaPath)})
 }
 
 // RegisterTableBufferingForCatalog registers a table-buffering function scoped

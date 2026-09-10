@@ -184,7 +184,7 @@ func (f *ExampleLinesCopyToFunction) Close(ctx context.Context, params *vgi.Proc
 			return fmt.Errorf("example_lines_out: reading shard: %w", derr)
 		}
 		if !wroteHeader {
-			if werr := writeHeader(schemaNames(batch.Schema())); werr != nil {
+			if werr := writeHeader(schemaPaths(batch.Schema())); werr != nil {
 				batch.Release()
 				return werr
 			}
@@ -208,15 +208,15 @@ func (f *ExampleLinesCopyToFunction) Close(ctx context.Context, params *vgi.Proc
 	// Empty COPY with header=true still emits the header row(s). Take the column
 	// names from the bind's input (source) schema.
 	if !wroteHeader && params.InputSchema != nil {
-		if werr := writeHeader(schemaNames(params.InputSchema)); werr != nil {
+		if werr := writeHeader(schemaPaths(params.InputSchema)); werr != nil {
 			return werr
 		}
 	}
 	return nil
 }
 
-// schemaNames returns the field names of schema in order.
-func schemaNames(schema *arrow.Schema) []string {
+// schemaPaths returns the field names of schema in order.
+func schemaPaths(schema *arrow.Schema) []string {
 	names := make([]string, schema.NumFields())
 	for i, fld := range schema.Fields() {
 		names[i] = fld.Name

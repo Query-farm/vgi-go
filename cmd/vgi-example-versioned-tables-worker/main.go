@@ -134,8 +134,8 @@ func main() {
 				AttachOpaqueData:              attachOpaqueData,
 			}, nil
 		}),
-		vgi.WithSchemaContentsHandler(func(attachOpaqueData []byte, schemaName string) ([]vgi.SerializedSchemaItem, bool) {
-			if schemaName != "main" {
+		vgi.WithSchemaContentsHandler(func(attachOpaqueData []byte, schemaPath vgi.SchemaPath) ([]vgi.SerializedSchemaItem, bool) {
+			if len(schemaPath) != 1 || schemaPath[0] != "main" {
 				return []vgi.SerializedSchemaItem{}, true
 			}
 			tables := tablesForAttachOpaqueData(attachOpaqueData)
@@ -144,7 +144,7 @@ func main() {
 			for _, name := range sortedKeys(tables) {
 				data, err := vgi.SerializeTableInfo(&vgi.TableInfo{
 					Name:       name,
-					SchemaName: "main",
+					SchemaPath: vgi.SchemaPath{"main"},
 					Columns:    tables[name].Columns,
 				})
 				if err != nil {
@@ -155,8 +155,8 @@ func main() {
 			}
 			return out, true
 		}),
-		vgi.WithAttachTableGetHandler(func(attachOpaqueData []byte, schemaName, name string, _ *string, _ *string) ([]byte, bool, error) {
-			if schemaName != "main" {
+		vgi.WithAttachTableGetHandler(func(attachOpaqueData []byte, schemaPath vgi.SchemaPath, name string, _ *string, _ *string) ([]byte, bool, error) {
+			if len(schemaPath) != 1 || schemaPath[0] != "main" {
 				return nil, true, nil
 			}
 			table, ok := tablesForAttachOpaqueData(attachOpaqueData)[name]
@@ -165,7 +165,7 @@ func main() {
 			}
 			data, err := vgi.SerializeTableInfo(&vgi.TableInfo{
 				Name:       name,
-				SchemaName: "main",
+				SchemaPath: vgi.SchemaPath{"main"},
 				Columns:    table.Columns,
 			})
 			if err != nil {
@@ -173,9 +173,9 @@ func main() {
 			}
 			return data, true, nil
 		}),
-		vgi.WithAttachScanFunctionGetHandler(func(attachOpaqueData []byte, schemaName, name string, _ *string, _ *string) (*vgi.ScanFunctionResult, bool, error) {
-			if schemaName != "main" {
-				return nil, true, fmt.Errorf("Unknown schema: %s", schemaName)
+		vgi.WithAttachScanFunctionGetHandler(func(attachOpaqueData []byte, schemaPath vgi.SchemaPath, name string, _ *string, _ *string) (*vgi.ScanFunctionResult, bool, error) {
+			if len(schemaPath) != 1 || schemaPath[0] != "main" {
+				return nil, true, fmt.Errorf("Unknown schema: %s", schemaPath)
 			}
 			table, ok := tablesForAttachOpaqueData(attachOpaqueData)[name]
 			if !ok {

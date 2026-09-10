@@ -53,9 +53,10 @@ type wireRecordCase struct {
 	build func() ([]byte, error)
 }
 
-func strPtr(s string) *string { return &s }
-func i64Ptr(v int64) *int64   { return &v }
-func boolPtr(v bool) *bool    { return &v }
+func strPtr(s string) *string             { return &s }
+func pathPtr(parts ...string) *SchemaPath { return &parts }
+func i64Ptr(v int64) *int64               { return &v }
+func boolPtr(v bool) *bool                { return &v }
 
 func wireRecordCases(t *testing.T) []wireRecordCase {
 	t.Helper()
@@ -95,7 +96,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 			schema: generated.SchemaInfoSchema,
 			build: func() ([]byte, error) {
 				return SerializeSchemaInfo(&SchemaInfo{
-					Name:                 "main",
+					Path:                 SchemaPath{"analytics", "main"},
 					Comment:              "the main schema",
 					Tags:                 map[string]string{"owner": "data-eng"},
 					AttachOpaqueData:     []byte("attach"),
@@ -109,7 +110,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 			build: func() ([]byte, error) {
 				return SerializeTableInfo(&TableInfo{
 					Name:                     "events",
-					SchemaName:               "main",
+					SchemaPath:               []string{"main"},
 					Comment:                  "event log",
 					Tags:                     map[string]string{"tier": "hot"},
 					Columns:                  columns,
@@ -141,7 +142,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 			build: func() ([]byte, error) {
 				return SerializeViewInfo(&ViewInfo{
 					Name:           "recent_events",
-					SchemaName:     "main",
+					SchemaPath:     []string{"main"},
 					Comment:        "last 7 days",
 					Tags:           map[string]string{"tier": "hot"},
 					Definition:     "SELECT * FROM events",
@@ -155,7 +156,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 			build: func() ([]byte, error) {
 				return SerializeFunctionInfo(&FunctionInfo{
 					Name:                       "scan_events",
-					SchemaName:                 "main",
+					SchemaPath:                 []string{"main"},
 					FunctionType:               FunctionTypeTable,
 					ArgSchema:                  columns,
 					OutputSchema:               columns,
@@ -199,7 +200,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 			build: func() ([]byte, error) {
 				return SerializeMacroInfo(&MacroInfo{
 					Name:                   "add_one",
-					SchemaName:             "main",
+					SchemaPath:             []string{"main"},
 					Comment:                "adds one",
 					Tags:                   map[string]string{"tier": "hot"},
 					MacroType:              MacroTypeScalar,
@@ -234,7 +235,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					FunctionName:        "read_parquet",
 					PositionalArguments: scanArgs,
 					RequiredExtensions:  []string{"parquet"},
-					SchemaName:          strPtr("main"),
+					SchemaPath:          pathPtr("main"),
 				})
 			},
 		},
@@ -248,12 +249,12 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					BranchFilter:        strPtr("ts >= '2026-01-01'"),
 					Writable:            true,
 					SourceCatalog:       strPtr("lake"),
-					SourceSchema:        strPtr("main"),
+					SourceSchemaPath:    pathPtr("main"),
 					SourceTable:         strPtr("events"),
 					FormatName:          strPtr("acme_csv"),
 					FormatLocations:     []string{"s3://bucket/a.csv"},
 					FormatOptions:       map[string]ScanArg{"delim": {Value: "|", Type: arrow.BinaryTypes.String}},
-					SchemaName:          strPtr("main"),
+					SchemaPath:          pathPtr("main"),
 				})
 			},
 		},
@@ -281,6 +282,18 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 			},
 		},
 		{
+			origin: "ForeignKeyInfo",
+			schema: generated.ForeignKeyInfoSchema,
+			build: func() ([]byte, error) {
+				return serializeForeignKey(SchemaPath{"analytics", "main"}, &ForeignKeyConstraint{
+					Columns:              []string{"account_id"},
+					ReferencedColumns:    []string{"id"},
+					ReferencedTable:      "accounts",
+					ReferencedSchemaPath: SchemaPath{"core", "public"},
+				})
+			},
+		},
+		{
 			origin: "AttachCatalogInfo",
 			schema: generated.AttachCatalogInfoSchema,
 			build: func() ([]byte, error) {
@@ -303,7 +316,9 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 // point of the coverage guard: adding a record to the protocol forces a
 // deliberate choice between covering it and writing down why not.
 var notBuiltByGo = map[string]string{
-	"IndexInfo": "vgi-go exposes no index API; nothing constructs an IndexInfo record",
+	"IndexInfo":          "vgi-go exposes no index API; nothing constructs an IndexInfo record",
+	"IndexCreateRequest": "vgi-go exposes no index API; nothing constructs an IndexCreateRequest record",
+	"ClientCapabilities": "received as opaque catalog_attach ASD bytes; vgi-go does not construct this client record",
 	"ScanBranchesResult": "assembled by vgi-rpc-go's struct-tag reflection over " +
 		"TableScanBranchesGetResponseWire, not hand-built here",
 }

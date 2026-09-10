@@ -24,13 +24,14 @@ func TestSerializeAttachCatalogInfo(t *testing.T) {
 }
 
 func TestSerializeScanBranchCatalogTable(t *testing.T) {
-	cat, sch, tbl, filter := "acme_lake", "main", "events", "id < 100"
+	cat, tbl, filter := "acme_lake", "events", "id < 100"
+	sch := SchemaPath{"main"}
 	branch := &ScanBranch{
-		FunctionName:  "", // catalog-table branch: empty function name
-		BranchFilter:  &filter,
-		SourceCatalog: &cat,
-		SourceSchema:  &sch,
-		SourceTable:   &tbl,
+		FunctionName:     "", // catalog-table branch: empty function name
+		BranchFilter:     &filter,
+		SourceCatalog:    &cat,
+		SourceSchemaPath: &sch,
+		SourceTable:      &tbl,
 	}
 	b, err := SerializeScanBranch(branch)
 	if err != nil {

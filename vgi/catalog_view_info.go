@@ -33,7 +33,7 @@ type CatalogView struct {
 // ViewInfo describes a view in the catalog for wire serialization.
 type ViewInfo struct {
 	Name           string
-	SchemaName     string
+	SchemaPath     []string
 	Comment        string
 	Tags           map[string]string
 	Definition     string
@@ -73,10 +73,10 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 	defer nameBuilder.Release()
 	nameBuilder.Append(info.Name)
 
-	// schema_name
-	schemaNameBuilder := array.NewStringBuilder(mem)
-	defer schemaNameBuilder.Release()
-	schemaNameBuilder.Append(info.SchemaName)
+	// schema_path
+	schemaPathBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer schemaPathBuilder.Release()
+	appendSchemaPath(schemaPathBuilder, info.SchemaPath)
 
 	// definition
 	defBuilder := array.NewStringBuilder(mem)
@@ -100,7 +100,7 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
 		nameBuilder.NewArray(),
-		schemaNameBuilder.NewArray(),
+		schemaPathBuilder.NewArray(),
 		defBuilder.NewArray(),
 		colCommentsBuilder.NewArray(),
 	}

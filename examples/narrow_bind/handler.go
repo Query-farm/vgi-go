@@ -29,8 +29,10 @@ import (
 // CatalogName is the SQL catalog name this fixture publishes.
 const CatalogName = "narrow_bind"
 
-// SchemaName is the only schema this fixture publishes.
-const SchemaName = "main"
+// SchemaPath is the only schema this fixture publishes.
+const SchemaPath = "main"
+
+func isSchema(path vgi.SchemaPath) bool { return len(path) == 1 && path[0] == SchemaPath }
 
 // tableSchema is what the catalog advertises for both tables: two columns.
 var tableSchema = arrow.NewSchema([]arrow.Field{
@@ -184,7 +186,7 @@ func buildBatch(schema *arrow.Schema, ids, vals []int64) arrow.RecordBatch {
 func serializeTableInfo(name string) ([]byte, error) {
 	info := &vgi.TableInfo{
 		Name:       name,
-		SchemaName: SchemaName,
+		SchemaPath: vgi.SchemaPath{SchemaPath},
 		Comment:    "narrow-bind reproducer table -> " + tableFunctions[name],
 		Columns:    tableSchema,
 	}
@@ -193,8 +195,8 @@ func serializeTableInfo(name string) ([]byte, error) {
 
 // SchemaContentsHandler returns the table list for the narrow_bind catalog.
 // Wired via vgi.WithSchemaContentsHandler (composed with other fixtures).
-func SchemaContentsHandler(attachOpaqueData []byte, schemaName string) ([]vgi.SerializedSchemaItem, bool) {
-	if string(attachOpaqueData) != CatalogName || schemaName != SchemaName {
+func SchemaContentsHandler(attachOpaqueData []byte, schemaPath vgi.SchemaPath) ([]vgi.SerializedSchemaItem, bool) {
+	if string(attachOpaqueData) != CatalogName || !isSchema(schemaPath) {
 		return nil, false
 	}
 	items := make([]vgi.SerializedSchemaItem, 0, len(tableFunctions))
@@ -210,8 +212,8 @@ func SchemaContentsHandler(attachOpaqueData []byte, schemaName string) ([]vgi.Se
 
 // AttachTableGetHandler answers single-table catalog_table_get RPCs for the
 // narrow_bind catalog. Wired via vgi.WithAttachTableGetHandler.
-func AttachTableGetHandler(attachOpaqueData []byte, schemaName, name string, _, _ *string) ([]byte, bool, error) {
-	if string(attachOpaqueData) != CatalogName || schemaName != SchemaName {
+func AttachTableGetHandler(attachOpaqueData []byte, schemaPath vgi.SchemaPath, name string, _, _ *string) ([]byte, bool, error) {
+	if string(attachOpaqueData) != CatalogName || !isSchema(schemaPath) {
 		return nil, false, nil
 	}
 	if _, ok := tableFunctions[name]; !ok {
@@ -227,8 +229,8 @@ func AttachTableGetHandler(attachOpaqueData []byte, schemaName, name string, _, 
 // AttachScanFunctionGetHandler routes SELECT-time scan-function lookups to the
 // table's backing scan function (mismatch->narrow_scan, consistent->wide_scan).
 // Wired via vgi.WithAttachScanFunctionGetHandler.
-func AttachScanFunctionGetHandler(attachOpaqueData []byte, schemaName, name string, _, _ *string) (*vgi.ScanFunctionResult, bool, error) {
-	if string(attachOpaqueData) != CatalogName || schemaName != SchemaName {
+func AttachScanFunctionGetHandler(attachOpaqueData []byte, schemaPath vgi.SchemaPath, name string, _, _ *string) (*vgi.ScanFunctionResult, bool, error) {
+	if string(attachOpaqueData) != CatalogName || !isSchema(schemaPath) {
 		return nil, false, nil
 	}
 	fn, ok := tableFunctions[name]

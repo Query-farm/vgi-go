@@ -17,7 +17,7 @@
 // that schema's own implementation.
 //
 // This is also the end-to-end guard for protocol 1.5.0's
-// ScanFunctionResult.SchemaName / ScanBranch.SchemaName: the C++ extension now
+// ScanFunctionResult.SchemaPath / ScanBranch.SchemaPath: the C++ extension now
 // prefers the worker-declared schema over its old table-schema/default-schema
 // heuristic when resolving which catalog entry function_name refers to. The
 // old heuristic still happens to get this two-schema case right (the table's
@@ -118,7 +118,7 @@ func (f *SameNameTableScanFunction) Process(ctx context.Context, params *vgi.Pro
 }
 
 // NewSameNameTableScanFunction wraps the producer for registration into
-// schemaName, which is also the tag it stamps.
-func NewSameNameTableScanFunction(schemaName string) vgi.TableFunction {
-	return vgi.AsTableFunction[sameNameTableState](&SameNameTableScanFunction{schema: schemaName})
+// schemaPath, which is also the tag it stamps.
+func NewSameNameTableScanFunction(schemaPath string) vgi.TableFunction {
+	return vgi.AsTableFunction[sameNameTableState](&SameNameTableScanFunction{schema: schemaPath})
 }

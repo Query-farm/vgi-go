@@ -102,8 +102,8 @@ type ForeignKeyConstraint struct {
 	ReferencedTable string
 	// ReferencedColumns are the column names in the referenced table.
 	ReferencedColumns []string
-	// ReferencedSchema is the schema of the referenced table (empty = same schema).
-	ReferencedSchema string
+	// ReferencedSchemaPath is the schema of the referenced table (empty = same schema).
+	ReferencedSchemaPath []string
 }
 
 // CatalogTableArg describes a single argument for a function-backed table.
@@ -121,12 +121,12 @@ type CatalogTableArg struct {
 // ScanFunctionGetHandler is a callback for resolving table scan functions
 // that are not backed by a registered CatalogTable with a Function field.
 // atUnit and atValue carry time-travel AT clause parameters (both nil when absent).
-type ScanFunctionGetHandler func(schemaName, tableName string, atUnit, atValue *string) (*ScanFunctionResult, error)
+type ScanFunctionGetHandler func(schemaPath SchemaPath, tableName string, atUnit, atValue *string) (*ScanFunctionResult, error)
 
 // TableGetHandler is a callback for customizing catalog_table_get responses,
 // e.g. to return version-specific schemas for time-travel queries.
 // Return nil to fall through to the default table lookup.
-type TableGetHandler func(schemaName, tableName string, atUnit, atValue *string) ([]byte, error)
+type TableGetHandler func(schemaPath SchemaPath, tableName string, atUnit, atValue *string) ([]byte, error)
 
 // ScanFunctionResult describes the function to call when scanning a catalog table.
 type ScanFunctionResult struct {
@@ -138,7 +138,7 @@ type ScanFunctionResult struct {
 	NamedArguments map[string]ScanArg
 	// RequiredExtensions lists DuckDB extensions that must be loaded.
 	RequiredExtensions []string
-	// SchemaName is the catalog schema FunctionName is registered in. A function
+	// SchemaPath is the catalog schema FunctionName is registered in. A function
 	// name is unique only within a schema, so a client that does not know this
 	// cannot tell which implementation a colliding name refers to — set it
 	// whenever the resolving code already knows the schema. Added in protocol
@@ -146,7 +146,7 @@ type ScanFunctionResult struct {
 	// DuckDB function with no VGI-side schema of its own (read_parquet and
 	// friends), in which case the client falls back to its own table-schema /
 	// default-schema heuristic. Trailing field of the wire schema.
-	SchemaName *string
+	SchemaPath *[]string
 }
 
 // ScanArg is a single argument value with its Arrow type.
@@ -171,14 +171,14 @@ type ScanBranch struct {
 	// Writable declares this branch as the INSERT target. At most one branch
 	// per table may be writable (the C++ extension enforces this at parse time).
 	Writable bool
-	// SourceCatalog/SourceSchema/SourceTable define a *catalog-table* branch:
+	// SourceCatalog/SourceSchemaPath/SourceTable define a *catalog-table* branch:
 	// when FunctionName is "" and SourceTable is set, the branch scans the base
-	// table SourceCatalog.SourceSchema.SourceTable in a companion catalog
+	// table SourceCatalog.SourceSchemaPath.SourceTable in a companion catalog
 	// (lakehouse federation) instead of calling a table function. Nil = function
 	// branch.
-	SourceCatalog *string
-	SourceSchema  *string
-	SourceTable   *string
+	SourceCatalog    *string
+	SourceSchemaPath *[]string
+	SourceTable      *string
 	// FormatName/FormatLocations define a *format* branch: when FunctionName and
 	// SourceTable are both empty and FormatName is set, the branch names a format
 	// plus the locations to read, and the client resolves the format to its
@@ -195,13 +195,13 @@ type ScanBranch struct {
 	// may be any Arrow type, so no static schema could describe it), but that
 	// encoding is the serializer's business, not the caller's.
 	FormatOptions map[string]ScanArg
-	// SchemaName is the catalog schema FunctionName is registered in — function
+	// SchemaPath is the catalog schema FunctionName is registered in — function
 	// branches only. Nil for a catalog-table or format branch, which has no
 	// VGI-side function schema of its own, for a pre-1.5.0 peer, and for a
-	// native DuckDB function. Not to be confused with SourceSchema above, which
+	// native DuckDB function. Not to be confused with SourceSchemaPath above, which
 	// names a catalog-table branch's *source table's* schema, a different and
 	// older field. Added in protocol 1.5.0; trailing field of the wire schema.
-	SchemaName *string
+	SchemaPath *[]string
 }
 
 // ScanBranchesResult is the list of physical sources backing a multi-branch
@@ -279,6 +279,12 @@ func SerializeScanBranch(branch *ScanBranch) ([]byte, error) {
 		}
 		return b.NewArray().(*array.String)
 	}
+	appendNullablePath := func(v *SchemaPath) arrow.Array {
+		b := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+		defer b.Release()
+		appendOptionalSchemaPath(b, v)
+		return b.NewArray()
+	}
 
 	cols := []arrow.Array{
 		fnNameBuilder.NewArray(),
@@ -286,7 +292,7 @@ func SerializeScanBranch(branch *ScanBranch) ([]byte, error) {
 		filterBuilder.NewArray(),
 		writableBuilder.NewArray(),
 		appendNullableString(branch.SourceCatalog),
-		appendNullableString(branch.SourceSchema),
+		appendNullablePath(branch.SourceSchemaPath),
 		appendNullableString(branch.SourceTable),
 		appendNullableString(branch.FormatName),
 		func() arrow.Array {
@@ -304,7 +310,7 @@ func SerializeScanBranch(branch *ScanBranch) ([]byte, error) {
 			return lb.NewArray()
 		}(),
 		appendNullableBinary(formatOptionBytes),
-		appendNullableString(branch.SchemaName),
+		appendNullablePath(branch.SchemaPath),
 	}
 	defer func() {
 		for _, c := range cols {
@@ -360,15 +366,11 @@ func SerializeScanFunctionResult(result *ScanFunctionResult) ([]byte, error) {
 		}
 	}
 
-	// schema_name — nullable; nil reads as "worker has no schema to report"
+	// schema_path — nullable; nil reads as "worker has no schema to report"
 	// and sends the client back to its pre-1.5.0 resolution heuristic.
-	schemaBuilder := array.NewStringBuilder(mem)
+	schemaBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
 	defer schemaBuilder.Release()
-	if result.SchemaName != nil {
-		schemaBuilder.Append(*result.SchemaName)
-	} else {
-		schemaBuilder.AppendNull()
-	}
+	appendOptionalSchemaPath(schemaBuilder, result.SchemaPath)
 
 	cols := []arrow.Array{
 		fnNameBuilder.NewArray(),

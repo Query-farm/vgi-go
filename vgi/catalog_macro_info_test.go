@@ -134,7 +134,7 @@ func TestMacroInfoFromCatalogMacro_PopulatesArgumentsSchema(t *testing.T) {
 		},
 	}
 
-	info, err := macroInfoFromCatalogMacro(cm, "main")
+	info, err := macroInfoFromCatalogMacro(cm, SchemaPath{"main"})
 	if err != nil {
 		t.Fatalf("macroInfoFromCatalogMacro: %v", err)
 	}

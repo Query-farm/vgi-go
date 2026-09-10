@@ -29,11 +29,11 @@ type AggregateBindRequestWire struct {
 	Settings         *[]byte `vgirpc:"settings"`
 	Secrets          *[]byte `vgirpc:"secrets"`
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
-	// SchemaName is the catalog schema that declares the function. A name is
+	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema. Protocol 1.2.0.
-	SchemaName *string `vgirpc:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 }
 
 // AggregateBindResponseWire is the wire format for aggregate_bind responses.
@@ -48,11 +48,11 @@ type AggregateUpdateRequestWire struct {
 	ExecutionID      []byte  `vgirpc:"execution_id"`
 	InputBatch       []byte  `vgirpc:"input_batch"`
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
-	// SchemaName is the catalog schema that declares the function. A name is
+	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema. Protocol 1.2.0.
-	SchemaName *string `vgirpc:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 }
 
 // AggregateUpdateResponseWire is the empty ack for aggregate_update.
@@ -64,11 +64,11 @@ type AggregateCombineRequestWire struct {
 	ExecutionID      []byte  `vgirpc:"execution_id"`
 	MergeBatch       []byte  `vgirpc:"merge_batch"`
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
-	// SchemaName is the catalog schema that declares the function. A name is
+	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema. Protocol 1.2.0.
-	SchemaName *string `vgirpc:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 }
 
 // AggregateCombineResponseWire is the empty ack for aggregate_combine.
@@ -81,11 +81,11 @@ type AggregateFinalizeRequestWire struct {
 	GroupIDsBatch    []byte  `vgirpc:"group_ids_batch"`
 	OutputSchema     []byte  `vgirpc:"output_schema"`
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
-	// SchemaName is the catalog schema that declares the function. A name is
+	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema. Protocol 1.2.0.
-	SchemaName *string `vgirpc:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 }
 
 // AggregateFinalizeResponseWire is the wire format for aggregate_finalize responses.
@@ -99,11 +99,11 @@ type AggregateDestructorRequestWire struct {
 	ExecutionID      []byte  `vgirpc:"execution_id"`
 	GroupIDsBatch    []byte  `vgirpc:"group_ids_batch"`
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
-	// SchemaName is the catalog schema that declares the function. A name is
+	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema. Protocol 1.2.0.
-	SchemaName *string `vgirpc:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 }
 
 // AggregateDestructorResponseWire is the empty ack for aggregate_destructor.
@@ -121,11 +121,11 @@ type AggregateWindowInitRequestWire struct {
 	FrameStats       []byte  `vgirpc:"frame_stats"`
 	AllValid         []byte  `vgirpc:"all_valid"`
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
-	// SchemaName is the catalog schema that declares the function. A name is
+	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema. Protocol 1.2.0.
-	SchemaName *string `vgirpc:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 }
 
 // AggregateWindowInitResponseWire is the empty ack.
@@ -140,11 +140,11 @@ type AggregateWindowRequestWire struct {
 	FrameStarts      []int64 `vgirpc:"frame_starts"`
 	FrameEnds        []int64 `vgirpc:"frame_ends"`
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
-	// SchemaName is the catalog schema that declares the function. A name is
+	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema. Protocol 1.2.0.
-	SchemaName *string `vgirpc:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 }
 
 // AggregateWindowResponseWire is the wire format for aggregate_window.
@@ -163,11 +163,11 @@ type AggregateWindowBatchRequestWire struct {
 	FrameStarts      []int64 `vgirpc:"frame_starts"`
 	FrameEnds        []int64 `vgirpc:"frame_ends"`
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
-	// SchemaName is the catalog schema that declares the function. A name is
+	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema. Protocol 1.2.0.
-	SchemaName *string `vgirpc:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 }
 
 // AggregateWindowBatchResponseWire is the wire format for aggregate_window_batch.
@@ -181,11 +181,11 @@ type AggregateWindowDestructorRequestWire struct {
 	ExecutionID      []byte  `vgirpc:"execution_id"`
 	PartitionID      int64   `vgirpc:"partition_id"`
 	AttachOpaqueData *[]byte `vgirpc:"attach_opaque_data"`
-	// SchemaName is the catalog schema that declares the function. A name is
+	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema. Protocol 1.2.0.
-	SchemaName *string `vgirpc:"schema_name"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 }
 
 // AggregateWindowDestructorResponseWire is the empty ack.
@@ -211,21 +211,21 @@ func (w *Worker) registerAggregateRPCs(s *vgirpc.Server) {
 //
 // Every aggregate RPC re-resolves by name — they are stateless requests with no
 // bound connection, so the request itself carries the whole identity. Since
-// protocol 1.2.0 that includes schema_name, without which an aggregate declared
+// protocol 1.2.0 that includes schema_path, without which an aggregate declared
 // in two schemas would run whichever implementation the by-name lookup found
 // first: bind could resolve correctly and update/finalize then silently return
 // the other schema's answer.
-func (w *Worker) lookupAggregate(name string, schemaName *string, attach *[]byte, cc *vgirpc.CallContext) (AggregateFunction, error) {
+func (w *Worker) lookupAggregate(name string, schemaPath *SchemaPath, attach *[]byte, cc *vgirpc.CallContext) (AggregateFunction, error) {
 	schema := ""
-	if schemaName != nil {
-		schema = *schemaName
+	if schemaPath != nil {
+		schema = schemaPathKey(*schemaPath)
 	}
 	return w.resolveAggregate(name, schema, w.catalogOfAttachPtr(attach, cc))
 }
 
 func (w *Worker) handleAggregateBind(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateBindRequestWire) (AggregateBindResponseWire, error) {
 	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
-	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaName, req.AttachOpaqueData, callCtx)
+	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateBindResponseWire{}, err
 	}
@@ -318,7 +318,7 @@ func (w *Worker) loadAggArgs(funcName string, execID []byte, shardKey string) *A
 
 func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateUpdateRequestWire) (AggregateUpdateResponseWire, error) {
 	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
-	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaName, req.AttachOpaqueData, callCtx)
+	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateUpdateResponseWire{}, err
 	}
@@ -395,7 +395,7 @@ func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.Call
 
 func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateCombineRequestWire) (AggregateCombineResponseWire, error) {
 	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
-	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaName, req.AttachOpaqueData, callCtx)
+	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateCombineResponseWire{}, err
 	}
@@ -487,7 +487,7 @@ func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.Cal
 
 func (w *Worker) handleAggregateFinalize(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateFinalizeRequestWire) (AggregateFinalizeResponseWire, error) {
 	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
-	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaName, req.AttachOpaqueData, callCtx)
+	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateFinalizeResponseWire{}, err
 	}
@@ -566,7 +566,7 @@ func (w *Worker) handleAggregateDestructor(ctx context.Context, callCtx *vgirpc.
 
 func (w *Worker) handleAggregateWindowInit(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowInitRequestWire) (AggregateWindowInitResponseWire, error) {
 	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
-	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaName, req.AttachOpaqueData, callCtx)
+	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateWindowInitResponseWire{}, err
 	}
@@ -614,7 +614,7 @@ func (w *Worker) handleAggregateWindowInit(ctx context.Context, callCtx *vgirpc.
 
 func (w *Worker) handleAggregateWindow(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowRequestWire) (AggregateWindowResponseWire, error) {
 	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
-	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaName, req.AttachOpaqueData, callCtx)
+	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateWindowResponseWire{}, err
 	}
@@ -667,7 +667,7 @@ func (w *Worker) handleAggregateWindow(ctx context.Context, callCtx *vgirpc.Call
 // Kept symmetric with the per-row path so it works the moment it lands.
 func (w *Worker) handleAggregateWindowBatch(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowBatchRequestWire) (AggregateWindowBatchResponseWire, error) {
 	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
-	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaName, req.AttachOpaqueData, callCtx)
+	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateWindowBatchResponseWire{}, err
 	}
