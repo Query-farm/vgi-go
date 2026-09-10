@@ -33,7 +33,7 @@ type AggregateBindRequestWire struct {
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema.
-	SchemaPath    *[]string  `vgirpc:"schema_path"`
+	SchemaPath *[]string `vgirpc:"schema_path"`
 	// ArgumentNames is the complete resolved bind signature added in VGI 2.0.
 	ArgumentNames *[]*string `vgirpc:"argument_names"`
 }
