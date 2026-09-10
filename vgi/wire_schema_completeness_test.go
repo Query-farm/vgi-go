@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 
 	"github.com/Query-farm/vgi-go/vgi/generated"
 )
@@ -68,6 +70,16 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 	if err != nil {
 		t.Fatalf("SerializeSchema: %v", err)
 	}
+	defaultBuilder := array.NewInt64Builder(memory.DefaultAllocator)
+	defaultBuilder.Append(42)
+	defaultColumn := defaultBuilder.NewArray()
+	defaultBuilder.Release()
+	parameterDefaults := array.NewRecordBatch(
+		arrow.NewSchema([]arrow.Field{{Name: "limit", Type: arrow.PrimitiveTypes.Int64}}, nil),
+		[]arrow.Array{defaultColumn}, 1,
+	)
+	defaultColumn.Release()
+	t.Cleanup(parameterDefaults.Release)
 	releasedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	scanArgs := []ScanArg{{Value: "s3://bucket/x.parquet", Type: arrow.BinaryTypes.String}}
 
@@ -160,7 +172,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					FunctionType:            FunctionTypeTable,
 					ArgSchema:               columns,
 					OutputSchema:            columns,
-					ParameterDefaultValues:  []byte{0x09},
+					ParameterDefaultValues:  parameterDefaults,
 					Stability:               StabilityVolatile,
 					NullHandling:            NullHandlingDefault,
 					Description:             "scan the event log",

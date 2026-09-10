@@ -67,8 +67,9 @@ type BindRequestWire struct {
 	// level), where lookup falls back to a cross-schema search by name.
 	SchemaPath *[]string `vgirpc:"schema_path" arrow:"schema_path"`
 
-	// ArgumentNames carries the resolved name of every logical argument. Pointer
-	// elements preserve null entries for unnamed variadic arguments.
+	// ArgumentNames is aligned with the complete logical argument order. Fixed
+	// parameters carry their declared names, unnamed varargs carry nil, and
+	// named varargs retain the caller-provided name. Nil means unavailable.
 	ArgumentNames *[]*string `vgirpc:"argument_names" arrow:"argument_names"`
 }
 
@@ -1406,11 +1407,11 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 		FunctionType: FunctionType(req.FunctionType),
 		Args:         args,
 	}
-	if req.ArgumentNames != nil {
-		params.ArgumentNames = *req.ArgumentNames
-	}
 	if req.SchemaPath != nil {
 		params.SchemaPath = *req.SchemaPath
+	}
+	if req.ArgumentNames != nil {
+		params.ArgumentNames = append([]*string(nil), (*req.ArgumentNames)...)
 	}
 
 	if req.InputSchema != nil {

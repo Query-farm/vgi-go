@@ -34,7 +34,8 @@ type AggregateBindRequestWire struct {
 	// (schema, name) on a request that re-resolves by name; nil when the caller
 	// names no schema.
 	SchemaPath *[]string `vgirpc:"schema_path"`
-	// ArgumentNames is the complete resolved bind signature added in VGI 2.0.
+	// ArgumentNames is aligned with the complete logical call order. Nil means
+	// the engine could not provide names; nil elements are unnamed varargs.
 	ArgumentNames *[]*string `vgirpc:"argument_names"`
 }
 
@@ -274,7 +275,7 @@ func (w *Worker) handleAggregateBind(ctx context.Context, callCtx *vgirpc.CallCo
 		Auth:        callCtx.Auth,
 	}
 	if req.ArgumentNames != nil {
-		bp.ArgumentNames = *req.ArgumentNames
+		bp.ArgumentNames = append([]*string(nil), (*req.ArgumentNames)...)
 	}
 	resp, err := fn.OnBind(bp)
 	if err != nil {
