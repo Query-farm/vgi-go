@@ -8,6 +8,69 @@ import (
 	"fmt"
 )
 
+// nullableStringWire is the gob-safe form of a nullable string list element.
+// encoding/gob rejects nil elements in slices of pointers, which is the wire
+// shape used by BindRequestWire.ArgumentNames for unnamed arguments.
+type nullableStringWire struct {
+	Value string
+	Valid bool
+}
+
+// bindRequestGobWire keeps BindRequestWire's Arrow-facing representation out
+// of HTTP state tokens. The plain request has ArgumentNames cleared so gob
+// never encounters a nil slice element; the lossless nullable representation
+// is carried alongside it.
+type bindRequestGobWire struct {
+	Request              bindRequestGobPlain
+	ArgumentNamesPresent bool
+	ArgumentNames        []nullableStringWire
+}
+
+type bindRequestGobPlain BindRequestWire
+
+// GobEncode preserves nullable argument names when a bind request is embedded
+// in an HTTP continuation token.
+func (r BindRequestWire) GobEncode() ([]byte, error) {
+	plain := bindRequestGobPlain(r)
+	plain.ArgumentNames = nil
+	w := bindRequestGobWire{Request: plain}
+	if r.ArgumentNames != nil {
+		w.ArgumentNamesPresent = true
+		w.ArgumentNames = make([]nullableStringWire, len(*r.ArgumentNames))
+		for i, name := range *r.ArgumentNames {
+			if name != nil {
+				w.ArgumentNames[i] = nullableStringWire{Value: *name, Valid: true}
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(w); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// GobDecode restores the Arrow-facing nullable argument-name representation.
+func (r *BindRequestWire) GobDecode(data []byte) error {
+	var w bindRequestGobWire
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&w); err != nil {
+		return err
+	}
+	*r = BindRequestWire(w.Request)
+	if w.ArgumentNamesPresent {
+		names := make([]*string, len(w.ArgumentNames))
+		for i, name := range w.ArgumentNames {
+			if name.Valid {
+				value := name.Value
+				names[i] = &value
+			}
+		}
+		r.ArgumentNames = &names
+	}
+	return nil
+}
+
 // Continuation-token state serialization.
 //
 // Over the HTTP transport a stream's state is round-tripped through an opaque
