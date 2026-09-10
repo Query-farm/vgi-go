@@ -32,8 +32,10 @@ type AggregateBindRequestWire struct {
 	// SchemaPath is the catalog schema that declares the function. A name is
 	// unique only within a schema, so this is what lets the worker resolve
 	// (schema, name) on a request that re-resolves by name; nil when the caller
-	// names no schema. Protocol 1.2.0.
-	SchemaPath *[]string `vgirpc:"schema_path"`
+	// names no schema.
+	SchemaPath    *[]string  `vgirpc:"schema_path"`
+	// ArgumentNames is the complete resolved bind signature added in VGI 2.0.
+	ArgumentNames *[]*string `vgirpc:"argument_names"`
 }
 
 // AggregateBindResponseWire is the wire format for aggregate_bind responses.
@@ -270,6 +272,9 @@ func (w *Worker) handleAggregateBind(ctx context.Context, callCtx *vgirpc.CallCo
 		Settings:    settings,
 		Secrets:     secrets,
 		Auth:        callCtx.Auth,
+	}
+	if req.ArgumentNames != nil {
+		bp.ArgumentNames = *req.ArgumentNames
 	}
 	resp, err := fn.OnBind(bp)
 	if err != nil {

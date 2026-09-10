@@ -41,6 +41,7 @@ type FunctionInfo struct {
 	FunctionType              FunctionType
 	ArgSchema                 *arrow.Schema // argument schema
 	OutputSchema              *arrow.Schema // return schema
+	ParameterDefaultValues    []byte        // optional one-row Arrow IPC batch
 	Stability                 FunctionStability
 	NullHandling              NullHandling
 	Description               string
@@ -197,6 +198,15 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		outputBuilder.Append(outBytes)
 	} else {
 		outputBuilder.Append([]byte{})
+	}
+
+	// parameter_default_values
+	defaultsBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	defer defaultsBuilder.Release()
+	if info.ParameterDefaultValues != nil {
+		defaultsBuilder.Append(info.ParameterDefaultValues)
+	} else {
+		defaultsBuilder.AppendNull()
 	}
 
 	// stability
@@ -470,6 +480,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		ftBuilder.NewArray(),
 		argBuilder.NewArray(),
 		outputBuilder.NewArray(),
+		defaultsBuilder.NewArray(),
 		stabBuilder.NewArray(),
 		nhBuilder.NewArray(),
 		descBuilder.NewArray(),
