@@ -160,6 +160,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					FunctionType:            FunctionTypeTable,
 					ArgSchema:               columns,
 					OutputSchema:            columns,
+					ParameterDefaultValues:  []byte{0x09},
 					Stability:               StabilityVolatile,
 					NullHandling:            NullHandlingDefault,
 					Description:             "scan the event log",

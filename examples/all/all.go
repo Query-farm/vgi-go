@@ -57,6 +57,7 @@ func registerCopyTos(w *vgi.Worker) {
 
 func registerScalars(w *vgi.Worker) {
 	w.RegisterScalar(scalar.NewAddValues())
+	w.RegisterScalar(scalar.NewArgumentNamesProbe())
 	w.RegisterScalar(&scalar.AnyMixedIntFunction{})
 	w.RegisterScalar(&scalar.AnyMixedStrFunction{})
 	w.RegisterScalar(&scalar.BernoulliFunction{})

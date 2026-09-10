@@ -17,11 +17,12 @@ const GroupColumnName = "__vgi_group_id"
 
 // AggregateBindParams holds the parameters passed to AggregateFunction.OnBind.
 type AggregateBindParams struct {
-	Args        *Arguments
-	InputSchema *arrow.Schema
-	Settings    map[string]interface{}
-	Secrets     map[string]map[string]interface{}
-	Auth        *vgirpc.AuthContext
+	Args          *Arguments
+	InputSchema   *arrow.Schema
+	ArgumentNames []*string
+	Settings      map[string]interface{}
+	Secrets       map[string]map[string]interface{}
+	Auth          *vgirpc.AuthContext
 }
 
 // AggregateProcessParams is shared by Update/Combine/Finalize/Window callbacks.

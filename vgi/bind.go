@@ -17,6 +17,9 @@ type BindParams struct {
 	SchemaPath []string
 	// FunctionType is the type of the function.
 	FunctionType FunctionType
+	// ArgumentNames are resolved names aligned with the complete logical
+	// argument order. A nil entry represents an unnamed variadic argument.
+	ArgumentNames []*string
 	// Args are the parsed function arguments.
 	Args *Arguments
 	// InputSchema is the input table schema (nil for table functions).

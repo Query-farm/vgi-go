@@ -66,6 +66,10 @@ type BindRequestWire struct {
 	// schema to name (COPY handler binds, which are advertised at catalog
 	// level), where lookup falls back to a cross-schema search by name.
 	SchemaPath *[]string `vgirpc:"schema_path" arrow:"schema_path"`
+
+	// ArgumentNames carries the resolved name of every logical argument. Pointer
+	// elements preserve null entries for unnamed variadic arguments.
+	ArgumentNames *[]*string `vgirpc:"argument_names" arrow:"argument_names"`
 }
 
 // CopyFromContextWire is the wire form of a COPY ... FROM context, carried as a
@@ -148,6 +152,7 @@ var bindRequestWireSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "copy_from", Type: copyFromContextWireType, Nullable: true},
 	{Name: "copy_to", Type: copyToContextWireType, Nullable: true},
 	{Name: "schema_path", Type: arrow.ListOf(arrow.BinaryTypes.String), Nullable: true},
+	{Name: "argument_names", Type: arrow.ListOf(arrow.BinaryTypes.String), Nullable: true},
 }, nil)
 
 // ArrowSchema makes BindRequestWire an ArrowSerializable. The framework then
@@ -1400,6 +1405,9 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 		FunctionName: req.FunctionName,
 		FunctionType: FunctionType(req.FunctionType),
 		Args:         args,
+	}
+	if req.ArgumentNames != nil {
+		params.ArgumentNames = *req.ArgumentNames
 	}
 	if req.SchemaPath != nil {
 		params.SchemaPath = *req.SchemaPath
