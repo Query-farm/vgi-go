@@ -86,7 +86,6 @@ if [ "$TRANSPORT" = "http" ]; then
   EXTRA_SKIP=(
     -not -name 'projection_pushdown_repro.test'
     -not -name 'dynamic_filter.test'
-    -not -path './database_worker/package.test'
   )
 fi
 
@@ -250,6 +249,9 @@ case "$TRANSPORT" in shm|launch) LAUNCH_PREFIX="launch:" ;; esac
 # it stays a plain binary path, so those tests run over subprocess there rather
 # than skipping.
 export VGI_SIMPLE_WRITABLE_WORKER="${LAUNCH_PREFIX}${SIMPLE_WRITABLE}"
+# database:// installs and directly executes this package, even when the main
+# lane talks to an already-running HTTP worker.
+export VGI_DATABASE_PACKAGE_WORKER="$WORKER"
 
 case "$TRANSPORT" in
   stdio)
