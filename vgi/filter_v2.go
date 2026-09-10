@@ -862,6 +862,12 @@ func (expression *v2Expr) sql(batch arrow.RecordBatch) (string, error) {
 		}
 		return "(" + value + suffix + ")", nil
 	case "in":
+		if expression.Set.Values.Len() == 0 {
+			if expression.Negated {
+				return "TRUE", nil
+			}
+			return "FALSE", nil
+		}
 		value, err := expression.Expression.sql(batch)
 		if err != nil {
 			return "", err

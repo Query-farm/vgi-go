@@ -65,6 +65,38 @@ func TestFilterV2RequiredComparison(t *testing.T) {
 	}
 }
 
+func TestFilterV2EmptyInRendersBooleanConstants(t *testing.T) {
+	mem := memory.NewGoAllocator()
+	builder := array.NewInt64Builder(mem)
+	values := builder.NewArray()
+	builder.Release()
+	defer values.Release()
+	input := array.NewRecordBatch(int64OutputSchema(), []arrow.Array{values}, 0)
+	defer input.Release()
+
+	for _, test := range []struct {
+		negated bool
+		want    string
+	}{
+		{negated: false, want: "FALSE"},
+		{negated: true, want: "TRUE"},
+	} {
+		expression := &v2Expr{
+			Node:       "in",
+			Expression: &v2Expr{Node: "column_ref", ColumnIndex: 0, ColumnName: "n"},
+			Set:        &v2Set{Values: values},
+			Negated:    test.negated,
+		}
+		got, err := expression.sql(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != test.want {
+			t.Fatalf("empty IN negated=%t: got %q, want %q", test.negated, got, test.want)
+		}
+	}
+}
+
 func TestFilterV2ExternalInAndDeltaTombstone(t *testing.T) {
 	mem := memory.NewGoAllocator()
 	keysBuilder := array.NewInt64Builder(mem)
