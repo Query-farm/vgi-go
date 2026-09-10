@@ -266,6 +266,10 @@ type FunctionMetadata struct {
 	// Examples lists usage examples surfaced in the catalog's FunctionInfo.
 	// Each example carries SQL, a description, and an optional expected output.
 	Examples []CatalogExample
+	// ParameterDefaultValues is the authoritative typed-default record: exactly
+	// one row and only defaulted parameters, in signature order. A present null
+	// is an explicit null default. vgi_default metadata remains discovery-only.
+	ParameterDefaultValues arrow.RecordBatch
 	// ReturnType is the static return type for scalar functions.
 	// When set, the catalog registers this concrete type instead of ANY.
 	// Leave nil for functions with dynamic return types (resolved at bind time).
@@ -346,7 +350,8 @@ func DefaultMetadata() FunctionMetadata {
 
 // ArgSpec describes a single argument in a function's signature.
 type ArgSpec struct {
-	// Name is the argument name (empty for positional-only).
+	// Name is the declared parameter name. Fixed signature slots always retain
+	// it; named-only table options are identified separately by Position == -1.
 	Name string
 	// Position is the positional index (0-based). -1 for named-only.
 	Position int

@@ -608,18 +608,19 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 	// Helper to build FunctionInfo from any function type
 	buildFunctionInfo := func(name string, ft FunctionType, meta FunctionMetadata, specs []ArgSpec) FunctionInfo {
 		fi := FunctionInfo{
-			Name:            name,
-			SchemaPath:      SchemaPath{"main"},
-			FunctionType:    ft,
-			Stability:       meta.Stability,
-			NullHandling:    meta.NullHandling,
-			Description:     meta.Description,
-			Categories:      meta.Categories,
-			Tags:            meta.Tags,
-			Examples:        meta.Examples,
-			ArgSchema:       BuildArgSchema(specs),
-			OutputSchema:    arrow.NewSchema(nil, nil), // empty, resolved at bind time
-			RequiredSecrets: meta.RequiredSecrets,
+			Name:                   name,
+			SchemaPath:             SchemaPath{"main"},
+			FunctionType:           ft,
+			Stability:              meta.Stability,
+			NullHandling:           meta.NullHandling,
+			Description:            meta.Description,
+			Categories:             meta.Categories,
+			Tags:                   meta.Tags,
+			Examples:               meta.Examples,
+			ArgSchema:              BuildArgSchema(specs),
+			OutputSchema:           arrow.NewSchema(nil, nil), // empty, resolved at bind time
+			ParameterDefaultValues: meta.ParameterDefaultValues,
+			RequiredSecrets:        meta.RequiredSecrets,
 		}
 		if meta.ProjectionPushdown {
 			v := true

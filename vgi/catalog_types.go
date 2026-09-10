@@ -39,9 +39,9 @@ type FunctionInfo struct {
 	Name                      string
 	SchemaPath                []string
 	FunctionType              FunctionType
-	ArgSchema                 *arrow.Schema // argument schema
-	OutputSchema              *arrow.Schema // return schema
-	ParameterDefaultValues    []byte        // optional one-row Arrow IPC batch
+	ArgSchema                 *arrow.Schema     // argument schema
+	OutputSchema              *arrow.Schema     // return schema
+	ParameterDefaultValues    arrow.RecordBatch // optional authoritative typed defaults
 	Stability                 FunctionStability
 	NullHandling              NullHandling
 	Description               string
@@ -204,7 +204,14 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	defaultsBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
 	defer defaultsBuilder.Release()
 	if info.ParameterDefaultValues != nil {
-		defaultsBuilder.Append(info.ParameterDefaultValues)
+		if info.ParameterDefaultValues.NumRows() != 1 {
+			return nil, fmt.Errorf("parameter_default_values must contain exactly one row, got %d", info.ParameterDefaultValues.NumRows())
+		}
+		defaultBytes, err := SerializeRecordBatch(info.ParameterDefaultValues)
+		if err != nil {
+			return nil, fmt.Errorf("serialize parameter_default_values: %w", err)
+		}
+		defaultsBuilder.Append(defaultBytes)
 	} else {
 		defaultsBuilder.AppendNull()
 	}

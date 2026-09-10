@@ -17,8 +17,10 @@ const GroupColumnName = "__vgi_group_id"
 
 // AggregateBindParams holds the parameters passed to AggregateFunction.OnBind.
 type AggregateBindParams struct {
-	Args          *Arguments
-	InputSchema   *arrow.Schema
+	Args        *Arguments
+	InputSchema *arrow.Schema
+	// ArgumentNames is aligned with the complete logical call order. Nil
+	// elements denote unnamed varargs; nil means names were unavailable.
 	ArgumentNames []*string
 	Settings      map[string]interface{}
 	Secrets       map[string]map[string]interface{}
