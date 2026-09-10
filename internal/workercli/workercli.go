@@ -16,6 +16,7 @@ package workercli
 import (
 	"flag"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,8 @@ type Flags struct {
 	// need to install HTTP-only hooks (auth, OAuth metadata) before serving.
 	HTTP *bool
 
+	httpHost         *string
+	httpPort         *int
 	unixPath         *string
 	tcpAddr          *string
 	irohRaw          *string
@@ -45,6 +48,8 @@ type Flags struct {
 func Register() *Flags {
 	f := &Flags{}
 	f.HTTP = flag.Bool("http", false, "Run as HTTP server instead of stdio")
+	f.httpHost = flag.String("host", "127.0.0.1", "HTTP bind host")
+	f.httpPort = flag.Int("port", 0, "HTTP bind port (0 auto-selects)")
 	f.unixPath = flag.String("unix", "", "Bind to this AF_UNIX socket path (launcher transport); mutually exclusive with --http")
 	f.tcpAddr = flag.String("tcp", "", "Bind a raw TCP socket ([HOST:]PORT, host defaults to 127.0.0.1, port 0 auto-selects); mutually exclusive with --http/--unix")
 	f.irohRaw = flag.String("iroh-raw-upstream", "", "Bind a loopback bridge-ready raw TCP upstream at [HOST:]PORT")
@@ -71,6 +76,8 @@ func (f *Flags) Parse(args []string) error {
 	if err := flag.CommandLine.Parse(FilterKnownFlags(args, map[string]bool{
 		"unix":               true,
 		"tcp":                true,
+		"host":               true,
+		"port":               true,
 		"iroh-raw-upstream":  true,
 		"iroh-issuer":        true,
 		"iroh-trusted-proxy": true,
@@ -93,8 +100,11 @@ func (f *Flags) Parse(args []string) error {
 	if n > 1 {
 		return fmt.Errorf("--unix, --tcp, --iroh-raw-upstream, and --http are mutually exclusive")
 	}
+	if *f.httpPort < 0 || *f.httpPort > 65535 {
+		return fmt.Errorf("--port must be in 0..65535")
+	}
 	if (*f.irohRaw != "" || *f.irohIssuer != "") && *f.irohIssuer == "" {
-		return fmt.Errorf("Iroh bridge options require --iroh-issuer")
+		return fmt.Errorf("iroh bridge options require --iroh-issuer")
 	}
 	// Flush coverage on SIGTERM (+ periodic) during integration coverage runs
 	// (no-op otherwise); the harness kills pooled/long-lived workers with SIGTERM.
@@ -129,7 +139,7 @@ func (f *Flags) Serve(w *vgi.Worker) error {
 		if *f.irohIssuer != "" {
 			w.SetIrohBridge(irohOptions)
 		}
-		return w.RunHttp("127.0.0.1:0")
+		return w.RunHttp(net.JoinHostPort(*f.httpHost, strconv.Itoa(*f.httpPort)))
 	default:
 		w.RunStdio()
 		return nil

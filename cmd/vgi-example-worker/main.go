@@ -947,7 +947,7 @@ func main() {
 
 		// Reject AT clause on tables that don't support time travel
 		if atUnit != nil && *atUnit != "" {
-			return nil, fmt.Errorf("Table '%s.%s' does not support time travel queries", schemaPath, tableName)
+			return nil, fmt.Errorf("table '%s.%s' does not support time travel queries", schemaPath, tableName)
 		}
 
 		// Handle static constraint tables

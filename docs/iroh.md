@@ -13,9 +13,13 @@ worker.RunIrohTcpUpstream("127.0.0.1", 9400, vgi.IrohBridgeOptions{
 For HTTP-over-Iroh, call `SetIrohBridge` with the same options before
 `RunHttp`. The worker retains all HTTP limits, continuations, and externalized
 batch behavior. The shared worker CLI accepts `--iroh-raw-upstream`,
-`--iroh-issuer`, `--iroh-trusted-proxy`, and `--iroh-observe`.
+`--iroh-issuer`, `--iroh-trusted-proxy`, and `--iroh-observe`. A stable
+HTTP bridge upstream uses the same form as Python:
+
+```console
+worker --http --host 127.0.0.1 --port 9401 --iroh-issuer production
+```
 
 The lower-level Go RPC client exposes an Iroh provider seam rather than
 shipping a Go-native Iroh implementation. Applications may inject a provider;
 otherwise use the packaged native clients or an ordinary local bridge.
-

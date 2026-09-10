@@ -175,7 +175,7 @@ func main() {
 		}),
 		vgi.WithAttachScanFunctionGetHandler(func(attachOpaqueData []byte, schemaPath vgi.SchemaPath, name string, _ *string, _ *string) (*vgi.ScanFunctionResult, bool, error) {
 			if len(schemaPath) != 1 || schemaPath[0] != "main" {
-				return nil, true, fmt.Errorf("Unknown schema: %s", schemaPath)
+				return nil, true, fmt.Errorf("unknown schema: %s", schemaPath)
 			}
 			table, ok := tablesForAttachOpaqueData(attachOpaqueData)[name]
 			if !ok {

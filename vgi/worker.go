@@ -1350,10 +1350,10 @@ func (w *Worker) RunIrohTcpUpstream(host string, port int, idleTimeout time.Dura
 		host = "127.0.0.1"
 	}
 	if host != "127.0.0.1" && host != "::1" && host != "localhost" {
-		return fmt.Errorf("Iroh raw upstream must bind loopback, got %q", host)
+		return fmt.Errorf("iroh raw upstream must bind loopback, got %q", host)
 	}
 	if options.Issuer == "" {
-		return fmt.Errorf("Iroh bridge issuer is required")
+		return fmt.Errorf("iroh bridge issuer is required")
 	}
 	if len(options.TrustedProxyAddresses) == 0 {
 		options.TrustedProxyAddresses = []string{"127.0.0.1"}
@@ -1403,7 +1403,7 @@ func (w *Worker) RunHttp(addr string) error {
 			TrustedProxyAddresses: append([]string(nil), w.irohBridge.TrustedProxyAddresses...),
 		})
 		if providerErr != nil {
-			return fmt.Errorf("Iroh bridge identity: %w", providerErr)
+			return fmt.Errorf("iroh bridge identity: %w", providerErr)
 		}
 		hs.SetPeerIdentityProviders(provider)
 		if w.irohBridge.Authenticate {
