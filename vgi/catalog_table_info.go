@@ -4,6 +4,7 @@ package vgi
 
 import (
 	"bytes"
+	"sort"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -25,10 +26,7 @@ type TableInfo struct {
 	CheckConstraints         []string
 	PrimaryKeyConstraints    [][]int32
 	ForeignKeyConstraints    [][]byte // each []byte is an IPC-serialized FK RecordBatch
-	SupportsInsert           bool
-	SupportsUpdate           bool
-	SupportsDelete           bool
-	SupportsReturning        bool
+	WriteResultModes         map[string]string
 	SupportsColumnStatistics bool
 
 	// Optional inlined function-discovery results. When populated (non-nil),
@@ -187,21 +185,20 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		}
 	}
 
-	siBuilder := array.NewBooleanBuilder(mem)
-	defer siBuilder.Release()
-	siBuilder.Append(info.SupportsInsert)
-
-	suBuilder := array.NewBooleanBuilder(mem)
-	defer suBuilder.Release()
-	suBuilder.Append(info.SupportsUpdate)
-
-	sdBuilder := array.NewBooleanBuilder(mem)
-	defer sdBuilder.Release()
-	sdBuilder.Append(info.SupportsDelete)
-
-	srBuilder := array.NewBooleanBuilder(mem)
-	defer srBuilder.Release()
-	srBuilder.Append(info.SupportsReturning)
+	writeModesBuilder := array.NewMapBuilder(mem, arrow.BinaryTypes.String, arrow.BinaryTypes.String, false)
+	defer writeModesBuilder.Release()
+	writeModesBuilder.Append(true)
+	writeModeKeys := make([]string, 0, len(info.WriteResultModes))
+	for operation := range info.WriteResultModes {
+		writeModeKeys = append(writeModeKeys, operation)
+	}
+	sort.Strings(writeModeKeys)
+	writeModeKeyBuilder := writeModesBuilder.KeyBuilder().(*array.StringBuilder)
+	writeModeValueBuilder := writeModesBuilder.ItemBuilder().(*array.StringBuilder)
+	for _, operation := range writeModeKeys {
+		writeModeKeyBuilder.Append(operation)
+		writeModeValueBuilder.Append(info.WriteResultModes[operation])
+	}
 
 	scsBuilder := array.NewBooleanBuilder(mem)
 	defer scsBuilder.Release()
@@ -273,10 +270,7 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		checkBuilder.NewArray(),
 		pkBuilder.NewArray(),
 		fkBuilder.NewArray(),
-		siBuilder.NewArray(),
-		suBuilder.NewArray(),
-		sdBuilder.NewArray(),
-		srBuilder.NewArray(),
+		writeModesBuilder.NewArray(),
 		scsBuilder.NewArray(),
 		scanFunctionArr,
 		insertFunctionArr,

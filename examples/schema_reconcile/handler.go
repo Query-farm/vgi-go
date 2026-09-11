@@ -867,13 +867,11 @@ func buildCountBatch(n int64) arrow.RecordBatch {
 // table_get handler (returns one).
 func serializeTableInfo(spec tableSpec) ([]byte, error) {
 	info := &vgi.TableInfo{
-		Name:           spec.name,
-		SchemaPath:     vgi.SchemaPath{SchemaPath},
-		Comment:        fmt.Sprintf("schema_reconcile %s (rowid type %s)", spec.name, spec.rowidField.Type),
-		Columns:        spec.tableSchema(),
-		SupportsInsert: true,
-		SupportsUpdate: true,
-		SupportsDelete: true,
+		Name:             spec.name,
+		SchemaPath:       vgi.SchemaPath{SchemaPath},
+		Comment:          fmt.Sprintf("schema_reconcile %s (rowid type %s)", spec.name, spec.rowidField.Type),
+		Columns:          spec.tableSchema(),
+		WriteResultModes: map[string]string{"insert": "rows", "update": "rows", "delete": "rows"},
 	}
 	return vgi.SerializeTableInfo(info)
 }
