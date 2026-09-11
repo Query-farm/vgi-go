@@ -27,37 +27,30 @@ func tableArg(args *vgi.Arguments) (string, error) {
 	return name, nil
 }
 
-// wantReturning reports whether the bound output schema is the user-row schema
-// (RETURNING requested) rather than the (count) schema.
-func wantReturning(out *arrow.Schema) bool {
-	return out == nil || out.NumFields() != 1 || out.Field(0).Name != "count"
-}
-
-// returnChunks decodes write_options.return_chunks (a serialized 1-row batch
-// passed as a named blob argument, mirroring vgi-python). Absent/false → count.
-func returnChunks(args *vgi.Arguments) bool {
+// resultMode decodes write_options.result_mode. An absent option requests count.
+func resultMode(args *vgi.Arguments) string {
 	if args == nil {
-		return false
+		return "count"
 	}
 	if _, err := args.GetColumn("write_options"); err != nil {
-		return false
+		return "count"
 	}
 	blob, err := args.GetScalarBytes("write_options")
 	if err != nil || len(blob) == 0 {
-		return false
+		return "count"
 	}
 	b, err := vgi.DeserializeRecordBatch(blob)
 	if err != nil {
-		return false
+		return "count"
 	}
 	defer b.Release()
-	idxs := b.Schema().FieldIndices("return_chunks")
+	idxs := b.Schema().FieldIndices("result_mode")
 	if len(idxs) == 0 || b.NumRows() == 0 {
-		return false
+		return "count"
 	}
-	col, ok := b.Column(idxs[0]).(*array.Boolean)
+	col, ok := b.Column(idxs[0]).(*array.String)
 	if !ok || col.IsNull(0) {
-		return false
+		return "count"
 	}
 	return col.Value(0)
 }
@@ -125,18 +118,8 @@ func rowMapFromBatch(batch arrow.RecordBatch, cols []string, i int) (rowMap, err
 	return r, nil
 }
 
-// emitRowsOrCount emits the affected rows (user schema) when returning, else a
-// 1-row (count) batch. Releases the batch it emits.
-func emitRowsOrCount(out *vgirpc.OutputCollector, us *arrow.Schema, rows []rowMap, returning bool) error {
-	if !returning {
-		counts, err := buildColumn(countSchema.Field(0), []any{int64(len(rows))})
-		if err != nil {
-			return err
-		}
-		batch := array.NewRecordBatch(countSchema, []arrow.Array{counts}, 1)
-		counts.Release()
-		return out.Emit(batch)
-	}
+// emitRows emits affected rows using the visible table schema.
+func emitRows(out *vgirpc.OutputCollector, us *arrow.Schema, rows []rowMap) error {
 	cols := make([]arrow.Array, us.NumFields())
 	for fi, f := range us.Fields() {
 		vals := make([]any, len(rows))
@@ -156,11 +139,93 @@ func emitRowsOrCount(out *vgirpc.OutputCollector, us *arrow.Schema, rows []rowMa
 	return out.Emit(batch)
 }
 
+func appendStructRow(sb *array.StructBuilder, schema *arrow.Schema, row rowMap) error {
+	sb.Append(row != nil)
+	for i, field := range schema.Fields() {
+		value := any(nil)
+		if row != nil {
+			value = row[field.Name]
+		}
+		switch child := sb.FieldBuilder(i).(type) {
+		case *array.Int64Builder:
+			if value == nil {
+				child.AppendNull()
+			} else {
+				child.Append(value.(int64))
+			}
+		case *array.StringBuilder:
+			if value == nil {
+				child.AppendNull()
+			} else {
+				child.Append(value.(string))
+			}
+		default:
+			return fmt.Errorf("simple_writable: unsupported change field type %s", field.Type)
+		}
+	}
+	return nil
+}
+
+func emitWriteResult(out *vgirpc.OutputCollector, us *arrow.Schema, oldRows, newRows []rowMap, mode string) error {
+	rowCount := len(oldRows)
+	if len(newRows) > rowCount {
+		rowCount = len(newRows)
+	}
+	if mode == "count" {
+		counts, err := buildColumn(countSchema.Field(0), []any{int64(rowCount)})
+		if err != nil {
+			return err
+		}
+		batch := array.NewRecordBatch(countSchema, []arrow.Array{counts}, 1)
+		counts.Release()
+		return out.Emit(batch)
+	}
+	if mode == "rows" {
+		if newRows != nil {
+			return emitRows(out, us, newRows)
+		}
+		return emitRows(out, us, oldRows)
+	}
+	if mode != "changes" {
+		return fmt.Errorf("simple_writable: unknown result mode %q", mode)
+	}
+	rowType := arrow.StructOf(us.Fields()...)
+	oldBuilder := array.NewStructBuilder(memory.NewGoAllocator(), rowType)
+	defer oldBuilder.Release()
+	newBuilder := array.NewStructBuilder(memory.NewGoAllocator(), rowType)
+	defer newBuilder.Release()
+	for i := 0; i < rowCount; i++ {
+		var oldRow, newRow rowMap
+		if i < len(oldRows) {
+			oldRow = oldRows[i]
+		}
+		if i < len(newRows) {
+			newRow = newRows[i]
+		}
+		if err := appendStructRow(oldBuilder, us, oldRow); err != nil {
+			return err
+		}
+		if err := appendStructRow(newBuilder, us, newRow); err != nil {
+			return err
+		}
+	}
+	oldArray := oldBuilder.NewStructArray()
+	defer oldArray.Release()
+	newArray := newBuilder.NewStructArray()
+	defer newArray.Release()
+	resultSchema := arrow.NewSchema([]arrow.Field{
+		{Name: "old", Type: rowType, Nullable: true},
+		{Name: "new", Type: rowType, Nullable: true},
+	}, nil)
+	batch := array.NewRecordBatch(resultSchema, []arrow.Array{oldArray, newArray}, int64(rowCount))
+	return out.Emit(batch)
+}
+
 func writeArgSpecs() []vgi.ArgSpec {
 	return []vgi.ArgSpec{
 		{Name: "table_name", Position: 0, ArrowType: "varchar", IsConst: true, ArrowDataType: arrow.BinaryTypes.String, Doc: "Target table"},
 		{Name: "data", Position: 1, ArrowType: "table", Doc: "Rows to write"},
-		{Name: "write_options", Position: -1, IsConst: true, HasDefault: true, ArrowType: "blob", ArrowDataType: arrow.BinaryTypes.Binary, Doc: "Serialized write options (return_chunks, ...)"},
+		{Name: "write_options", Position: -1, IsConst: true, HasDefault: true, ArrowType: "blob", ArrowDataType: arrow.BinaryTypes.Binary, Doc: "Serialized write options (result_mode, ...)"},
 	}
 }
 
@@ -269,8 +334,16 @@ func (insertFn) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
 	if !ok {
 		return nil, fmt.Errorf("simple_writable: unknown table %q", table)
 	}
-	if returnChunks(params.Args) {
+	mode := resultMode(params.Args)
+	if mode == "rows" {
 		return &vgi.BindResponse{OutputSchema: us}, nil
+	}
+	if mode == "changes" {
+		rowType := arrow.StructOf(us.Fields()...)
+		return &vgi.BindResponse{OutputSchema: arrow.NewSchema([]arrow.Field{
+			{Name: "old", Type: rowType, Nullable: true},
+			{Name: "new", Type: rowType, Nullable: true},
+		}, nil)}, nil
 	}
 	return &vgi.BindResponse{OutputSchema: countSchema}, nil
 }
@@ -283,7 +356,7 @@ func (insertFn) Process(ctx context.Context, params *vgi.ProcessParams, _ *noSta
 		return err
 	}
 	us, _ := userSchema(mustTable(params))
-	return emitRowsOrCount(out, us, inserted, wantReturning(params.OutputSchema))
+	return emitWriteResult(out, us, nil, inserted, resultMode(params.Args))
 }
 
 func (insertFn) Finalize(ctx context.Context, params *vgi.ProcessParams, _ *noState) ([]arrow.RecordBatch, error) {
@@ -378,6 +451,7 @@ func (updateFn) Process(ctx context.Context, params *vgi.ProcessParams, _ *noSta
 			updateCols = append(updateCols, f.Name)
 		}
 	}
+	oldRows := make([]rowMap, 0, batch.NumRows())
 	updated := make([]rowMap, 0, batch.NumRows())
 	for i := 0; i < int(batch.NumRows()); i++ {
 		rv, err := cellValue(ridCol, i)
@@ -395,6 +469,10 @@ func (updateFn) Process(ctx context.Context, params *vgi.ProcessParams, _ *noSta
 		if existing == nil {
 			return fmt.Errorf("simple_writable: update target rowid %d not in table %s", rid, table)
 		}
+		oldRow := make(rowMap, len(existing))
+		for key, value := range existing {
+			oldRow[key] = value
+		}
 		patch, err := rowMapFromBatch(batch, updateCols, i)
 		if err != nil {
 			return err
@@ -405,9 +483,10 @@ func (updateFn) Process(ctx context.Context, params *vgi.ProcessParams, _ *noSta
 		if err := putRow(st, table, rid, existing); err != nil {
 			return err
 		}
+		oldRows = append(oldRows, oldRow)
 		updated = append(updated, existing)
 	}
-	return emitRowsOrCount(out, us, updated, wantReturning(params.OutputSchema))
+	return emitWriteResult(out, us, oldRows, updated, resultMode(params.Args))
 }
 
 // ---------------------------------------------------------------------------
@@ -472,7 +551,7 @@ func (deleteFn) Process(ctx context.Context, params *vgi.ProcessParams, _ *noSta
 		}
 		deleted = append(deleted, existing)
 	}
-	return emitRowsOrCount(out, us, deleted, wantReturning(params.OutputSchema))
+	return emitWriteResult(out, us, deleted, nil, resultMode(params.Args))
 }
 
 // writeOnBind is the shared OnBind for update/delete: user schema when
@@ -486,8 +565,16 @@ func writeOnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
 	if !ok {
 		return nil, fmt.Errorf("simple_writable: unknown table %q", table)
 	}
-	if returnChunks(params.Args) {
+	mode := resultMode(params.Args)
+	if mode == "rows" {
 		return &vgi.BindResponse{OutputSchema: us}, nil
+	}
+	if mode == "changes" {
+		rowType := arrow.StructOf(us.Fields()...)
+		return &vgi.BindResponse{OutputSchema: arrow.NewSchema([]arrow.Field{
+			{Name: "old", Type: rowType, Nullable: true},
+			{Name: "new", Type: rowType, Nullable: true},
+		}, nil)}, nil
 	}
 	return &vgi.BindResponse{OutputSchema: countSchema}, nil
 }
@@ -510,7 +597,7 @@ func (brokenInsertFn) Finalize(ctx context.Context, params *vgi.ProcessParams, _
 	return nil, nil
 }
 
-// OnBind always advertises the count surface, even when return_chunks=true —
+// OnBind always advertises the count surface, even when result_mode=rows —
 // the mismatch is what exercises the extension's runtime RETURNING validation.
 func (brokenInsertFn) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
 	return &vgi.BindResponse{OutputSchema: countSchema}, nil
@@ -521,5 +608,5 @@ func (brokenInsertFn) Process(ctx context.Context, params *vgi.ProcessParams, _ 
 		return err
 	}
 	// Always emit count regardless of what was requested — that's the bug.
-	return emitRowsOrCount(out, nil, make([]rowMap, batch.NumRows()), false)
+	return emitWriteResult(out, countSchema, make([]rowMap, batch.NumRows()), nil, "count")
 }

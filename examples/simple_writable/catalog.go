@@ -47,8 +47,7 @@ func rowIDField() arrow.Field {
 	return arrow.Field{Name: "rowid", Type: arrow.PrimitiveTypes.Int64, Nullable: false, Metadata: rowIDMeta}
 }
 
-// countSchema is the affected-row-count result emitted when RETURNING is not
-// requested (write_options.return_chunks=false).
+// countSchema is the affected-row-count result emitted for result_mode=count.
 var countSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "count", Type: arrow.PrimitiveTypes.Int64},
 }, nil)
@@ -83,7 +82,15 @@ func userSchema(table string) (*arrow.Schema, bool) {
 	return s, ok
 }
 
-func supportsReturning(table string) bool { return table != "items_no_returning" }
+func maximumResultMode(table string) string {
+	if table == "items_no_returning" {
+		return "count"
+	}
+	if table == "items_broken_returning" {
+		return "rows"
+	}
+	return "changes"
+}
 
 func supportsUpdateDelete(table string) bool {
 	return table != "items_insert_only" && table != "items_broken_returning"
@@ -111,14 +118,16 @@ func tableInfo(table string) (*vgi.TableInfo, bool) {
 	}
 	fields := append(append([]arrow.Field{}, us.Fields()...), rowIDField())
 	ud := supportsUpdateDelete(table)
+	modes := map[string]string{"insert": maximumResultMode(table)}
+	if ud {
+		modes["update"] = maximumResultMode(table)
+		modes["delete"] = maximumResultMode(table)
+	}
 	return &vgi.TableInfo{
-		Name:              table,
-		SchemaPath:        vgi.SchemaPath{SchemaPath},
-		Columns:           arrow.NewSchema(fields, nil),
-		SupportsInsert:    true,
-		SupportsUpdate:    ud,
-		SupportsDelete:    ud,
-		SupportsReturning: supportsReturning(table),
+		Name:             table,
+		SchemaPath:       vgi.SchemaPath{SchemaPath},
+		Columns:          arrow.NewSchema(fields, nil),
+		WriteResultModes: modes,
 	}, true
 }
 

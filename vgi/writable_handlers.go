@@ -424,9 +424,7 @@ func tableInfoFromWritable(t *writableTable, schemaPath SchemaPath) (*TableInfo,
 		PrimaryKeyConstraints:    primaryKey,
 		ForeignKeyConstraints:    fkBytes,
 		CheckConstraints:         t.check,
-		SupportsInsert:           true,
-		SupportsUpdate:           true,
-		SupportsDelete:           true,
+		WriteResultModes:         map[string]string{"insert": "count", "update": "count", "delete": "count"},
 		SupportsColumnStatistics: false,
 	}, nil
 }
