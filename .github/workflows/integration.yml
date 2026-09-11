@@ -2,7 +2,7 @@
 # example worker on every push / PR. Rather than building the C++ extension from
 # source, it drives a prebuilt standalone `haybarn-unittest` and installs the
 # SIGNED vgi extension from the Haybarn community channel + its deps from core.
-# The .test files come from a pinned Query-farm/vgi checkout; ci/run-integration.sh
+# The .test files come from Query-farm/vgi main; ci/run-integration.sh
 # + ci/preprocess-require.awk adapt them for the standalone runner. See ci/README.md.
 name: Integration suite
 
@@ -31,7 +31,41 @@ env:
   # community-published vgi extension, mirroring the vgi-typescript CI.
 
 jobs:
+  build-worker:
+    name: Build workers once
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout vgi-go
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Build example workers (coverage-instrumented)
+        run: make build COVER=1
+
+      # Archive before upload because upload-artifact does not preserve the
+      # executable bit required by subprocess and launcher transports.
+      - name: Package workers
+        run: |
+          tar -czf vgi-go-workers.tar.gz \
+            vgi-example-worker-go \
+            vgi-example-versioned-worker-go \
+            vgi-example-versioned-tables-worker-go \
+            vgi-example-attach-options-worker-go \
+            vgi-example-simple-writable-worker-go
+
+      - name: Upload workers
+        uses: actions/upload-artifact@v4
+        with:
+          name: vgi-go-workers-${{ github.sha }}
+          path: vgi-go-workers.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
   integration:
+    needs: build-worker
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -54,7 +88,7 @@ jobs:
       - name: Checkout vgi-go
         uses: actions/checkout@v4
 
-      - name: Checkout pinned vgi test suite
+      - name: Checkout current vgi test suite
         uses: actions/checkout@v4
         with:
           repository: Query-farm/vgi
@@ -65,9 +99,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          cache: false
 
-      - name: Build example workers (coverage-instrumented)
-        run: make build COVER=1
+      - name: Download workers
+        uses: actions/download-artifact@v4
+        with:
+          name: vgi-go-workers-${{ github.sha }}
+
+      - name: Extract workers
+        run: tar -xzf vgi-go-workers.tar.gz
 
       - name: Resolve latest haybarn release
         run: |

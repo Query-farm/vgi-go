@@ -17,15 +17,17 @@ Haybarn vcpkg pipeline), CI drives a **prebuilt** standalone `haybarn-unittest`
 (the DuckDB/Haybarn sqllogictest runner, published in Haybarn's releases) and
 installs the **signed** vgi extension from the Haybarn community channel:
 
-1. **Build the workers** — `make build` produces the five dedicated worker
+1. **Build the workers once** — a producer job runs `make build COVER=1` and
+   publishes one executable-preserving archive for every transport lane. It
+   contains the five dedicated worker
    binaries (`vgi-example-worker-go` plus the versioned / versioned-tables /
    attach-options / simple-writable workers). All five accept `--unix`, so the
    launcher lane can front every one of them with `launch:`. The RPC layer is
    the published `github.com/Query-farm/vgi-rpc-go` module, so nothing else
    builds from source.
-2. **Checkout the test suite** — `Query-farm/vgi` at a pinned commit; its
+2. **Checkout the test suite** — `Query-farm/vgi` at `main`; its
    `test/sql/integration/*.test` files are the suite.
-3. **Download the runner** — `haybarn_unittest-linux-amd64.zip` from the pinned
+3. **Download the runner** — `haybarn_unittest-linux-amd64.zip` from the latest
    Haybarn release.
 4. **Preprocess** — the standalone runner links none of the extensions the tests
    gate on, so [`preprocess-require.awk`](preprocess-require.awk) rewrites each
