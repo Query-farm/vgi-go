@@ -61,11 +61,17 @@ const (
 type ArgumentMonotonicity string
 
 const (
-	ArgumentMonotonicityUnknown            ArgumentMonotonicity = "UNKNOWN"
-	ArgumentMonotonicityConstant           ArgumentMonotonicity = "CONSTANT"
-	ArgumentMonotonicityNonDecreasing      ArgumentMonotonicity = "NON_DECREASING"
+	// ArgumentMonotonicityUnknown makes no monotonicity claim for the argument.
+	ArgumentMonotonicityUnknown ArgumentMonotonicity = "UNKNOWN"
+	// ArgumentMonotonicityConstant says the result does not vary with the argument.
+	ArgumentMonotonicityConstant ArgumentMonotonicity = "CONSTANT"
+	// ArgumentMonotonicityNonDecreasing says increasing the argument cannot decrease the result.
+	ArgumentMonotonicityNonDecreasing ArgumentMonotonicity = "NON_DECREASING"
+	// ArgumentMonotonicityStrictlyIncreasing says increasing the argument strictly increases the result.
 	ArgumentMonotonicityStrictlyIncreasing ArgumentMonotonicity = "STRICTLY_INCREASING"
-	ArgumentMonotonicityNonIncreasing      ArgumentMonotonicity = "NON_INCREASING"
+	// ArgumentMonotonicityNonIncreasing says increasing the argument cannot increase the result.
+	ArgumentMonotonicityNonIncreasing ArgumentMonotonicity = "NON_INCREASING"
+	// ArgumentMonotonicityStrictlyDecreasing says increasing the argument strictly decreases the result.
 	ArgumentMonotonicityStrictlyDecreasing ArgumentMonotonicity = "STRICTLY_DECREASING"
 )
 
