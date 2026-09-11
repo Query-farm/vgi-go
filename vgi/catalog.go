@@ -613,6 +613,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			FunctionType:           ft,
 			Stability:              meta.Stability,
 			NullHandling:           meta.NullHandling,
+			ArgumentMonotonicity:   meta.ArgumentMonotonicity,
 			Description:            meta.Description,
 			Categories:             meta.Categories,
 			Tags:                   meta.Tags,

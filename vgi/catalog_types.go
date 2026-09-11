@@ -44,6 +44,7 @@ type FunctionInfo struct {
 	ParameterDefaultValues    arrow.RecordBatch // optional authoritative typed defaults
 	Stability                 FunctionStability
 	NullHandling              NullHandling
+	ArgumentMonotonicity      []ArgumentMonotonicity
 	Description               string
 	Comment                   string
 	Tags                      map[string]string
@@ -126,6 +127,27 @@ var functionInfoSchema = generated.FunctionInfoSchema
 
 // SerializeFunctionInfo serializes a FunctionInfo to IPC bytes.
 func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
+	if info.ArgumentMonotonicity != nil {
+		if info.FunctionType != FunctionTypeScalar {
+			return nil, fmt.Errorf("argument_monotonicity is only valid for scalar functions")
+		}
+		argumentCount := 0
+		if info.ArgSchema != nil {
+			argumentCount = len(info.ArgSchema.Fields())
+		}
+		if len(info.ArgumentMonotonicity) != argumentCount {
+			return nil, fmt.Errorf("argument_monotonicity has %d entries, expected %d declaration slots", len(info.ArgumentMonotonicity), argumentCount)
+		}
+		for i, value := range info.ArgumentMonotonicity {
+			switch value {
+			case ArgumentMonotonicityUnknown, ArgumentMonotonicityConstant,
+				ArgumentMonotonicityNonDecreasing, ArgumentMonotonicityStrictlyIncreasing,
+				ArgumentMonotonicityNonIncreasing, ArgumentMonotonicityStrictlyDecreasing:
+			default:
+				return nil, fmt.Errorf("argument_monotonicity[%d] has unknown value %q", i, value)
+			}
+		}
+	}
 	unsupportedExtension := false
 	for _, capability := range info.AdditionalFilterFunctions {
 		if capability.Namespace != "duckdb.spatial" || capability.Name != "intersects_extent" || capability.Version != 1 {
@@ -232,6 +254,19 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		nhBuilder.(*array.BinaryDictionaryBuilder).AppendString(string(info.NullHandling))
 	} else {
 		nhBuilder.AppendNull()
+	}
+
+	// argument_monotonicity (nullable list; non-null elements)
+	amBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer amBuilder.Release()
+	if info.ArgumentMonotonicity == nil {
+		amBuilder.AppendNull()
+	} else {
+		amBuilder.Append(true)
+		values := amBuilder.ValueBuilder().(*array.StringBuilder)
+		for _, value := range info.ArgumentMonotonicity {
+			values.Append(string(value))
+		}
 	}
 
 	// description
@@ -490,6 +525,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		defaultsBuilder.NewArray(),
 		stabBuilder.NewArray(),
 		nhBuilder.NewArray(),
+		amBuilder.NewArray(),
 		descBuilder.NewArray(),
 		examplesBuilder.NewArray(),
 		categoriesBuilder.NewArray(),

@@ -56,6 +56,19 @@ const (
 	NullHandlingReceiveNulls = NullHandlingSpecial
 )
 
+// ArgumentMonotonicity describes how a scalar function's result changes with
+// one argument while every other argument is held constant.
+type ArgumentMonotonicity string
+
+const (
+	ArgumentMonotonicityUnknown            ArgumentMonotonicity = "UNKNOWN"
+	ArgumentMonotonicityConstant           ArgumentMonotonicity = "CONSTANT"
+	ArgumentMonotonicityNonDecreasing      ArgumentMonotonicity = "NON_DECREASING"
+	ArgumentMonotonicityStrictlyIncreasing ArgumentMonotonicity = "STRICTLY_INCREASING"
+	ArgumentMonotonicityNonIncreasing      ArgumentMonotonicity = "NON_INCREASING"
+	ArgumentMonotonicityStrictlyDecreasing ArgumentMonotonicity = "STRICTLY_DECREASING"
+)
+
 // PartitionKind describes the partition shape a table function declares over
 // its vgi.partition_column-annotated bind-schema fields. These values are
 // DuckDB wire-protocol dictionary constants and must not be changed.
@@ -210,6 +223,9 @@ type FunctionMetadata struct {
 	Stability FunctionStability
 	// NullHandling controls whether NULLs are passed to the function.
 	NullHandling NullHandling
+	// ArgumentMonotonicity is scalar-only and follows ArgumentSpecs declaration
+	// order. Nil makes no claims; a vararg declaration occupies one slot.
+	ArgumentMonotonicity []ArgumentMonotonicity
 	// ProjectionPushdown indicates support for projection pushdown.
 	ProjectionPushdown bool
 	// FilterPushdown indicates support for filter pushdown.

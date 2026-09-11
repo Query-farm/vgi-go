@@ -67,7 +67,14 @@ type addArgs struct {
 }
 
 func (*AddInts) Name() string               { return "add_ints" }
-func (*AddInts) Metadata() vgi.FunctionMetadata { return vgi.FunctionMetadata{} }
+func (*AddInts) Metadata() vgi.FunctionMetadata {
+    return vgi.FunctionMetadata{
+        ArgumentMonotonicity: []vgi.ArgumentMonotonicity{
+            vgi.ArgumentMonotonicityStrictlyIncreasing,
+            vgi.ArgumentMonotonicityStrictlyIncreasing,
+        },
+    }
+}
 
 func (*AddInts) OnBindTyped(_ *addArgs, _ *vgi.BindParams) (*vgi.BindResponse, error) {
     return vgi.BindResult(arrow.PrimitiveTypes.Int64)
@@ -86,6 +93,11 @@ func main() {
     w.RunStdio()
 }
 ```
+
+`ArgumentMonotonicity` is optional and scalar-only. When present, its entries
+follow the ordered argument declarations: fixed, defaulted, and constant
+arguments each use one slot, and a vararg declaration uses one slot regardless
+of call-time expansion. Named SQL argument order does not reorder the list.
 
 Build it (`go build -o my-worker .`), then install the VGI extension, attach the
 worker, and call the function from DuckDB:
