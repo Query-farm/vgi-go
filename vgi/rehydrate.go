@@ -180,7 +180,20 @@ func replayFilterDeltas(params *ProcessParams, deltas [][]byte) error {
 }
 
 func (w *Worker) rehydrateFinalize(s *FinalizeProducerState) error {
-	// Deserialize batches from IPC bytes
+	// Offloaded flush: the batches live in the execution-scoped state log and
+	// produceFromLog reads only the one it needs. Decoding anything here would
+	// put the whole flush back on every turn, which is the O(N^2) this avoids.
+	// Re-deriving the handle is what lets a cold worker resume: the backend is
+	// the shared FunctionStorage, not this process's memory.
+	if len(s.LogKey) > 0 {
+		storage, err := w.getOrCreateStorage(context.Background(), s.Recipe.ExecutionID, s.Recipe.ShardKey)
+		if err != nil {
+			return fmt.Errorf("reopening storage for offloaded finalize flush: %w", err)
+		}
+		s.storage = storage
+		return nil
+	}
+	// Inline carry: pre-offload, or a backend with no state log.
 	s.batches = make([]arrow.RecordBatch, 0, len(s.BatchIPC))
 	for _, data := range s.BatchIPC {
 		batch, err := DeserializeRecordBatch(data)

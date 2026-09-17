@@ -93,7 +93,10 @@ func (r *BindRequestWire) GobDecode(data []byte) error {
 // moment the framework serializes the token, so resumes observe the current
 // position. It runs only when a token is actually written (HTTP continuations),
 // adding no per-tick cost to the in-memory transports. FinalizeProducerState
-// does not need this — it keeps its position in an exported field (BatchIdx).
+// keeps its position in an exported field, so it needs no state snapshot — but
+// it uses the same "only when a token is written" hook for a different reason:
+// to move its flush out of the token and into the state log the first time one
+// is written. See FinalizeProducerState.GobEncode below.
 
 // tableProducerWire is the gob wire form of TableProducerState: the exported
 // snapshot fields only (the transient fn/params/state are rebuilt by rehydrate).
@@ -135,6 +138,55 @@ func (s *TableProducerState) GobDecode(data []byte) error {
 	s.Recipe = w.Recipe
 	s.UserStateBytes = w.UserStateBytes
 	s.AutoProjectIDs = w.AutoProjectIDs
+	return nil
+}
+
+// finalizeProducerWire is the gob wire form of FinalizeProducerState. Once the
+// flush has been offloaded to the state log BatchIPC is empty, so the token is
+// a fixed handful of bytes however large the flush was.
+type finalizeProducerWire struct {
+	Recipe    InitRecipe
+	BatchIPC  [][]byte
+	BatchIdx  int
+	LogKey    []byte
+	LogCursor int64
+	CacheMeta map[string]string
+}
+
+// GobEncode offloads the remaining flush to the execution-scoped state log the
+// first time a continuation token is written for this stream, then encodes the
+// wire form. Doing it here rather than at init is what keeps the byte-stream
+// transports free: they never write a token, so they never touch storage and
+// keep the in-memory drain they have today. See FinalizeProducerState.
+func (s *FinalizeProducerState) GobEncode() ([]byte, error) {
+	s.offloadFlush()
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(finalizeProducerWire{
+		Recipe:    s.Recipe,
+		BatchIPC:  s.BatchIPC,
+		BatchIdx:  s.BatchIdx,
+		LogKey:    s.LogKey,
+		LogCursor: s.LogCursor,
+		CacheMeta: s.CacheMeta,
+	}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// GobDecode restores the exported wire fields; the storage handle and any
+// inline batches are rebuilt by rehydrateFinalize.
+func (s *FinalizeProducerState) GobDecode(data []byte) error {
+	var w finalizeProducerWire
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&w); err != nil {
+		return err
+	}
+	s.Recipe = w.Recipe
+	s.BatchIPC = w.BatchIPC
+	s.BatchIdx = w.BatchIdx
+	s.LogKey = w.LogKey
+	s.LogCursor = w.LogCursor
+	s.CacheMeta = w.CacheMeta
 	return nil
 }
 

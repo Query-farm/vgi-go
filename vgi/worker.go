@@ -1518,6 +1518,15 @@ func newExecutionID() []byte {
 	return id[:]
 }
 
+// newFinalizeLogKey mints a state-log key unique to one finalize stream. A
+// parallel query opens several finalize substreams under a single
+// execution_id, so a shared constant key would let them drain each other's
+// batches.
+func newFinalizeLogKey() []byte {
+	id := uuid.New()
+	return append([]byte("\x00vgi.tio.finalize."), id[:]...)
+}
+
 // getOrCreateStorage returns or creates an ExecutionStorage for the given
 // execution ID. The wrapper binds against the worker's shared FunctionStorage
 // backend (initialized lazily on first call) so every execution in the

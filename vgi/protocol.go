@@ -520,11 +520,39 @@ func selectColumnsByName(src arrow.RecordBatch, schema *arrow.Schema) (arrow.Rec
 }
 
 // FinalizeProducerState implements ProducerState for table-in-out FINALIZE phase.
+//
+// A flush is drained one batch per turn. Over HTTP each turn is a separate
+// request that rebuilds this state from a continuation token, so a flush of N
+// batches costs N turns — and carrying the flush itself in the token makes
+// every one of those turns pay for all N batches again: O(N^2) bytes on the
+// wire and O(N^2) IPC decodes in rehydrateFinalize. At N=5000 that was 12.5M
+// decodes, and one query took 161s over HTTP against 1s over launch.
+//
+// So the flush is offloaded to the worker's execution-scoped state log the
+// first time a token is actually written (see GobEncode in state_serialize.go)
+// and only LogCursor rides the token after that. The log lives in the shared,
+// durable FunctionStorage backend — the same place vgi-python's
+// BufferedFinalizeState drains from — so a continuation arriving at a worker
+// that has never seen this stream still resumes from the token alone. Byte-
+// stream transports never serialize a token, so they never offload and keep
+// the in-memory drain unchanged.
 type FinalizeProducerState struct {
 	Recipe   InitRecipe          // exported, serialized
-	BatchIPC [][]byte            // exported, serialized finalize batch IPC bytes
-	BatchIdx int                 // exported, current emission position
+	BatchIPC [][]byte            // exported, remaining flush IPC bytes (pre-offload only)
+	BatchIdx int                 // exported, current emission position within BatchIPC
 	batches  []arrow.RecordBatch // transient (deserialized from BatchIPC)
+	// LogKey names this stream's slot in the execution-scoped state log once
+	// the flush has been offloaded there; empty means the flush is still
+	// carried inline in BatchIPC. Unique per stream, so the several finalize
+	// substreams a parallel query opens under one execution_id cannot drain
+	// each other's batches.
+	LogKey []byte
+	// LogCursor is the state-log id of the last batch emitted; -1 is
+	// before-first. Meaningful only when LogKey is set.
+	LogCursor int64
+	// storage is the transient handle used to append to and scan the log. Set
+	// at init and re-derived by rehydrateFinalize on every resumed turn.
+	storage *ExecutionStorage
 	// CacheMeta, when non-nil, is attached to every emitted finalize batch.
 	// Set from FunctionMetadata.CacheControl so a table-buffering function can
 	// advertise vgi.cache.* on its finalize output for the exchange-mode
@@ -536,6 +564,9 @@ type FinalizeProducerState struct {
 // Produce emits the next buffered finalize batch to the output collector, finishing
 // the stream once all batches have been emitted.
 func (s *FinalizeProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
+	if len(s.LogKey) > 0 {
+		return s.produceFromLog(out)
+	}
 	if s.BatchIdx >= len(s.batches) {
 		s.batches = nil
 		return out.Finish()
@@ -547,6 +578,68 @@ func (s *FinalizeProducerState) Produce(ctx context.Context, out *vgirpc.OutputC
 		return out.EmitWithMetadata(batch, s.CacheMeta)
 	}
 	return out.Emit(batch)
+}
+
+// produceFromLog emits the next offloaded flush batch, reading exactly one row
+// past LogCursor. One row per turn is what keeps an N-batch flush linear: a
+// turn touches its own batch and nothing else.
+func (s *FinalizeProducerState) produceFromLog(out *vgirpc.OutputCollector) error {
+	if s.storage == nil {
+		return fmt.Errorf("resuming an offloaded FINALIZE flush requires storage, which is unavailable")
+	}
+	entries, err := s.storage.StateLogScan(s.LogKey, s.LogCursor, 1)
+	if err != nil {
+		return fmt.Errorf("scanning offloaded finalize flush: %w", err)
+	}
+	if len(entries) == 0 {
+		return out.Finish()
+	}
+	batch, err := DeserializeRecordBatch(entries[0].Value)
+	if err != nil {
+		return fmt.Errorf("deserializing finalize batch: %w", err)
+	}
+	s.LogCursor = entries[0].ID
+	if s.CacheMeta != nil {
+		return out.EmitWithMetadata(batch, s.CacheMeta)
+	}
+	return out.Emit(batch)
+}
+
+// offloadFlush moves the not-yet-emitted batches into the execution-scoped
+// state log and switches this state over to the cursor-drained form. Called
+// only from GobEncode — i.e. only when a continuation token is actually being
+// written. Returns false, leaving the state untouched and still correct, when
+// the backend cannot serve a log: an exotic FunctionStorage degrades to the
+// old inline carry rather than failing the stream.
+func (s *FinalizeProducerState) offloadFlush() bool {
+	if len(s.LogKey) > 0 {
+		return true
+	}
+	if s.storage == nil {
+		return false
+	}
+	start := s.BatchIdx
+	if start > len(s.BatchIPC) {
+		start = len(s.BatchIPC)
+	}
+	remaining := s.BatchIPC[start:]
+	// One remaining batch needs no log: it fits in the turn that follows.
+	if len(remaining) < 2 {
+		return false
+	}
+	key := newFinalizeLogKey()
+	for _, data := range remaining {
+		if _, err := s.storage.StateAppend(key, data); err != nil {
+			LogRPC.Debug("finalize: state-log offload unavailable, carrying flush inline", "err", err)
+			return false
+		}
+	}
+	s.LogKey = key
+	s.LogCursor = -1
+	s.BatchIPC = nil
+	s.BatchIdx = 0
+	s.batches = nil
+	return true
 }
 
 // ---------------------------------------------------------------------------
@@ -1197,6 +1290,7 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 			Recipe:   *recipe,
 			BatchIPC: batchIPC,
 			batches:  batches,
+			storage:  processStorage,
 		}
 
 		return &vgirpc.StreamResult{
