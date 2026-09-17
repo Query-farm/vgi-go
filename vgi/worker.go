@@ -1204,6 +1204,17 @@ const (
 	transportTCP                          // concurrent connections — no cleanup hook (TTL sweep)
 )
 
+// ProtocolName is the VGI wire protocol name — the vgi_rpc.protocol routing
+// key every request must carry to reach this worker. It is the same constant
+// in every VGI implementation (vgi-python's VgiProtocol.protocol_name, and the
+// name the DuckDB C++ extension emits), so one client can address them all.
+//
+// The major version is part of the name on purpose: an incompatible major
+// becomes a *different* name, and therefore a routing 404 rather than a
+// mysterious deserialization failure, and vgi.v2 can be served beside a future
+// vgi.v3 while clients migrate.
+const ProtocolName = "vgi.v2"
+
 // ProtocolVersion is the VGI application protocol surface version this SDK
 // implements — the Go counterpart of VGI_PROTOCOL_VERSION in vgi-rust /
 // vgi-java and of VgiProtocol.protocol_version in vgi-python.
@@ -1251,6 +1262,10 @@ func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 	w.catalog = NewDefaultReadOnlyCatalog(w.catalogName, w)
 
 	s := vgirpc.NewServer()
+	// Declare the wire protocol name. Without this the framework falls back to
+	// its default literal "Service", and any client sending the real routing
+	// key gets ProtocolNotSupportedError.
+	s.SetServiceName(ProtocolName)
 	// Declare the application protocol surface version. The framework
 	// advertises it via __describe__ and enforces an exact major+minor match
 	// against the client's vgi_rpc.protocol_version at dispatch.
