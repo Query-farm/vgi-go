@@ -19,6 +19,7 @@ package table_in_out
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -363,4 +364,134 @@ func (f *BlendedDropFunction) Finalize(ctx context.Context, params *vgi.ProcessP
 // NewBlendedDropFunction creates a BlendedDropFunction wrapped for registration.
 func NewBlendedDropFunction() vgi.TableInOutFunction {
 	return vgi.AsTableInOutFunction[struct{}](&BlendedDropFunction{})
+}
+
+// ---------------------------------------------------------------------------
+// blended_any(value ANY) / blended_any_varargs(values ANY...) — ANY-typed input
+// ---------------------------------------------------------------------------
+
+// echoInputSchema builds the output schema of an ANY-typed blended echo: one
+// output column per input-schema field, named by nameFor(i) and typed from the
+// type DuckDB resolved for that input column.
+func echoInputSchema(input *arrow.Schema, nameFor func(i int) string) *arrow.Schema {
+	fields := make([]arrow.Field, input.NumFields())
+	for i := range fields {
+		fields[i] = arrow.Field{Name: nameFor(i), Type: input.Field(i).Type, Nullable: true}
+	}
+	return arrow.NewSchema(fields, nil)
+}
+
+// echoInputColumns emits the first params.OutputSchema.NumFields() input
+// columns unchanged under the bound output names. The arrays are passed through
+// as-is, so validity is preserved at every nesting level (a NULL struct and a
+// struct with a NULL field stay distinct).
+func echoInputColumns(params *vgi.ProcessParams, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
+	n := params.OutputSchema.NumFields()
+	cols := make([]arrow.Array, n)
+	for i := range cols {
+		cols[i] = batch.Column(i)
+	}
+	return out.Emit(array.NewRecordBatch(params.OutputSchema, cols, batch.NumRows()))
+}
+
+// BlendedAnyFunction is the blended 1->1 echo of ONE ANY-typed input column.
+// ANY is a binder placeholder, not a type Arrow can carry, so the client builds
+// this function's worker-input schema from the type DuckDB resolved for the
+// call rather than from the (typeless) declaration. The output column "value"
+// is bound to that resolved type, so one registration serves every input type.
+type BlendedAnyFunction struct{}
+
+var _ vgi.TypedTableInOutFunc[struct{}] = (*BlendedAnyFunction)(nil)
+
+func (f *BlendedAnyFunction) Name() string { return "blended_any" }
+
+func (f *BlendedAnyFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description:   "Blended 1->1 echo of one ANY-typed input column (output typed from the input)",
+		Stability:     vgi.StabilityConsistent,
+		Categories:    []string{"blended", "test"},
+		InputFromArgs: true,
+	}
+}
+
+func (f *BlendedAnyFunction) ArgumentSpecs() []vgi.ArgSpec {
+	return []vgi.ArgSpec{
+		{Name: "value", Position: 0, ArrowType: "any", Doc: "Input column of any type (echoed back)"},
+	}
+}
+
+func (f *BlendedAnyFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+	if params.InputSchema.NumFields() < 1 {
+		return nil, fmt.Errorf("blended_any: expected 1 input column, got %d", params.InputSchema.NumFields())
+	}
+	input := arrow.NewSchema(params.InputSchema.Fields()[:1], nil)
+	return &vgi.BindResponse{
+		OutputSchema: echoInputSchema(input, func(int) string { return "value" }),
+	}, nil
+}
+
+func (f *BlendedAnyFunction) NewState(params *vgi.ProcessParams) (*struct{}, error) {
+	return &struct{}{}, nil
+}
+
+func (f *BlendedAnyFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *struct{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
+	return echoInputColumns(params, batch, out)
+}
+
+func (f *BlendedAnyFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *struct{}) ([]arrow.RecordBatch, error) {
+	return nil, nil
+}
+
+// NewBlendedAnyFunction creates a BlendedAnyFunction wrapped for registration.
+func NewBlendedAnyFunction() vgi.TableInOutFunction {
+	return vgi.AsTableInOutFunction[struct{}](&BlendedAnyFunction{})
+}
+
+// BlendedAnyVarargsFunction is the VARARGS counterpart of blended_any: every
+// runtime column may resolve to a different concrete type, so the client takes
+// each column's type from the call rather than from the (ANY) vararg element
+// type. Output columns are col0..colN-1 — the names the client generates for
+// varargs blended input — each bound to its own resolved input type.
+type BlendedAnyVarargsFunction struct{}
+
+var _ vgi.TypedTableInOutFunc[struct{}] = (*BlendedAnyVarargsFunction)(nil)
+
+func (f *BlendedAnyVarargsFunction) Name() string { return "blended_any_varargs" }
+
+func (f *BlendedAnyVarargsFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description:   "Blended 1->1 echo of N ANY-typed varargs input columns (col0..colN-1)",
+		Stability:     vgi.StabilityConsistent,
+		Categories:    []string{"blended", "test"},
+		InputFromArgs: true,
+	}
+}
+
+func (f *BlendedAnyVarargsFunction) ArgumentSpecs() []vgi.ArgSpec {
+	return []vgi.ArgSpec{
+		{Name: "values", Position: 0, ArrowType: "any", Doc: "Input columns of any types (echoed back)", IsVarargs: true},
+	}
+}
+
+func (f *BlendedAnyVarargsFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+	return &vgi.BindResponse{
+		OutputSchema: echoInputSchema(params.InputSchema, func(i int) string { return "col" + strconv.Itoa(i) }),
+	}, nil
+}
+
+func (f *BlendedAnyVarargsFunction) NewState(params *vgi.ProcessParams) (*struct{}, error) {
+	return &struct{}{}, nil
+}
+
+func (f *BlendedAnyVarargsFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *struct{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
+	return echoInputColumns(params, batch, out)
+}
+
+func (f *BlendedAnyVarargsFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *struct{}) ([]arrow.RecordBatch, error) {
+	return nil, nil
+}
+
+// NewBlendedAnyVarargsFunction creates a BlendedAnyVarargsFunction wrapped for registration.
+func NewBlendedAnyVarargsFunction() vgi.TableInOutFunction {
+	return vgi.AsTableInOutFunction[struct{}](&BlendedAnyVarargsFunction{})
 }

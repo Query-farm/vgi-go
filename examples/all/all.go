@@ -294,6 +294,11 @@ func registerTableInOuts(w *vgi.Worker) {
 	w.RegisterTableInOut(table_in_out.NewGeoEncode3Function())
 	w.RegisterTableInOut(table_in_out.NewRowSumFunction())
 	w.RegisterTableInOut(table_in_out.NewBlendedDropFunction())
+	// ANY-typed blended input (table_in_out/blended_any.test): the client builds
+	// the worker-input schema from the type DuckDB resolved for the call, so one
+	// registration echoes any input type (fixed-arity + VARARGS).
+	w.RegisterTableInOut(table_in_out.NewBlendedAnyFunction())
+	w.RegisterTableInOut(table_in_out.NewBlendedAnyVarargsFunction())
 	// Batched correlated-LATERAL fixtures (table_in_out/lateral_batch.test):
 	// blended_explode carries per-output-row vgi_rpc.parent_row provenance,
 	// projectable_blended exercises the projection fallback, and
