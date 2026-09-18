@@ -51,3 +51,39 @@ func TestInitRecipeGobRoundTripAbsentArgumentNames(t *testing.T) {
 		t.Fatalf("round trip = %#v, want %#v", got, want)
 	}
 }
+
+// A table stream's continuation token carries its dynamic-filter history. The
+// wire forms used to leave it out, so an HTTP turn rebuilt the stream's filters
+// from the init snapshot alone.
+func TestTableStateTokensCarryFilterHistory(t *testing.T) {
+	deltas := [][]byte{[]byte("delta-a"), []byte("delta-b")}
+	order := []string{"top_n:1", "top_n:0"}
+
+	producer := &TableProducerState{FilterDeltaIPC: deltas, FilterPredicateOrder: order}
+	data, err := producer.GobEncode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotProducer TableProducerState
+	if err := gotProducer.GobDecode(data); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotProducer.FilterDeltaIPC, deltas) || !reflect.DeepEqual(gotProducer.FilterPredicateOrder, order) {
+		t.Fatalf("producer token carried history %q order %q, want %q %q",
+			gotProducer.FilterDeltaIPC, gotProducer.FilterPredicateOrder, deltas, order)
+	}
+
+	exchange := &TableInOutExchangeState{FilterDeltaIPC: deltas, FilterPredicateOrder: order}
+	data, err = exchange.GobEncode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotExchange TableInOutExchangeState
+	if err := gotExchange.GobDecode(data); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotExchange.FilterDeltaIPC, deltas) || !reflect.DeepEqual(gotExchange.FilterPredicateOrder, order) {
+		t.Fatalf("table-in-out token carried history %q order %q, want %q %q",
+			gotExchange.FilterDeltaIPC, gotExchange.FilterPredicateOrder, deltas, order)
+	}
+}

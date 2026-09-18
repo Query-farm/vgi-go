@@ -78,7 +78,7 @@ func (w *Worker) rehydrateTableProducer(s *TableProducerState) error {
 		}
 		params.CurrentPushdownFilters = parsed
 	}
-	if err := replayFilterDeltas(params, s.FilterDeltaIPC); err != nil {
+	if err := replayFilterDeltas(params, s.FilterDeltaIPC, s.FilterPredicateOrder); err != nil {
 		return err
 	}
 
@@ -127,7 +127,7 @@ func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
 		}
 		params.CurrentPushdownFilters = parsed
 	}
-	if err := replayFilterDeltas(params, s.FilterDeltaIPC); err != nil {
+	if err := replayFilterDeltas(params, s.FilterDeltaIPC, s.FilterPredicateOrder); err != nil {
 		return err
 	}
 
@@ -155,27 +155,6 @@ func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
 		s.autoApply = params.CurrentPushdownFilters
 	}
 
-	return nil
-}
-
-func replayFilterDeltas(params *ProcessParams, deltas [][]byte) error {
-	if len(deltas) == 0 {
-		return nil
-	}
-	if params.CurrentPushdownFilters == nil {
-		return fmt.Errorf("filter delta history requires an initial snapshot")
-	}
-	for _, encoded := range deltas {
-		batch, err := DeserializeRecordBatch(encoded)
-		if err != nil {
-			return err
-		}
-		err = params.CurrentPushdownFilters.ApplyDelta(batch, params.JoinKeys)
-		batch.Release()
-		if err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

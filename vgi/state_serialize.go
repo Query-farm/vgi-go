@@ -100,10 +100,18 @@ func (r *BindRequestWire) GobDecode(data []byte) error {
 
 // tableProducerWire is the gob wire form of TableProducerState: the exported
 // snapshot fields only (the transient fn/params/state are rebuilt by rehydrate).
+//
+// FilterDeltaIPC and FilterPredicateOrder are the stream's compacted
+// dynamic-filter history (filter_delta_history.go). DuckDB sends each filter
+// change once per stream, so a wire form without them rebuilt every later turn
+// from the init snapshot alone and the worker stopped pruning after the turn
+// that received the change.
 type tableProducerWire struct {
-	Recipe         InitRecipe
-	UserStateBytes []byte
-	AutoProjectIDs []int32
+	Recipe               InitRecipe
+	UserStateBytes       []byte
+	AutoProjectIDs       []int32
+	FilterDeltaIPC       [][]byte
+	FilterPredicateOrder []string
 }
 
 // GobEncode snapshots the live user state into UserStateBytes, then encodes the
@@ -119,9 +127,11 @@ func (s *TableProducerState) GobEncode() ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(tableProducerWire{
-		Recipe:         s.Recipe,
-		UserStateBytes: usb,
-		AutoProjectIDs: s.AutoProjectIDs,
+		Recipe:               s.Recipe,
+		UserStateBytes:       usb,
+		AutoProjectIDs:       s.AutoProjectIDs,
+		FilterDeltaIPC:       s.FilterDeltaIPC,
+		FilterPredicateOrder: s.FilterPredicateOrder,
 	}); err != nil {
 		return nil, err
 	}
@@ -138,6 +148,8 @@ func (s *TableProducerState) GobDecode(data []byte) error {
 	s.Recipe = w.Recipe
 	s.UserStateBytes = w.UserStateBytes
 	s.AutoProjectIDs = w.AutoProjectIDs
+	s.FilterDeltaIPC = w.FilterDeltaIPC
+	s.FilterPredicateOrder = w.FilterPredicateOrder
 	return nil
 }
 
@@ -190,10 +202,13 @@ func (s *FinalizeProducerState) GobDecode(data []byte) error {
 	return nil
 }
 
-// tableInOutWire is the gob wire form of TableInOutExchangeState.
+// tableInOutWire is the gob wire form of TableInOutExchangeState. It carries
+// the dynamic-filter history for the reason tableProducerWire does.
 type tableInOutWire struct {
-	Recipe         InitRecipe
-	UserStateBytes []byte
+	Recipe               InitRecipe
+	UserStateBytes       []byte
+	FilterDeltaIPC       [][]byte
+	FilterPredicateOrder []string
 }
 
 // GobEncode snapshots the live user state into UserStateBytes, then encodes the
@@ -210,8 +225,10 @@ func (s *TableInOutExchangeState) GobEncode() ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(tableInOutWire{
-		Recipe:         s.Recipe,
-		UserStateBytes: usb,
+		Recipe:               s.Recipe,
+		UserStateBytes:       usb,
+		FilterDeltaIPC:       s.FilterDeltaIPC,
+		FilterPredicateOrder: s.FilterPredicateOrder,
 	}); err != nil {
 		return nil, err
 	}
@@ -227,5 +244,7 @@ func (s *TableInOutExchangeState) GobDecode(data []byte) error {
 	}
 	s.Recipe = w.Recipe
 	s.UserStateBytes = w.UserStateBytes
+	s.FilterDeltaIPC = w.FilterDeltaIPC
+	s.FilterPredicateOrder = w.FilterPredicateOrder
 	return nil
 }

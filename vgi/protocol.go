@@ -292,14 +292,23 @@ func (s *ScalarExchangeState) Exchange(ctx context.Context, input arrow.RecordBa
 
 // TableProducerState implements ProducerState for table functions.
 type TableProducerState struct {
-	Recipe         InitRecipe       // exported, serialized
-	UserStateBytes []byte           // exported, gob-serialized user state
-	AutoProjectIDs []int32          // exported
-	FilterDeltaIPC [][]byte         // exported, replayed after HTTP rehydration
-	fn             TableFunction    // transient
-	params         *ProcessParams   // transient
-	state          interface{}      // transient (reconstructed from UserStateBytes)
-	autoApply      *PushdownFilters // transient
+	Recipe         InitRecipe // exported, serialized
+	UserStateBytes []byte     // exported, gob-serialized user state
+	AutoProjectIDs []int32    // exported
+	// FilterDeltaIPC is the stream's compacted dynamic-filter delta history
+	// and FilterPredicateOrder the live predicate order it rebuilds; both are
+	// replayed after HTTP rehydration (see filter_delta_history.go).
+	FilterDeltaIPC       [][]byte
+	FilterPredicateOrder []string
+	fn                   TableFunction    // transient
+	params               *ProcessParams   // transient
+	state                interface{}      // transient (reconstructed from UserStateBytes)
+	autoApply            *PushdownFilters // transient
+}
+
+// filterHistory is the stream's dynamic-filter bookkeeping.
+func (s *TableProducerState) filterHistory() streamFilterHistory {
+	return streamFilterHistory{deltas: &s.FilterDeltaIPC, order: &s.FilterPredicateOrder}
 }
 
 // Produce advances the table function by one tick, applying any dynamic filter
@@ -307,15 +316,12 @@ type TableProducerState struct {
 // output collector.
 func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
 	s.params.Auth = callCtx.Auth
-	// Decode any dynamic filter update carried on this tick's custom metadata.
-	// DuckDB's dynamic-filter pushdown ships a fresh, tightened filter batch
-	// per tick under the vgi_pushdown_filters key (base64-encoded IPC stream).
-	delta, err := applyTickFilters(s.params, callCtx.InputMetadata)
-	if err != nil {
+	// Apply any dynamic filter update carried on this tick's custom metadata.
+	// DuckDB's dynamic-filter pushdown ships a delta document once per change
+	// under the vgi_pushdown_filters key (base64-encoded IPC stream); the
+	// history keeps it in force on later HTTP turns.
+	if _, err := s.filterHistory().applyTick(s.params, callCtx.InputMetadata); err != nil {
 		return err
-	}
-	if delta != nil {
-		s.FilterDeltaIPC = append(s.FilterDeltaIPC, delta)
 	}
 	applyTickValidators(s.params, callCtx.InputMetadata)
 	if s.autoApply != nil || s.AutoProjectIDs != nil {
@@ -352,9 +358,11 @@ func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputColl
 }
 
 // applyTickFilters checks the tick-level custom metadata for a dynamic filter
-// update and atomically applies it to params.CurrentPushdownFilters. Malformed
-// or unsupported updates fail closed without mutating the previous state.
-func applyTickFilters(params *ProcessParams, meta arrow.Metadata) ([]byte, error) {
+// update and atomically applies it to params.CurrentPushdownFilters. It
+// returns the delta's IPC bytes and the (id, revision) pairs it carried, or
+// nil when the tick carried no delta. Malformed or unsupported updates fail
+// closed without mutating the previous state.
+func applyTickFilters(params *ProcessParams, meta arrow.Metadata) ([]byte, []predicateRevision, error) {
 	// First tick after init: seed CurrentPushdownFilters from the static
 	// PushdownFilters so handlers see a consistent view. This must not depend on
 	// the tick carrying no metadata at all — over HTTP the first tick also
@@ -362,37 +370,39 @@ func applyTickFilters(params *ProcessParams, meta arrow.Metadata) ([]byte, error
 	if params.CurrentPushdownFilters == nil && params.PushdownFilters != nil {
 		pf, err := deserializeFiltersV2(params.PushdownFilters, params.JoinKeys, params.JoinKeyBatches, false, params.BindOutputSchema)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		params.CurrentPushdownFilters = pf
 	}
 	if meta.Len() == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	idx := meta.FindKey("vgi_pushdown_filters")
 	if idx < 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	encoded := meta.Values()[idx]
 	if encoded == "" {
 		// Empty string signals "no dynamic filter yet" — keep the static one.
-		return nil, nil
+		return nil, nil, nil
 	}
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, fmt.Errorf("decode dynamic filter base64: %w", err)
+		return nil, nil, fmt.Errorf("decode dynamic filter base64: %w", err)
 	}
+	// Not released: an applied predicate's literals are columns of this batch.
 	batch, err := DeserializeRecordBatch(raw)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if params.CurrentPushdownFilters == nil {
-		return nil, fmt.Errorf("filter delta requires an initial snapshot")
+		return nil, nil, fmt.Errorf("filter delta requires an initial snapshot")
 	}
-	if err := params.CurrentPushdownFilters.ApplyDelta(batch, params.JoinKeys); err != nil {
-		return nil, err
+	carried, err := params.CurrentPushdownFilters.applyDelta(batch, params.JoinKeys)
+	if err != nil {
+		return nil, nil, err
 	}
-	return raw, nil
+	return raw, carried, nil
 }
 
 // applyTickValidators lifts the conditional-revalidation validators off a
@@ -428,31 +438,36 @@ func projectBatch(batch arrow.RecordBatch, ids []int32) arrow.RecordBatch {
 
 // TableInOutExchangeState implements ExchangeState for table-in-out INPUT phase.
 type TableInOutExchangeState struct {
-	Recipe         InitRecipe         // exported, serialized
-	UserStateBytes []byte             // exported, gob-serialized user state
-	FilterDeltaIPC [][]byte           // exported, replayed after HTTP rehydration
-	fn             TableInOutFunction // transient
-	params         *ProcessParams     // transient
-	state          interface{}        // transient
-	autoApply      *PushdownFilters   // transient
+	Recipe         InitRecipe // exported, serialized
+	UserStateBytes []byte     // exported, gob-serialized user state
+	// FilterDeltaIPC is the stream's compacted dynamic-filter delta history
+	// and FilterPredicateOrder the live predicate order it rebuilds; both are
+	// replayed after HTTP rehydration (see filter_delta_history.go).
+	FilterDeltaIPC       [][]byte
+	FilterPredicateOrder []string
+	fn                   TableInOutFunction // transient
+	params               *ProcessParams     // transient
+	state                interface{}        // transient
+	autoApply            *PushdownFilters   // transient
+}
+
+// filterHistory is the stream's dynamic-filter bookkeeping.
+func (s *TableInOutExchangeState) filterHistory() streamFilterHistory {
+	return streamFilterHistory{deltas: &s.FilterDeltaIPC, order: &s.FilterPredicateOrder}
 }
 
 // Exchange transforms one input batch through the table-in-out function and emits
 // the resulting batches to the output collector.
 func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
 	s.params.Auth = callCtx.Auth
-	delta, err := applyTickFilters(s.params, callCtx.InputMetadata)
+	applied, err := s.filterHistory().applyTick(s.params, callCtx.InputMetadata)
 	if err != nil {
 		return err
 	}
-	if bwm, ok := input.(arrow.RecordBatchWithMetadata); ok && delta == nil {
-		delta, err = applyTickFilters(s.params, bwm.Metadata())
-		if err != nil {
+	if bwm, ok := input.(arrow.RecordBatchWithMetadata); ok && !applied {
+		if _, err := s.filterHistory().applyTick(s.params, bwm.Metadata()); err != nil {
 			return err
 		}
-	}
-	if delta != nil {
-		s.FilterDeltaIPC = append(s.FilterDeltaIPC, delta)
 	}
 	// Conditional-revalidation validators (exchange-mode result cache): the
 	// client holds a stale cached result for THIS input unit and asks the

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -655,29 +656,38 @@ func contextualV2Type(value arrow.DataType) bool {
 
 // ApplyDelta validates every applicable update before committing any of them.
 func (pf *PushdownFilters) ApplyDelta(batch arrow.RecordBatch, joinKeys ...map[string]arrow.Array) error {
+	_, err := pf.applyDelta(batch, joinKeys...)
+	return err
+}
+
+// predicateRevision is one (id, revision) pair a filter delta's update carried.
+type predicateRevision struct {
+	ID       string `json:"id"`
+	Revision uint64 `json:"revision"`
+}
+
+// applyDelta is [PushdownFilters.ApplyDelta] that also returns the (id,
+// revision) of every update the delta carried, stale ones included, in
+// document order. A stream's delta history is compacted on them (see
+// recordFilterDelta).
+func (pf *PushdownFilters) applyDelta(batch arrow.RecordBatch, joinKeys ...map[string]arrow.Array) ([]predicateRevision, error) {
 	context, raw, err := validateFilterV2Batch(batch)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if context != pf.v2Context {
-		return fmt.Errorf("evaluation context changed within scan")
+		return nil, fmt.Errorf("evaluation context changed within scan")
 	}
 	var doc v2Document
 	if err := decodeStrict(raw, &doc); err != nil {
-		return err
+		return nil, err
 	}
 	if doc.Encoding != "vgi.filters.v2" || doc.Semantics != filterV2Semantics || doc.Kind != "delta" || doc.Predicates != nil {
-		return fmt.Errorf("invalid v2 delta document")
+		return nil, fmt.Errorf("invalid v2 delta document")
 	}
 	keys := map[string]arrow.Array(nil)
 	if len(joinKeys) > 0 {
 		keys = joinKeys[0]
-	}
-	type update struct {
-		Operation, ID string
-		Revision      uint64
-		Mode, Source  string
-		Expression    json.RawMessage
 	}
 	nextPredicates := append([]v2Predicate(nil), pf.v2Predicates...)
 	nextRevisions := make(map[string]uint64, len(pf.v2Revisions))
@@ -685,43 +695,45 @@ func (pf *PushdownFilters) ApplyDelta(batch arrow.RecordBatch, joinKeys ...map[s
 		nextRevisions[k] = v
 	}
 	seen := map[string]bool{}
+	carried := make([]predicateRevision, 0, len(doc.Updates))
 	for _, rawUpdate := range doc.Updates {
 		var object map[string]json.RawMessage
 		if err := decodeStrict(rawUpdate, &object); err != nil {
-			return err
+			return nil, err
 		}
 		var operation, id string
 		var revision uint64
 		if err := json.Unmarshal(object["operation"], &operation); err != nil ||
 			json.Unmarshal(object["id"], &id) != nil || id == "" || len(id) > 128 ||
 			json.Unmarshal(object["revision"], &revision) != nil {
-			return fmt.Errorf("invalid delta update")
+			return nil, fmt.Errorf("invalid delta update")
 		}
 		switch operation {
 		case "remove":
 			if err := exactKeys(object, "operation", "id", "revision"); err != nil {
-				return err
+				return nil, err
 			}
 		case "upsert":
 			if err := exactKeys(object, "operation", "id", "revision", "mode", "source", "expression"); err != nil {
-				return err
+				return nil, err
 			}
 			var mode, source string
 			var expression map[string]json.RawMessage
 			if json.Unmarshal(object["mode"], &mode) != nil || mode != "advisory" ||
 				json.Unmarshal(object["source"], &source) != nil || !containsString([]string{"query", "join", "top_n", "split_refinement", "other"}, source) ||
 				json.Unmarshal(object["expression"], &expression) != nil || expression == nil {
-				return fmt.Errorf("invalid delta upsert")
+				return nil, fmt.Errorf("invalid delta upsert")
 			}
 		default:
-			return fmt.Errorf("unknown delta operation")
+			return nil, fmt.Errorf("unknown delta operation")
 		}
 		if seen[id] {
-			return fmt.Errorf("duplicate delta predicate ID")
+			return nil, fmt.Errorf("duplicate delta predicate ID")
 		}
 		seen[id] = true
+		carried = append(carried, predicateRevision{ID: id, Revision: revision})
 		if _, required := pf.v2Required[id]; required {
-			return fmt.Errorf("delta targets required predicate")
+			return nil, fmt.Errorf("delta targets required predicate")
 		}
 		if old, ok := nextRevisions[id]; ok && revision <= old {
 			continue
@@ -732,7 +744,7 @@ func (pf *PushdownFilters) ApplyDelta(batch arrow.RecordBatch, joinKeys ...map[s
 		case "upsert":
 			predicate, err := parseV2Predicate(rawUpdate, batch, keys, pf.v2JoinKeyBatches, pf.v2Spatial, pf.v2OutputSchema, true)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			nextPredicates = removeV2Predicate(nextPredicates, id)
 			nextPredicates = append(nextPredicates, predicate)
@@ -740,13 +752,54 @@ func (pf *PushdownFilters) ApplyDelta(batch arrow.RecordBatch, joinKeys ...map[s
 		nextRevisions[id] = revision
 	}
 	if len(nextRevisions) > 4096 {
-		return fmt.Errorf("predicate ID limit exceeded")
+		return nil, fmt.Errorf("predicate ID limit exceeded")
 	}
 	pf.v2Predicates = nextPredicates
 	pf.v2Revisions = nextRevisions
 	pf.Filters = nil
 	for i := range nextPredicates {
 		pf.Filters = append(pf.Filters, publicV2Filter(nextPredicates[i].Expr))
+	}
+	return carried, nil
+}
+
+// predicateOrder returns the live v2 predicate IDs in evaluation order.
+func (pf *PushdownFilters) predicateOrder() []string {
+	order := make([]string, len(pf.v2Predicates))
+	for i := range pf.v2Predicates {
+		order[i] = pf.v2Predicates[i].ID
+	}
+	return order
+}
+
+// restorePredicateOrder arranges the live v2 predicates in order, which must
+// name exactly the live predicate IDs. Only the order changes. It restores the
+// order a stream's filters had before their delta history was compacted, so a
+// rebuilt state does not depend on a shorter replay reproducing it.
+func (pf *PushdownFilters) restorePredicateOrder(order []string) error {
+	if slices.Equal(pf.predicateOrder(), order) {
+		return nil
+	}
+	byID := make(map[string]v2Predicate, len(pf.v2Predicates))
+	for _, predicate := range pf.v2Predicates {
+		byID[predicate.ID] = predicate
+	}
+	if len(order) != len(byID) {
+		return fmt.Errorf("recorded predicate order does not match the replayed filter state")
+	}
+	next := make([]v2Predicate, 0, len(order))
+	for _, id := range order {
+		predicate, ok := byID[id]
+		if !ok {
+			return fmt.Errorf("recorded predicate order does not match the replayed filter state")
+		}
+		delete(byID, id)
+		next = append(next, predicate)
+	}
+	pf.v2Predicates = next
+	pf.Filters = nil
+	for i := range next {
+		pf.Filters = append(pf.Filters, publicV2Filter(next[i].Expr))
 	}
 	return nil
 }
