@@ -71,30 +71,8 @@ if [ "$TRANSPORT" = "http" ]; then
   # Dropped on http only:
   #   * projection_pushdown_repro.test — one POST round-trip per two rows; fully
   #     covered by the stdio lane.
-  #   * dynamic_filter.test — NOT a property of the prebuilt C++ binary, as this
-  #     comment used to claim. Root-caused 2026-08-21: this SDK's HTTP server
-  #     dropped a continuation turn's Arrow custom_metadata, so DuckDB's
-  #     tightening Top-N filter never reached the worker and COUNT(DISTINCT
-  #     pushed_filters) stayed at 1. Fixed in vgi-rpc-go 01b080c ("deliver a
-  #     continuation turn's tick metadata to the producer").
-  #
-  #     STATUS 2026-09-17: the blocker this comment describes is GONE. The claim
-  #     that the fix "is NOT in any published tag, and go.mod pins v0.21.0" went
-  #     stale without being noticed: handleProducerContinuation now forwards
-  #     stripFrameworkTickMetadata(requestMeta) rather than arrow.Metadata{} in
-  #     BOTH v0.27.0 (the previous pin) and v0.28.0 (the current one), so the
-  #     worker CI builds no longer has the bug. The original SHA reads as
-  #     "diverged" from the release tags because it was rebased/squashed on the
-  #     way in — match on the code, not on 01b080c.
-  #
-  #     The exclusion is kept only because removing it has never been exercised
-  #     against the http lane; it is a removal candidate, not a known-good
-  #     removal. Whoever drops it should confirm dynamic_filter.test passes on
-  #     http (it already passes on stdio, and in vgi-rust, whose Cargo patch
-  #     picked the equivalent fix up).
   EXTRA_SKIP=(
     -not -name 'projection_pushdown_repro.test'
-    -not -name 'dynamic_filter.test'
   )
 fi
 
