@@ -305,7 +305,9 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 	if err != nil {
 		return nil, nil, err
 	}
-	params.Storage = storage
+	// Keyed by the substream the recipe carries, as at init: a continuation
+	// served by any process must write the same slot the init's did.
+	params.Storage = storage.forSubstream(params.SubstreamID)
 
 	return fn, params, nil
 }

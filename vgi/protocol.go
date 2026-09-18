@@ -1053,7 +1053,7 @@ func (w *Worker) initScalar(ctx context.Context, fn ScalarFunction, initParams *
 	if err != nil {
 		return nil, err
 	}
-	processParams.Storage = storage
+	processParams.Storage = storage.forSubstream(processParams.SubstreamID)
 
 	header := &GlobalInitResponseWire{
 		ExecutionID: resp.ExecutionID,
@@ -1136,7 +1136,9 @@ func (w *Worker) initTable(ctx context.Context, fn TableFunction, initParams *In
 	if err != nil {
 		return nil, err
 	}
-	processParams.Storage = processStorage
+	// Per-stream view: Put keys this stream's state by its substream id (see
+	// ExecutionStorage.Put), never by the process that happens to serve it.
+	processParams.Storage = processStorage.forSubstream(processParams.SubstreamID)
 	if processParams.PushdownFilters != nil {
 		parsed, err := deserializeProcessFiltersForMetadata(processParams, fn.Metadata())
 		if err != nil {
@@ -1227,7 +1229,9 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 	if err != nil {
 		return nil, err
 	}
-	processParams.Storage = processStorage
+	// Per-stream view: Put keys this stream's state by its substream id (see
+	// ExecutionStorage.Put), never by the process that happens to serve it.
+	processParams.Storage = processStorage.forSubstream(processParams.SubstreamID)
 	if processParams.PushdownFilters != nil {
 		parsed, err := deserializeProcessFiltersForMetadata(processParams, fn.Metadata())
 		if err != nil {

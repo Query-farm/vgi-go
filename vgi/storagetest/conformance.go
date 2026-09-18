@@ -87,6 +87,7 @@ func RunConformanceFiltered(t *testing.T, factory func(t *testing.T) FunctionSto
 		{name: "WorkerPut_replaces_existing", run: testWorkerPutReplaces},
 		{name: "WorkerCollect_drains_and_returns_in_order", run: testWorkerCollectDrains},
 		{name: "WorkerScan_isolates_by_executionID", run: testWorkerScanIsolation},
+		{name: "WorkerPut_keys_are_opaque_bytes", run: testWorkerKeysAreOpaque},
 		{name: "ScanWorkerPut_then_ScanWorkerScan", run: testScanWorkerRoundtrip},
 		{name: "QueuePush_then_QueuePop_FIFO", run: testQueueFIFO},
 		{name: "QueuePop_empty_or_unknown_returns_nil_nil", run: testQueuePopEmpty},
@@ -126,20 +127,20 @@ func RunConformanceFiltered(t *testing.T, factory func(t *testing.T) FunctionSto
 
 func testWorkerPutThenScan(t *testing.T, s FunctionStorage) {
 	exec := []byte("exec-1")
-	if err := s.WorkerPut(exec, 1, []byte("state-1")); err != nil {
+	if err := s.WorkerPut(exec, []byte("w1"), []byte("state-1")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WorkerPut(exec, 2, []byte("state-2")); err != nil {
+	if err := s.WorkerPut(exec, []byte("w2"), []byte("state-2")); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.WorkerScan(exec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sort.Slice(got, func(i, j int) bool { return got[i].WorkerID < got[j].WorkerID })
+	sort.Slice(got, func(i, j int) bool { return bytes.Compare(got[i].WorkerKey, got[j].WorkerKey) < 0 })
 	want := []WorkerStateEntry{
-		{WorkerID: 1, State: []byte("state-1")},
-		{WorkerID: 2, State: []byte("state-2")},
+		{WorkerKey: []byte("w1"), State: []byte("state-1")},
+		{WorkerKey: []byte("w2"), State: []byte("state-2")},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v want %+v", got, want)
@@ -148,8 +149,8 @@ func testWorkerPutThenScan(t *testing.T, s FunctionStorage) {
 
 func testWorkerPutReplaces(t *testing.T, s FunctionStorage) {
 	exec := []byte("exec-2")
-	_ = s.WorkerPut(exec, 1, []byte("v1"))
-	_ = s.WorkerPut(exec, 1, []byte("v2"))
+	_ = s.WorkerPut(exec, []byte("w1"), []byte("v1"))
+	_ = s.WorkerPut(exec, []byte("w1"), []byte("v2"))
 	got, _ := s.WorkerScan(exec)
 	if len(got) != 1 || !bytes.Equal(got[0].State, []byte("v2")) {
 		t.Errorf("expected one row with state v2, got %+v", got)
@@ -158,9 +159,9 @@ func testWorkerPutReplaces(t *testing.T, s FunctionStorage) {
 
 func testWorkerCollectDrains(t *testing.T, s FunctionStorage) {
 	exec := []byte("exec-3")
-	_ = s.WorkerPut(exec, 1, []byte("a"))
-	_ = s.WorkerPut(exec, 2, []byte("b"))
-	_ = s.WorkerPut(exec, 3, []byte("c"))
+	_ = s.WorkerPut(exec, []byte("w1"), []byte("a"))
+	_ = s.WorkerPut(exec, []byte("w2"), []byte("b"))
+	_ = s.WorkerPut(exec, []byte("w3"), []byte("c"))
 
 	got, err := s.WorkerCollect(exec)
 	if err != nil {
@@ -176,9 +177,42 @@ func testWorkerCollectDrains(t *testing.T, s FunctionStorage) {
 	}
 }
 
+// testWorkerKeysAreOpaque pins that the worker key is stored and returned
+// verbatim, whatever its length. The framework keys a stream's state by the
+// client's substream id (16 bytes from the DuckDB extension, but client-minted
+// and so of no guaranteed length) and falls back to an 8-byte packed pid, and
+// both kinds can land in one execution -- so a backend that assumed a fixed
+// width, or reduced the key to an integer, would merge distinct streams' state.
+func testWorkerKeysAreOpaque(t *testing.T, s FunctionStorage) {
+	exec := []byte("exec-opaque-keys")
+	substream := []byte{0x9f, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee}
+	// Shares its first 8 bytes with the substream id above: a backend that
+	// truncated keys to 8 bytes would collide the two.
+	pidLike := substream[:8]
+	short := []byte{0x01}
+	for key, state := range map[string]string{string(substream): "sub", string(pidLike): "pid", string(short): "short"} {
+		if err := s.WorkerPut(exec, []byte(key), []byte(state)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.WorkerScan(exec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(got, func(i, j int) bool { return bytes.Compare(got[i].WorkerKey, got[j].WorkerKey) < 0 })
+	want := []WorkerStateEntry{
+		{WorkerKey: short, State: []byte("short")},
+		{WorkerKey: pidLike, State: []byte("pid")},
+		{WorkerKey: substream, State: []byte("sub")},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v want %+v", got, want)
+	}
+}
+
 func testWorkerScanIsolation(t *testing.T, s FunctionStorage) {
-	_ = s.WorkerPut([]byte("A"), 1, []byte("for-a"))
-	_ = s.WorkerPut([]byte("B"), 1, []byte("for-b"))
+	_ = s.WorkerPut([]byte("A"), []byte("w1"), []byte("for-a"))
+	_ = s.WorkerPut([]byte("B"), []byte("w1"), []byte("for-b"))
 	a, _ := s.WorkerScan([]byte("A"))
 	b, _ := s.WorkerScan([]byte("B"))
 	if len(a) != 1 || !bytes.Equal(a[0].State, []byte("for-a")) {
@@ -686,7 +720,7 @@ func testAttachCounters(t *testing.T, s FunctionStorage) {
 func testExecutionClear(t *testing.T, s FunctionStorage) {
 	scope := []byte("exec-clear")
 
-	if err := s.WorkerPut(scope, 1, []byte("w")); err != nil {
+	if err := s.WorkerPut(scope, []byte("w1"), []byte("w")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.QueuePush(scope, [][]byte{[]byte("q")}); err != nil {
@@ -707,7 +741,7 @@ func testExecutionClear(t *testing.T, s FunctionStorage) {
 		}
 	}
 	// A different scope's worker state must survive.
-	if err := s.WorkerPut([]byte("other"), 1, []byte("keep")); err != nil {
+	if err := s.WorkerPut([]byte("other"), []byte("w1"), []byte("keep")); err != nil {
 		t.Fatal(err)
 	}
 

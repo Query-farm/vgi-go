@@ -44,6 +44,11 @@ type ExecutionStorage struct {
 	// "" for non-attach / non-sharding paths. The framework sets it from the
 	// unwrapped attach UUID when the execution's storage is created.
 	shardKey string
+	// substreamID is the client-minted InitRequest.substream_id of the one
+	// stream this view serves, and the key Put stores that stream's worker
+	// state under. nil on the execution-wide instance the worker caches, and
+	// for a stream whose client sent none; Put then keys by process id.
+	substreamID []byte
 }
 
 // NewExecutionStorage creates a new unbound ExecutionStorage. SetBackend and
@@ -75,6 +80,40 @@ func (s *ExecutionStorage) SetShardKey(shardKey string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.shardKey = shardKey
+}
+
+// forSubstream returns the view of s one stream's ProcessParams.Storage should
+// carry: the same backend, execution and shard, with Put keyed by that
+// stream's substream id. s itself when the client sent no substream id, so
+// such a stream behaves exactly as it did before the key existed.
+//
+// A view rather than a field set on s, because s is shared: the worker caches
+// one ExecutionStorage per execution, and every stream of that execution a
+// process serves -- many, under the launcher, TCP or HTTP -- holds it.
+func (s *ExecutionStorage) forSubstream(substreamID []byte) *ExecutionStorage {
+	if len(substreamID) == 0 {
+		return s
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return &ExecutionStorage{
+		back:        s.back,
+		executionID: s.executionID,
+		shardKey:    s.shardKey,
+		substreamID: append([]byte(nil), substreamID...),
+	}
+}
+
+// workerKey is the slot Put stores this stream's state under: its substream
+// id, or -- only when the client sent none -- this process's id.
+func (s *ExecutionStorage) workerKey() []byte {
+	s.mu.Lock()
+	id := s.substreamID
+	s.mu.Unlock()
+	if len(id) > 0 {
+		return id
+	}
+	return int64Key(int64(os.Getpid()))
 }
 
 // ExecutionID returns the bound execution_id, or nil if unset.
@@ -332,19 +371,33 @@ func (s *ExecutionStorage) StateLogClear() error {
 }
 
 // ---------------------------------------------------------------------------
-// Worker state (bound to execution_id, keyed by os.Getpid())
+// Worker state (bound to execution_id, keyed per substream)
 // ---------------------------------------------------------------------------
 
-// Put stores a value keyed by the current worker PID. Upsert semantics.
+// Put stores this stream's state, replacing whatever it stored before (upsert
+// semantics): one row per substream of the execution.
+//
+// The row is keyed by the stream's InitRequest.substream_id -- the random id
+// the client mints per substream and sends on its init, every tick and its
+// finalize -- not by the process id. Storage is already scoped to the
+// execution, which every connection of a fanned-out scan shares, so the key
+// must tell those connections apart; a pid only does when each connection is
+// its own process. Under the launcher, TCP or a threaded HTTP server one
+// process serves many of them, and a per-process key let them overwrite each
+// other so Collect/Snapshot (and so a finalize) undercounted. The pid remains
+// only for a client that sends no substream_id, which is keyed exactly as
+// before.
 func (s *ExecutionStorage) Put(data []byte) error {
 	back, exec, err := s.resolve()
 	if err != nil {
 		return err
 	}
-	return back.WorkerPut(exec, int64(os.Getpid()), data)
+	return back.WorkerPut(exec, s.workerKey(), data)
 }
 
-// Snapshot returns all stored worker values without removing them.
+// Snapshot returns every stored worker value of the execution -- one per
+// substream that called Put (per process, for a client that sends no
+// substream_id) -- without removing them.
 func (s *ExecutionStorage) Snapshot() ([][]byte, error) {
 	back, exec, err := s.resolve()
 	if err != nil {
@@ -361,7 +414,9 @@ func (s *ExecutionStorage) Snapshot() ([][]byte, error) {
 	return out, nil
 }
 
-// Collect returns all stored worker values and removes them.
+// Collect returns every stored worker value of the execution -- one per
+// substream that called Put (per process, for a client that sends no
+// substream_id) -- and removes them.
 func (s *ExecutionStorage) Collect() ([][]byte, error) {
 	back, exec, err := s.resolve()
 	if err != nil {

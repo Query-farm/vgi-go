@@ -92,10 +92,10 @@ func (f *MultiBatchFinishFunction) Process(ctx context.Context, params *vgi.Proc
 }
 
 func (f *MultiBatchFinishFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *multiBatchFinishState) ([]arrow.RecordBatch, error) {
-	// One stored entry per worker pid that handled this substream's batches,
-	// each holding that pid's own running (total, rows) — so summing across
-	// them gives this substream's accumulation, exactly as
-	// SubstreamPartialSumFunction does.
+	// One stored entry per substream of this execution that saw input (Storage.Put
+	// keys it by params.SubstreamID), each holding that substream's own running
+	// (total, rows) — so summing across them gives the execution's
+	// accumulation, exactly as SubstreamPartialSumFunction does.
 	var total, rows int64
 	if params.Storage != nil {
 		workerData, err := params.Storage.Collect()

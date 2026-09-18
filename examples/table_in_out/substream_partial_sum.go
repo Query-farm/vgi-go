@@ -20,10 +20,11 @@ import (
 // across N workers and unions their finalize outputs, so the caller
 // re-aggregates with an outer SELECT sum(...) to get the global total —
 // correct no matter how the rows were partitioned across substreams. Each
-// substream's Finalize reads only its OWN accumulated state (keyed by the
-// substream's execution_id in execution-scoped storage; params.SubstreamID is
-// the stable client-owned key available for workers that manage cross-backend
-// state themselves). This is NOT a global cross-substream combine (that is a
+// Finalize reads only its OWN execution's accumulated state -- the framework
+// keeps one row per params.SubstreamID in storage scoped to that execution
+// (Storage.Put), so it is found even when a finalize lands on a different
+// backend, and two substreams one process serves cannot overwrite each other.
+// This is NOT a global cross-substream combine (that is a
 // TableBufferingFunction; see DistributedSumFunction). Mirrors vgi-python's
 // SubstreamPartialSumFunction.
 //
@@ -73,9 +74,10 @@ func (f *SubstreamPartialSumFunction) NewState(params *vgi.ProcessParams) (*subs
 
 func (f *SubstreamPartialSumFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *substreamPartialSumState, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error {
 	state.Total += sumInt64Column(batch.Column(0))
-	// Persist the running total (per worker pid) so the FINALIZE-phase init —
-	// a separate stream with a fresh state — can read this substream's
-	// accumulated partial from execution-scoped storage.
+	// Persist the running total (one row per substream: Storage.Put keys it by
+	// params.SubstreamID) so the FINALIZE-phase init — a separate stream with a
+	// fresh state — can read this substream's accumulated partial from
+	// execution-scoped storage.
 	if params.Storage != nil {
 		if err := params.Storage.Put(encodeInt64(state.Total)); err != nil {
 			return err
@@ -87,9 +89,9 @@ func (f *SubstreamPartialSumFunction) Process(ctx context.Context, params *vgi.P
 }
 
 func (f *SubstreamPartialSumFunction) Finalize(ctx context.Context, params *vgi.ProcessParams, state *substreamPartialSumState) ([]arrow.RecordBatch, error) {
-	// The stored values are THIS substream's accumulated totals (one per worker
-	// pid that handled this substream's batches); their sum is this substream's
-	// partial.
+	// The stored values are this execution's accumulated totals, one per
+	// substream that saw input (a client may fan one execution across several
+	// connections); their sum is this finalize's partial.
 	var total int64
 	if params.Storage != nil {
 		workerData, err := params.Storage.Collect()

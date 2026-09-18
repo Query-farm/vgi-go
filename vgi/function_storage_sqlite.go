@@ -55,13 +55,6 @@ func int64Key(v int64) []byte {
 	return b
 }
 
-func int64FromKey(b []byte) int64 {
-	if len(b) != 8 {
-		return 0
-	}
-	return int64(binary.BigEndian.Uint64(b))
-}
-
 // SQLiteStorageOptions tunes a SQLite-backed FunctionStorage.
 type SQLiteStorageOptions struct {
 	// Path is the SQLite database file path. Empty defaults to a per-user,
@@ -364,13 +357,13 @@ func (s *sqliteStorage) stateDeleteKey(scope, ns, key []byte) error {
 }
 
 // ---------------------------------------------------------------------------
-// Worker state  (ns=worker, key=int64(worker_id))
+// Worker state  (ns=worker, key=worker key)
 // ---------------------------------------------------------------------------
 
 // WorkerPut stores a worker's state under the execution's worker namespace,
-// keyed by worker ID.
-func (s *sqliteStorage) WorkerPut(executionID []byte, workerID int64, state []byte) error {
-	return s.statePut(executionID, nsWorker, int64Key(workerID), state)
+// keyed by worker key.
+func (s *sqliteStorage) WorkerPut(executionID, workerKey, state []byte) error {
+	return s.statePut(executionID, nsWorker, workerKey, state)
 }
 
 // WorkerCollect drains and returns all worker states for the execution,
@@ -388,7 +381,7 @@ func (s *sqliteStorage) WorkerCollect(executionID []byte) ([][]byte, error) {
 }
 
 // WorkerScan returns all worker states for the execution without removing them,
-// ordered by worker ID.
+// ordered by worker key.
 func (s *sqliteStorage) WorkerScan(executionID []byte) ([]WorkerStateEntry, error) {
 	rows, err := s.stateScan(executionID, nsWorker)
 	if err != nil {
@@ -396,7 +389,7 @@ func (s *sqliteStorage) WorkerScan(executionID []byte) ([]WorkerStateEntry, erro
 	}
 	out := make([]WorkerStateEntry, len(rows))
 	for i, kv := range rows {
-		out[i] = WorkerStateEntry{WorkerID: int64FromKey(kv[0]), State: kv[1]}
+		out[i] = WorkerStateEntry{WorkerKey: kv[0], State: kv[1]}
 	}
 	return out, nil
 }

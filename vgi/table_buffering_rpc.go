@@ -213,7 +213,7 @@ func (w *Worker) initTableBuffering(ctx context.Context, fn TableBufferingFuncti
 	if err != nil {
 		return nil, err
 	}
-	processParams.Storage = storage
+	processParams.Storage = storage.forSubstream(processParams.SubstreamID)
 	if processParams.PushdownFilters != nil {
 		parsed, err := deserializeProcessFiltersForMetadata(processParams, fn.Metadata())
 		if err != nil {

@@ -30,10 +30,13 @@ package vgi
 //     was never pushed. There is no registration — matching the Cloudflare DO.
 // ---------------------------------------------------------------------------
 
-// WorkerStateEntry is one (worker_id, state) pair returned by WorkerScan.
+// WorkerStateEntry is one (worker key, state) pair returned by WorkerScan.
 type WorkerStateEntry struct {
-	WorkerID int64
-	State    []byte
+	// WorkerKey is the slot the state was stored under: the substream id the
+	// client minted for the stream, or the 8-byte big-endian pid of the worker
+	// process when the client sent none. Opaque to the backend.
+	WorkerKey []byte
+	State     []byte
 }
 
 // ScanWorkerStateEntry is one (stream_id, state) pair returned by ScanWorkerScan.
@@ -161,11 +164,16 @@ type AttachStateStorage interface {
 // Cloudflare Durable Object, ...); selected at worker startup.
 type FunctionStorage interface {
 
-	// --- Worker state (one slot per pid, keyed by execution_id) ---
+	// --- Worker state (one slot per worker key, keyed by execution_id) ---
+	//
+	// The worker key is chosen by ExecutionStorage.Put: the stream's substream
+	// id, or the process id when the client sent none. It is NOT a pid in
+	// general -- one process can serve many streams of one execution (launcher,
+	// TCP, HTTP), and a per-process key let them overwrite each other.
 
-	// WorkerPut stores or replaces the state for one worker process under
-	// the given execution_id.
-	WorkerPut(executionID []byte, workerID int64, state []byte) error
+	// WorkerPut stores or replaces the state under workerKey for the given
+	// execution_id. The key is opaque to the backend.
+	WorkerPut(executionID, workerKey, state []byte) error
 
 	// WorkerCollect atomically reads and deletes all worker states for an
 	// execution_id. Typically called by the primary worker at finalize time.

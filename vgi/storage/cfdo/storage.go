@@ -75,13 +75,6 @@ func int64Key(v int64) []byte {
 	return b[:]
 }
 
-func int64FromKey(b []byte) int64 {
-	if len(b) != 8 {
-		return 0
-	}
-	return int64(binary.BigEndian.Uint64(b))
-}
-
 // Options configures a CF DO storage client.
 type Options struct {
 	// URL is the base URL of the Cloudflare Worker (e.g.
@@ -497,12 +490,12 @@ func (s *Storage) ExecutionClear(scope []byte) (int, error) {
 // Worker state
 // ---------------------------------------------------------------------------
 
-// Worker state → ns=worker, key = int64(worker_id).
+// Worker state → ns=worker, key = worker key (substream id, or packed pid).
 
 // WorkerPut stores a worker's state under the execution's worker namespace,
-// keyed by worker ID.
-func (s *Storage) WorkerPut(executionID []byte, workerID int64, state []byte) error {
-	return s.statePutMany(executionID, nsWorker, []kvPair{{key: int64Key(workerID), value: state}})
+// keyed by worker key.
+func (s *Storage) WorkerPut(executionID, workerKey, state []byte) error {
+	return s.statePutMany(executionID, nsWorker, []kvPair{{key: workerKey, value: state}})
 }
 
 // WorkerCollect drains and returns all worker states for the execution,
@@ -520,7 +513,7 @@ func (s *Storage) WorkerCollect(executionID []byte) ([][]byte, error) {
 }
 
 // WorkerScan returns all worker states for the execution without removing them,
-// ordered by worker ID.
+// ordered by worker key.
 func (s *Storage) WorkerScan(executionID []byte) ([]vgi.WorkerStateEntry, error) {
 	rows, err := s.statePaged("state_scan", executionID, nsWorker, "", nil)
 	if err != nil {
@@ -528,7 +521,7 @@ func (s *Storage) WorkerScan(executionID []byte) ([]vgi.WorkerStateEntry, error)
 	}
 	out := make([]vgi.WorkerStateEntry, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, vgi.WorkerStateEntry{WorkerID: int64FromKey(r.key), State: r.value})
+		out = append(out, vgi.WorkerStateEntry{WorkerKey: r.key, State: r.value})
 	}
 	return out, nil
 }

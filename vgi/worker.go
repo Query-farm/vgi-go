@@ -1395,6 +1395,41 @@ func (w *Worker) RunIrohTcpUpstream(host string, port int, idleTimeout time.Dura
 // address (e.g. "127.0.0.1:0" for a random port) and prints "PORT:<n>" to
 // stdout so callers can discover the assigned port.
 func (w *Worker) RunHttp(addr string) error {
+	hs, err := w.newHttpServer()
+	if err != nil {
+		return err
+	}
+
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	fmt.Printf("PORT:%d\n", port)
+	os.Stdout.Sync()
+
+	srv := &http.Server{Handler: hs}
+
+	// Handle SIGTERM/SIGINT for clean shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigCh
+		srv.Shutdown(context.Background())
+	}()
+
+	err = srv.Serve(listener)
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
+}
+
+// newHttpServer builds the handler RunHttp serves -- everything short of the
+// listener -- so an in-process test can serve exactly what a deployed worker
+// does.
+func (w *Worker) newHttpServer() (*vgirpc.HttpServer, error) {
 	s := w.buildServer(transportHTTP)
 	// Resolve the signing key once so the worker (catalog opaque-data
 	// sealing — see crypto.go) and the HTTP state-token machinery share the
@@ -1404,12 +1439,12 @@ func (w *Worker) RunHttp(addr string) error {
 	if len(w.httpSigningKey) == 0 {
 		w.httpSigningKey = make([]byte, 32)
 		if _, err := rand.Read(w.httpSigningKey); err != nil {
-			return fmt.Errorf("http signing key: %w", err)
+			return nil, fmt.Errorf("http signing key: %w", err)
 		}
 	}
 	hs, err := vgirpc.NewHttpServerWithKey(s, w.httpSigningKey)
 	if err != nil {
-		return fmt.Errorf("http signing key: %w", err)
+		return nil, fmt.Errorf("http signing key: %w", err)
 	}
 	hs.SetRehydrateFunc(w.rehydrateState)
 	if w.irohBridge != nil {
@@ -1418,7 +1453,7 @@ func (w *Worker) RunHttp(addr string) error {
 			TrustedProxyAddresses: append([]string(nil), w.irohBridge.TrustedProxyAddresses...),
 		})
 		if providerErr != nil {
-			return fmt.Errorf("iroh bridge identity: %w", providerErr)
+			return nil, fmt.Errorf("iroh bridge identity: %w", providerErr)
 		}
 		hs.SetPeerIdentityProviders(provider)
 		if w.irohBridge.Authenticate {
@@ -1450,13 +1485,13 @@ func (w *Worker) RunHttp(addr string) error {
 	}
 	if w.oauthMetadata != nil {
 		if err := hs.SetOAuthResourceMetadata(w.oauthMetadata); err != nil {
-			return fmt.Errorf("oauth resource metadata: %w", err)
+			return nil, fmt.Errorf("oauth resource metadata: %w", err)
 		}
 	}
 	oauthActive := false
 	if w.oauthPkce != nil {
 		if err := hs.SetOAuthPkce(*w.oauthPkce); err != nil {
-			return fmt.Errorf("oauth pkce: %w", err)
+			return nil, fmt.Errorf("oauth pkce: %w", err)
 		}
 		oauthActive = true
 	}
@@ -1485,31 +1520,7 @@ func (w *Worker) RunHttp(addr string) error {
 	// Pre-render the remaining pages / oauth routes deterministically rather
 	// than lazily on the first request.
 	hs.InitPages()
-
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("listen: %w", err)
-	}
-
-	port := listener.Addr().(*net.TCPAddr).Port
-	fmt.Printf("PORT:%d\n", port)
-	os.Stdout.Sync()
-
-	srv := &http.Server{Handler: hs}
-
-	// Handle SIGTERM/SIGINT for clean shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-sigCh
-		srv.Shutdown(context.Background())
-	}()
-
-	err = srv.Serve(listener)
-	if err == http.ErrServerClosed {
-		return nil
-	}
-	return err
+	return hs, nil
 }
 
 // newExecutionID generates a UUID-based execution ID.
