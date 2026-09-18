@@ -546,6 +546,10 @@ type DefaultReadOnlyCatalog struct {
 	schemas          map[string]*catalogSchemaInfo
 	version          int64
 	attachOpaqueData []byte
+	// functionCache holds the built function listings (see
+	// catalog_function_listing.go). The catalog is immutable once built, so
+	// they never go stale; a rebuilt catalog starts with an empty cache.
+	functionCache functionListingCache
 }
 
 type catalogSchemaInfo struct {
@@ -904,7 +908,7 @@ func (w *Worker) serializedGlobalFunctions() (SerializedItems, error) {
 			if fi.Name != name || fi.unlisted {
 				continue
 			}
-			data, err := SerializeFunctionInfo(fi)
+			data, err := w.catalog.functionCache.encode(fi)
 			if err != nil {
 				return nil, err
 			}
@@ -1417,10 +1421,6 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			if w.catalog == nil {
 				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
-			si, ok := w.catalog.schemas[schemaPathKey(req.Path)]
-			if !ok {
-				return ItemsResponseWire{Items: [][]byte{}}, nil
-			}
 
 			// attach_opaque_data has already been unwrapped to the catalog's own
 			// plaintext by unwrapReqOpaque (the unaryCatalog wrapper strips the
@@ -1431,42 +1431,12 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			// under projection_repro, accumulate_* only under accumulate) compares
 			// against it.
 			catalogName := w.catalogOfAttach(req.AttachOpaqueData)
-
-			var items [][]byte
-			for i := range si.functions {
-				fi := &si.functions[i]
-				// Filter by type if requested. DuckDB sends "SCALAR_FUNCTION",
-				// "TABLE_FUNCTION", etc.; normalizeFunctionType also accepts the
-				// short forms. An unrecognized type filters nothing.
-				if req.Type != "" {
-					switch want := normalizeFunctionType(FunctionType(req.Type)); want {
-					case FunctionTypeTable:
-						// Table-buffering functions register as DuckDB table
-						// functions, so they match a TABLE_FUNCTION request.
-						if fi.FunctionType != FunctionTypeTable && fi.FunctionType != FunctionTypeTableBuffering {
-							continue
-						}
-					case FunctionTypeScalar, FunctionTypeAggregate:
-						if fi.FunctionType != want {
-							continue
-						}
-					}
-				}
-				// Every function has exactly one home catalog; a catalog only
-				// lists what it owns. (An unresolvable attach leaves
-				// catalogName empty — nothing to compare against, so list all.)
-				if fi.unlisted {
-					continue
-				}
-				if catalogName != "" && catalogName != fi.catalogHome {
-					continue
-				}
-				LogCatalog.Debug("catalog: returning function", "name", fi.Name, "type", fi.FunctionType)
-				data, err := SerializeFunctionInfo(fi)
-				if err != nil {
-					return ItemsResponseWire{}, err
-				}
-				items = append(items, data)
+			items, ok, err := w.catalog.functionListing(schemaPathKey(req.Path), req.Type, catalogName)
+			if err != nil {
+				return ItemsResponseWire{}, err
+			}
+			if !ok {
+				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
 			return ItemsResponseWire{Items: items}, nil
 		})
