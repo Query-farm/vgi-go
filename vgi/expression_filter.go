@@ -219,11 +219,24 @@ var (
 
 func ensureEvalDB() (*sql.DB, error) {
 	evalOnce.Do(func() {
-		db, err := sql.Open("duckdb", "")
+		// threads=1: the evaluator runs one small query per filtered batch, and
+		// at that size DuckDB's intra-query parallelism is pure scheduling
+		// overhead (~40% of an evaluation's CPU for a 100-row batch).
+		// Concurrent streams still evaluate concurrently, each on its own
+		// connection. Filters compare with binary collation; the session
+		// setting is applied once as each connection opens rather than by a
+		// statement on every evaluation.
+		connector, err := duckdb.NewConnector("?threads=1", func(execer driver.ExecerContext) error {
+			if _, err := execer.ExecContext(context.Background(), "SET default_collation = 'binary'", nil); err != nil {
+				return fmt.Errorf("configure binary filter collation: %w", err)
+			}
+			return nil
+		})
 		if err != nil {
 			evalErr = fmt.Errorf("open duckdb: %w", err)
 			return
 		}
+		db := sql.OpenDB(connector)
 		// Spatial extension is optional — try load; if missing, spatial
 		// predicates will fail with a clear DuckDB error at query time.
 		_, _ = db.Exec(`INSTALL spatial`)
@@ -251,9 +264,6 @@ func evalExpressionAgainstBatch(ctx context.Context, batch arrow.RecordBatch, sq
 		return nil, err
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, "SET default_collation = 'binary'"); err != nil {
-		return nil, fmt.Errorf("configure binary filter collation: %w", err)
-	}
 
 	tableName := fmt.Sprintf("vgi_filter_eval_%d", nextEvalID())
 	createSQL, err := buildCreateTableSQL(tableName, batch.Schema())
