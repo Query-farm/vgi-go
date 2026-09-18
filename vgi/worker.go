@@ -1407,7 +1407,7 @@ func (w *Worker) RunHttp(addr string) error {
 
 	port := listener.Addr().(*net.TCPAddr).Port
 	fmt.Printf("PORT:%d\n", port)
-	os.Stdout.Sync()
+	_ = os.Stdout.Sync()
 
 	srv := &http.Server{Handler: hs}
 
@@ -1416,7 +1416,7 @@ func (w *Worker) RunHttp(addr string) error {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-sigCh
-		srv.Shutdown(context.Background())
+		_ = srv.Shutdown(context.Background())
 	}()
 
 	err = srv.Serve(listener)
