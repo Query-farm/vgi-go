@@ -978,6 +978,42 @@ func (expression *v2Expr) sql(batch arrow.RecordBatch) (string, error) {
 	return "", fmt.Errorf("runtime filter has no evaluator")
 }
 
+// boolColumnLeaf projects `WHERE flag` / `WHERE NOT flag` onto the equality
+// leaf, or returns nil when expr is neither.
+//
+// DuckDB pushes a predicate that *is* a boolean column down as a bare
+// `column_ref`, not as `flag = true`; the schema admits that, since
+// `coreExpression` lists `columnRef` first. The decoder accepts the shape
+// already — its boolean gate asks for the resolved type — but without this
+// projection it reaches the ergonomic helpers as a bare v2FilterView, which
+// has no ConstantFilter to render, so ToSQL falls through to "1=1" and a
+// SQL-backed worker silently loses pushdown on the commonest boolean
+// predicate there is. That is a wrong answer rather than a slow one: DuckDB
+// does not re-apply a predicate it pushed into a table function.
+//
+// The rewrite is exact rather than approximate, including under NULLs.
+// `WHERE flag` keeps only TRUE (a NULL predicate is not satisfied) and so does
+// `flag = true`; `WHERE NOT flag` keeps only FALSE (NOT NULL is NULL) and so
+// does `flag = false`. Three-valued logic makes both pairs agree on every
+// input, which is what makes this a projection and not a change of meaning.
+//
+// A column that is not BOOLEAN is left alone rather than guessed at.
+func boolColumnLeaf(expr *v2Expr) Filter {
+	ref, want := expr, true
+	if expr.Node == "not" {
+		ref, want = expr.Expression, false
+	}
+	if ref == nil || ref.Node != "column_ref" || ref.DataType == nil || ref.DataType.ID() != arrow.BOOL {
+		return nil
+	}
+	return &ConstantFilter{
+		columnName:  ref.ColumnName,
+		columnIndex: ref.ColumnIndex,
+		Op:          OpEQ,
+		Value:       scalar.NewBooleanScalar(want),
+	}
+}
+
 // v2FilterView preserves the ergonomic Filter helper API over the v2 AST.
 type v2FilterView struct{ expr *v2Expr }
 
@@ -987,6 +1023,9 @@ type v2FilterView struct{ expr *v2Expr }
 func publicV2Filter(expr *v2Expr) Filter {
 	if expr == nil {
 		return &v2FilterView{expr: expr}
+	}
+	if leaf := boolColumnLeaf(expr); leaf != nil {
+		return leaf
 	}
 	switch expr.Node {
 	case "comparison":

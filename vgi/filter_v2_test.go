@@ -337,3 +337,145 @@ func TestFilterV2SpatialIdentityIsCapabilityGated(t *testing.T) {
 		t.Fatalf("unknown extension identity was accepted: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// A BOOLEAN column is a predicate on its own
+//
+// `WHERE flag` / `WHERE NOT flag` is idiomatic SQL, and DuckDB pushes it down
+// as a bare `column_ref` rather than rewriting it to `flag = true`. The
+// decoder accepts the shape already — its boolean gate asks for the resolved
+// type — but without a projection onto the equality leaf it reaches the
+// ergonomic helpers as an opaque v2FilterView, whose ToSQL falls through to
+// "1=1": a silently dropped predicate, which is a wrong answer rather than a
+// slow one because DuckDB does not re-apply what it pushed into a table
+// function. See vgi-python 0.36.2.
+// ---------------------------------------------------------------------------
+
+func boolOutputSchema() *arrow.Schema {
+	return arrow.NewSchema([]arrow.Field{
+		{Name: "flag", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
+		{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	}, nil)
+}
+
+// boolInputBatch is flag = TRUE, FALSE, NULL, TRUE with n = 1..4.
+func boolInputBatch(t *testing.T) arrow.RecordBatch {
+	t.Helper()
+	mem := memory.NewGoAllocator()
+	flags := array.NewBooleanBuilder(mem)
+	flags.AppendValues([]bool{true, false, false, true}, []bool{true, true, false, true})
+	flagArray := flags.NewArray()
+	flags.Release()
+	ints := array.NewInt64Builder(mem)
+	ints.AppendValues([]int64{1, 2, 3, 4}, nil)
+	intArray := ints.NewArray()
+	ints.Release()
+	batch := array.NewRecordBatch(boolOutputSchema(), []arrow.Array{flagArray, intArray}, 4)
+	flagArray.Release()
+	intArray.Release()
+	return batch
+}
+
+const boolFlagRef = `{"node":"column_ref","column_index":0,"column_name":"flag"}`
+
+func boolPredicateFilters(t *testing.T, expression string) *PushdownFilters {
+	t.Helper()
+	document := `{"encoding":"vgi.filters.v2","semantics":"vgi.duckdb.standard.v1","kind":"snapshot","predicates":[{"id":"p","revision":0,"mode":"required","source":"query","expression":` + expression + `}]}`
+	encoded := filterV2Batch(t, document, nil, nil)
+	defer encoded.Release()
+	filters, err := DeserializeFiltersWithSchema(encoded, boolOutputSchema(), nil)
+	if err != nil {
+		t.Fatalf("deserialize %s: %v", expression, err)
+	}
+	return filters
+}
+
+// remainingInts returns the n column of whatever survived Apply.
+func remainingInts(t *testing.T, filters *PushdownFilters, input arrow.RecordBatch) []int64 {
+	t.Helper()
+	filtered, err := filters.Apply(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer filtered.Release()
+	column := filtered.Column(1).(*array.Int64)
+	out := make([]int64, column.Len())
+	for i := range out {
+		out[i] = column.Value(i)
+	}
+	return out
+}
+
+func TestFilterV2BareBooleanColumnIsAPredicateRoot(t *testing.T) {
+	input := boolInputBatch(t)
+	defer input.Release()
+
+	// A NULL predicate is not satisfied, so the NULL row drops — exactly the
+	// rows `flag = true` keeps, which is what makes the rewrite below a
+	// projection rather than a change of meaning.
+	positive := boolPredicateFilters(t, boolFlagRef)
+	if got := remainingInts(t, positive, input); len(got) != 2 || got[0] != 1 || got[1] != 4 {
+		t.Fatalf("WHERE flag kept %v, want [1 4]", got)
+	}
+
+	// NOT NULL is NULL, so the NULL row drops here too — exactly `flag = false`.
+	negative := boolPredicateFilters(t, `{"node":"not","expression":`+boolFlagRef+`}`)
+	if got := remainingInts(t, negative, input); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("WHERE NOT flag kept %v, want [2]", got)
+	}
+}
+
+func TestFilterV2BooleanColumnPredicatesRenderAsSQL(t *testing.T) {
+	// The half a row count cannot see. Left unprojected these render "1=1",
+	// and a worker that builds a WHERE clause from that returns rows the
+	// predicate excludes.
+	identity := func(s string) string { return s }
+
+	positive := boolPredicateFilters(t, boolFlagRef)
+	sql, params := positive.ToSQL(identity, "?")
+	if sql != "flag = ?" || len(params) != 1 || params[0] != true {
+		t.Fatalf("WHERE flag rendered %q with %v, want \"flag = ?\" with [true]", sql, params)
+	}
+
+	negative := boolPredicateFilters(t, `{"node":"not","expression":`+boolFlagRef+`}`)
+	sql, params = negative.ToSQL(identity, "?")
+	if sql != "flag = ?" || len(params) != 1 || params[0] != false {
+		t.Fatalf("WHERE NOT flag rendered %q with %v, want \"flag = ?\" with [false]", sql, params)
+	}
+}
+
+func TestFilterV2BooleanColumnInsideConjunctionStillPushesDown(t *testing.T) {
+	// The shape that actually turns up: one child the worker cannot render
+	// used to cost the whole conjunction its pushdown.
+	mem := memory.NewGoAllocator()
+	values := array.NewInt64Builder(mem)
+	values.Append(2)
+	literal := values.NewArray()
+	values.Release()
+	defer literal.Release()
+
+	document := `{"encoding":"vgi.filters.v2","semantics":"vgi.duckdb.standard.v1","kind":"snapshot","predicates":[{"id":"p","revision":0,"mode":"required","source":"query","expression":{"node":"and","children":[{"node":"comparison","op":"gt","left":{"node":"column_ref","column_index":1,"column_name":"n"},"right":{"node":"literal","value_ref":0}},{"node":"not","expression":` + boolFlagRef + `}]}}]}`
+	encoded := filterV2Batch(t, document, []arrow.Field{{Name: "value_0", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, []arrow.Array{literal})
+	defer encoded.Release()
+	filters, err := DeserializeFiltersWithSchema(encoded, boolOutputSchema(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql, params := filters.ToSQL(func(s string) string { return s }, "?")
+	if sql != "(n > ? AND flag = ?)" || len(params) != 2 || params[1] != false {
+		t.Fatalf("conjunction rendered %q with %v, want \"(n > ? AND flag = ?)\" with [2 false]", sql, params)
+	}
+}
+
+func TestFilterV2NonBooleanColumnIsStillRefusedAsPredicateRoot(t *testing.T) {
+	// `WHERE n` where n is BIGINT is not a predicate, and the projection must
+	// not make it look like one.
+	document := `{"encoding":"vgi.filters.v2","semantics":"vgi.duckdb.standard.v1","kind":"snapshot","predicates":[{"id":"p","revision":0,"mode":"required","source":"query","expression":{"node":"column_ref","column_index":1,"column_name":"n"}}]}`
+	encoded := filterV2Batch(t, document, nil, nil)
+	defer encoded.Release()
+	if _, err := DeserializeFiltersWithSchema(encoded, boolOutputSchema(), nil); err == nil {
+		t.Fatal("a BIGINT column was accepted as a predicate root")
+	} else if !strings.Contains(err.Error(), "predicate root") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
