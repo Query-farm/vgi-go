@@ -256,6 +256,16 @@ func main() {
 		w.RegisterCatalogTable("data", ct)
 	}
 
+	// A secret-dependent cacheable table, pre-bound (InlineBind) so a scan takes
+	// the client's no-bind-RPC path, where the secrets the cache keys on are
+	// resolved client-side. See examples/internal/secretcache.
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:       "secret_cache_nonce",
+		Comment:    "One-row cacheable result keyed on the vgi_example secret",
+		Function:   table.NewSecretCacheNonceFunction(),
+		InlineBind: true,
+	})
+
 	// Time-travel + cacheable: AT (VERSION => n) is resolved to the
 	// cache_versioned_scan version argument in the scan-function handler below.
 	w.RegisterCatalogTable("data", vgi.CatalogTable{

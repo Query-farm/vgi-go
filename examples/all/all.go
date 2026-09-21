@@ -101,6 +101,9 @@ func registerScalars(w *vgi.Worker) {
 	w.RegisterScalar(&scalar.SameNameMainFunction{})
 	w.RegisterScalarInSchema("data", &scalar.SameNameDataFunction{})
 	w.RegisterScalar(&scalar.ScaleBySettingFunction{})
+	// Secret-dependent + per_value: memoized per secret fingerprint (see
+	// examples/internal/secretcache).
+	w.RegisterScalar(&scalar.SecretCachedScalarFunction{})
 	w.RegisterScalar(&scalar.SecretFieldFunction{})
 	w.RegisterScalar(&scalar.SmartFormatWidthFunction{})
 	w.RegisterScalar(&scalar.SmartFormatPrefixFunction{})
@@ -199,6 +202,10 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewCacheVersionedFunction())
 	w.RegisterTable(table.NewCacheProjectionFunction())
 	w.RegisterTable(table.NewCachePoisonFunction())
+	// secret_cache_nonce — a cacheable producer declaring the vgi_example secret,
+	// cached per secret fingerprint (cache/secret_scope.test; see
+	// examples/internal/secretcache). Also the data.secret_cache_nonce table.
+	w.RegisterTable(table.NewSecretCacheNonceFunction())
 	// test_same_name_cached — one cacheable producer name homed in BOTH main and
 	// data, each tagging its row with its own schema; the result-cache member of
 	// the schema-disambiguation family (cache/same_name_schemas.test).
@@ -339,4 +346,7 @@ func registerTableInOuts(w *vgi.Worker) {
 	w.RegisterTableBuffering(&table_in_out.SumAllColumnsFunction{})
 	w.RegisterTableInOut(table_in_out.NewUnnestTensorRowsFunction())
 	w.RegisterTableInOut(table_in_out.NewSecretInOutFunction())
+	// Secret-dependent + per_value, secret requested in OnBind (two-phase):
+	// memoized per secret fingerprint (see examples/internal/secretcache).
+	w.RegisterTableInOut(table_in_out.NewSecretCachedLateralFunction())
 }
