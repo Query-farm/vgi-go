@@ -366,6 +366,21 @@ func main() {
 		Function: table.NewSecretDemoFunction(),
 	})
 
+	// A partitioned source as a CATALOG TABLE. A table's scan function is built
+	// through a different path than a direct function call, so a client can
+	// support partitioned aggregates for one and silently not the other; only a
+	// table exercises the catalog path. Paired with a partition column declared
+	// last — see TrailingPartitionSalesFunction. rows_per_country = 100 matches
+	// country_partitioned_sales(100). See table/partition_columns.test.
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name:     "trailing_partition_sales",
+		Comment:  "Per-country sales, SINGLE_VALUE partition column declared last; GROUP BY country must plan as PARTITIONED_AGGREGATE",
+		Function: table.NewTrailingPartitionSalesFunction(),
+		FuncArgs: []vgi.CatalogTableArg{
+			{Position: 0, Value: int64(100), Type: arrow.PrimitiveTypes.Int64},
+		},
+	})
+
 	// Same backing function, but with inlined cardinality on TableInfo so the
 	// per-bind table_function_cardinality RPC is skipped.
 	{

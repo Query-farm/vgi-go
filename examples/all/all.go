@@ -167,6 +167,9 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewNonMonotoneBatchIndexFunction())
 	w.RegisterTable(table.NewBatchIndexOverflowFunction())
 	w.RegisterTable(table.NewCountryPartitionedSalesFunction())
+	// trailing_partition_sales — the same contract with the partition column
+	// declared LAST; also the data.trailing_partition_sales table.
+	w.RegisterTable(table.NewTrailingPartitionSalesFunction())
 	w.RegisterTable(table.NewRegionYearPartitionedFunction())
 	w.RegisterTable(table.NewPartitionedWithExplicitOverrideFunction())
 	w.RegisterTable(table.NewDisjointRangePartitionedFunction())

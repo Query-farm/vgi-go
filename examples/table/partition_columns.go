@@ -5,6 +5,7 @@ package table
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
@@ -107,6 +108,116 @@ func (f *CountryPartitionedSalesFunction) Process(ctx context.Context, params *v
 }
 func NewCountryPartitionedSalesFunction() vgi.TableFunction {
 	return vgi.AsTableFunction[pcState](&CountryPartitionedSalesFunction{})
+}
+
+// ---------------------------------------------------------------------------
+// trailing_partition_sales — SINGLE_VALUE, partition column declared LAST.
+// ---------------------------------------------------------------------------
+
+// trailingPartitionSchema is country_partitioned_sales' contract with the
+// partition column moved from index 0 to index 3.
+var trailingPartitionSchema = arrow.NewSchema([]arrow.Field{
+	{Name: "seq", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	{Name: "label", Type: arrow.BinaryTypes.String, Nullable: true},
+	{Name: "sales", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	pcCountryField,
+}, nil)
+
+type trailingPartitionArgs struct {
+	RowsPerCountry int64 `vgi:"pos=0,ge=1,doc=Rows to emit per country partition"`
+}
+
+// TrailingPartitionSalesFunction is country_partitioned_sales with `country`
+// declared LAST in the schema rather than first. That difference is the point:
+// every other partitioned fixture declares its partition column at index 0,
+// which makes two distinct index spaces accidentally agree.
+//
+// CanUsePartitionedAggregate asks get_partition_info about WORKER-SCHEMA
+// indices, but the sink later asks get_partition_data about SCAN-LOCAL ones
+// (positions in the scan's own column_ids, after projection pushdown).
+// GROUP BY country projects just country and sales, so the sink asks about
+// scan-local 0 while the declared index is 3 — a client comparing them without
+// mapping raised a FATAL InternalException. With the partition column at index 0
+// both spaces say 0 and the bug is invisible.
+//
+// Also registered as the catalog table data.trailing_partition_sales, because
+// the two paths install their scan functions separately: a client can wire
+// get_partition_info for direct calls and miss it for tables, and a table then
+// silently never plans PARTITIONED_AGGREGATE. Same deterministic sales values as
+// country_partitioned_sales, so the two agree column-for-column. Backs
+// table/partition_columns.test. Mirrors vgi-python's
+// TrailingPartitionSalesFunction.
+//
+// ProjectionPushdown is deliberate: without it the scan emits every base column
+// and the projection above it carries base-column indices, which DuckDB's own
+// CanUsePartitionedAggregate then maps a second time (duckdb/duckdb#24327, not
+// backported to v1.5), crashing the planner on 1.5-based builds.
+type TrailingPartitionSalesFunction struct{}
+
+var _ vgi.TypedTableFunc[pcState] = (*TrailingPartitionSalesFunction)(nil)
+
+func (f *TrailingPartitionSalesFunction) Name() string { return "trailing_partition_sales" }
+func (f *TrailingPartitionSalesFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description:        "Per-country sales rows, one Arrow batch per country, with the SINGLE_VALUE partition column declared LAST in the schema instead of first.",
+		Categories:         []string{"generator", "partitioning"},
+		PartitionKind:      vgi.PartitionKindSingleValuePartitions,
+		ProjectionPushdown: true,
+		Examples: []vgi.CatalogExample{
+			{SQL: "SELECT country, SUM(sales) FROM trailing_partition_sales(100) GROUP BY country", Description: "Partitioned aggregate over a non-leading partition column"},
+		},
+	}
+}
+func (f *TrailingPartitionSalesFunction) ArgumentSpecs() []vgi.ArgSpec {
+	return vgi.DeriveArgSpecs(trailingPartitionArgs{})
+}
+func (f *TrailingPartitionSalesFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+	return vgi.BindSchema(trailingPartitionSchema)
+}
+func (f *TrailingPartitionSalesFunction) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
+	if err := pushIndexQueue(params, len(pcCountries)); err != nil {
+		return nil, err
+	}
+	return &vgi.GlobalInitResponse{MaxWorkers: 4}, nil
+}
+func (f *TrailingPartitionSalesFunction) NewState(params *vgi.ProcessParams) (*pcState, error) {
+	return &pcState{}, nil
+}
+
+// Process emits one country's rows per call, building only the projected
+// columns. The partition value is passed explicitly because a projection that
+// omits country (COUNT(*)) still reads a partitioned source.
+func (f *TrailingPartitionSalesFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *pcState, out *vgirpc.OutputCollector) error {
+	idx, ok, err := popIndex(params)
+	if err != nil || !ok {
+		return finishOr(out, err)
+	}
+	country := pcCountries[idx]
+	rows := argInt0(params)
+	base := idx * 1_000_000
+	projected := vgi.ProjectedColumns(params.ProjectionIDs, trailingPartitionSchema)
+	cols := make(map[string]arrow.Array, 4)
+	if projected.Contains("seq") {
+		cols["seq"] = vgi.BuildInt64Array(rows, func(i int64) int64 { return i })
+	}
+	if projected.Contains("label") {
+		cols["label"] = vgi.BuildStringArray(rows, func(i int64) string { return fmt.Sprintf("%s-%d", country, i) })
+	}
+	if projected.Contains("sales") {
+		cols["sales"] = vgi.BuildInt64Array(rows, func(i int64) int64 { return base + i })
+	}
+	if projected.Contains("country") {
+		cols["country"] = buildStringConst(country, rows)
+	}
+	batch, err := vgi.BatchFromMap(params.OutputSchema, cols, rows)
+	if err != nil {
+		return err
+	}
+	return vgi.EmitPartitioned(out, batch, []arrow.Field{pcCountryField}, vgi.PartitionKindSingleValuePartitions,
+		map[string]vgi.PartitionValue{"country": {Min: country, Max: country}})
+}
+func NewTrailingPartitionSalesFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[pcState](&TrailingPartitionSalesFunction{})
 }
 
 // ---------------------------------------------------------------------------
