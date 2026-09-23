@@ -372,6 +372,8 @@ EXPECTED_SKIP_REASONS=(
   'require-env VGI_DATABASE_BUN_WORKER'          # Bun package fixture belongs to its SDK lane
   'require-env VGI_DATABASE_PYTHON_WORKER'       # Python package fixture belongs to its SDK lane
   'require-env VGI_DATABASE_RUST_WORKER'         # Rust package fixture belongs to its SDK lane
+  'require-env VGI_MALFORMED_BATCH_WORKER'       # hostile malformed-Arrow fixture (vgi test/support only)
+  'require-env VGI_ROWID_CONSTRAINT_WORKER'      # hostile rowid-constraint fixture (vgi test/support only)
 )
 # Lane-specific additions — a skip that is expected on one lane is a red flag on
 # another (e.g. VGI_TEST_DEDICATED_WORKER skipping on stdio would mean the crash
