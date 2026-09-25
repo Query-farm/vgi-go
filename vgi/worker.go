@@ -1267,7 +1267,7 @@ func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 	// key gets ProtocolNotSupportedError.
 	s.SetServiceName(ProtocolName)
 	// Declare the application protocol surface version. The framework
-	// advertises it via __describe__ and enforces an exact major+minor match
+	// advertises it via Reflection.v1 and enforces an exact major+minor match
 	// against the client's vgi_rpc.protocol_version at dispatch.
 	s.SetProtocolVersion(ProtocolVersion)
 	// Execution-storage cleanup. The deferred-cleanup heuristic assumes a single
@@ -1317,6 +1317,12 @@ func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 
 	// Table-buffering sink RPCs (process/combine/destructor).
 	w.registerTableBufferingRPCs(s)
+
+	// Browser clients discover the application protocol through Reflection.v1.
+	// Register it after the application methods so vgi.v2 remains primary.
+	if err := vgirpc.RegisterReflection(s); err != nil {
+		panic(fmt.Errorf("register VGI reflection: %w", err))
+	}
 
 	return s
 }
