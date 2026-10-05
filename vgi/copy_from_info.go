@@ -5,6 +5,8 @@ package vgi
 import (
 	"bytes"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -41,7 +43,9 @@ func SerializeCopyFromFormatInfo(rec copyFromFormatRecord) ([]byte, error) {
 	if len(rec.tags) > 0 {
 		kb := tagsBuilder.KeyBuilder().(*array.StringBuilder)
 		vb := tagsBuilder.ItemBuilder().(*array.StringBuilder)
-		for k, v := range rec.tags {
+		// Sorted, so the same record always encodes to the same bytes.
+		for _, k := range slices.Sorted(maps.Keys(rec.tags)) {
+			v := rec.tags[k]
 			kb.Append(k)
 			vb.Append(v)
 		}

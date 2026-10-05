@@ -219,6 +219,7 @@ COVERAGE_GATE := --min-executed $(GO_MIN_EXECUTED) \
 	--allow-skip 'require-env VGI_ATTACH_OPTIONS_REQUIRED_WORKER' \
 	--allow-skip 'require-env VGI_BAD_ENUM_WORKER' \
 	--allow-skip 'require-env VGI_BAD_PROTOCOL_WORKER' \
+	--allow-skip 'require-env VGI_CATALOG_CONTENTS_WORKER' \
 	--allow-skip 'require-env VGI_DATABASE_BUN_WORKER' \
 	--allow-skip 'require-env VGI_DATABASE_PYTHON_WORKER' \
 	--allow-skip 'require-env VGI_DATABASE_RUST_WORKER' \

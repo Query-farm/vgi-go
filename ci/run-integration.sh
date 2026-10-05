@@ -357,6 +357,7 @@ esac
 EXPECTED_SKIP_REASONS=(
   'require-env VGI_BAD_ENUM_WORKER'              # malformed-ENUM fixture, not wired here
   'require-env VGI_BAD_PROTOCOL_WORKER'          # incompatible-protocol fixture, not wired here
+  'require-env VGI_CATALOG_CONTENTS_WORKER'      # vgi-python contents_* catalogs (catalog_contents*.test)
   'require-env VGI_RULES_WORKER'                 # vgi-rust multibatch-repro fixture
   'require-env VGI_SCHEMA_RECONCILE_DB'          # schema-reconcile sqlite fixture, not set here
   'require-env VGI_WORKER_SUPPORTS_DYNAMIC_CODE' # dynamic-code registration, not implemented

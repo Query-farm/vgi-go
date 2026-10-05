@@ -4,6 +4,8 @@ package vgi
 
 import (
 	"bytes"
+	"maps"
+	"slices"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -69,7 +71,9 @@ func SerializeAttachCatalogInfo(info AttachCatalogInfo) ([]byte, error) {
 	if len(info.Options) > 0 {
 		kb := optionsBuilder.KeyBuilder().(*array.StringBuilder)
 		vb := optionsBuilder.ItemBuilder().(*array.StringBuilder)
-		for k, v := range info.Options {
+		// Sorted, so the same record always encodes to the same bytes.
+		for _, k := range slices.Sorted(maps.Keys(info.Options)) {
+			v := info.Options[k]
 			kb.Append(k)
 			vb.Append(v)
 		}

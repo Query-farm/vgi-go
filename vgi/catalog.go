@@ -99,39 +99,13 @@ type CatalogAttachRequestWire struct {
 	ClientCapabilities *[]byte `vgirpc:"client_capabilities"`
 }
 
-// CatalogAttachResultWire is the wire type for catalog_attach result.
-type CatalogAttachResultWire struct {
-	AttachOpaqueData         []byte            `vgirpc:"attach_opaque_data"`
-	SupportsTransactions     bool              `vgirpc:"supports_transactions"`
-	SupportsTimeTravel       bool              `vgirpc:"supports_time_travel"`
-	CatalogVersionFrozen     bool              `vgirpc:"catalog_version_frozen"`
-	CatalogVersion           int64             `vgirpc:"catalog_version"`
-	AttachOpaqueDataRequired bool              `vgirpc:"attach_opaque_data_required"`
-	DefaultSchema            string            `vgirpc:"default_schema"`
-	Settings                 SerializedItems   `vgirpc:"settings"`
-	SecretTypes              SerializedItems   `vgirpc:"secret_types"`
-	AttachCatalogs           SerializedItems   `vgirpc:"attach_catalogs"`
-	Comment                  *string           `vgirpc:"comment"`
-	Tags                     map[string]string `vgirpc:"tags"`
-	SupportsColumnStatistics bool              `vgirpc:"supports_column_statistics"`
-	// GlobalFunctions and GlobalFunctionPrefix are protocol 1.3.0 additions.
-	// They sit between supports_column_statistics and resolved_data_version
-	// because the Arrow schema match is positional — see
-	// generated.CatalogAttachResultSchema. A worker populates them with
-	// WithGlobalFunctions / WithGlobalFunctionPrefix; a worker that declares
-	// neither sends the empty defaults (empty list / empty string), mirroring
-	// vgi-python's CatalogAttachResult.
-	GlobalFunctions               SerializedItems `vgirpc:"global_functions"`
-	GlobalFunctionPrefix          string          `vgirpc:"global_function_prefix"`
-	ResolvedDataVersion           *string         `vgirpc:"resolved_data_version"`
-	ResolvedImplementationVersion *string         `vgirpc:"resolved_implementation_version"`
-	// SupportsCatalogContents advertises the catalog_contents RPC (bulk
-	// catalog fetch). It is the last field, so positional schema matching
-	// puts it after resolved_implementation_version. This SDK does not serve
-	// catalog_contents yet, so it is always false and the client keeps using
-	// the per-object catalog_*_list RPCs.
-	SupportsCatalogContents bool `vgirpc:"supports_catalog_contents"`
-}
+// CatalogAttachResultWire is the wire type for the catalog_attach result.
+//
+// It is generated from vgi-python's CatalogAttachResult (see
+// generated/protocol_types.go), so a field the protocol appends lands here in
+// the right position with the right nullability instead of being mirrored by
+// hand. The alias keeps the established name.
+type CatalogAttachResultWire = generated.CatalogAttachResult
 
 // CatalogVersionRequestWire is the wire type for catalog_version.
 type CatalogVersionRequestWire struct {
@@ -1196,6 +1170,9 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				GlobalFunctionPrefix:          globalFunctionPrefix,
 				ResolvedDataVersion:           resolvedData,
 				ResolvedImplementationVersion: resolvedImpl,
+				// The default catalog is static and version-frozen, so the
+				// whole of it can be served in one catalog_contents call.
+				SupportsCatalogContents: !w.catalogContentsDisabled,
 			}
 			if w.catalogComment != "" {
 				c := w.catalogComment
@@ -1231,19 +1208,19 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_version
 	unaryCatalog[CatalogVersionRequestWire, CatalogVersionResponseWire](w, s, "catalog_version",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogVersionRequestWire) (CatalogVersionResponseWire, error) {
-			if w.catalogVersionHook != nil {
-				if err := w.catalogVersionHook(req.AttachOpaqueData, callCtx); err != nil {
-					return CatalogVersionResponseWire{}, &vgirpc.RpcError{
-						Type:    "ValueError",
-						Message: err.Error(),
-					}
-				}
-			}
-			version := int64(1)
-			if w.catalog != nil {
-				version = w.catalog.version
+			version, err := w.catalogVersionOf(req.AttachOpaqueData, callCtx)
+			if err != nil {
+				return CatalogVersionResponseWire{}, err
 			}
 			return CatalogVersionResponseWire{Version: version}, nil
+		})
+
+	// catalog_contents — every schema and all of its contents in one call
+	// (protocol 2.1.0). Composed from the same listings the per-schema RPCs
+	// below serve; see catalog_contents.go.
+	unaryCatalog[CatalogContentsRequestWire, generated.CatalogContentsResponse](w, s, "catalog_contents",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogContentsRequestWire) (generated.CatalogContentsResponse, error) {
+			return w.catalogContents(req.AttachOpaqueData, callCtx)
 		})
 
 	// catalog_transaction_begin — allocate a fresh transaction id when the
@@ -1276,27 +1253,13 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schemas
 	unaryCatalog[SchemasRequestWire, ItemsResponseWire](w, s, "catalog_schemas",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemasRequestWire) (ItemsResponseWire, error) {
-			if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
-				items, err := w.writableSchemas(wc)
-				if err != nil {
-					return ItemsResponseWire{}, err
-				}
-				return ItemsResponseWire{Items: items}, nil
+			infos, err := w.listSchemaInfos(req.AttachOpaqueData)
+			if err != nil {
+				return ItemsResponseWire{}, err
 			}
-			if w.catalog == nil {
-				return ItemsResponseWire{Items: [][]byte{}}, nil
-			}
-			// Alias-info catalogs (e.g. accumulate) are distinct logical catalogs
-			// that share the binary but not the primary catalog's tables: expose
-			// only the "main" schema where their catalog-scoped functions live,
-			// not the primary's "data"/dynamic schemas.
-			_, aliasOnly := w.catalogAliasInfos[catalogNameOf(req.AttachOpaqueData)]
-			var items [][]byte
-			for name, si := range w.catalog.schemas {
-				if aliasOnly && name != "main" {
-					continue
-				}
-				data, err := SerializeSchemaInfo(si.info)
+			items := make([][]byte, 0, len(infos))
+			for _, info := range infos {
+				data, err := SerializeSchemaInfo(info)
 				if err != nil {
 					return ItemsResponseWire{}, err
 				}
@@ -1354,39 +1317,9 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_contents_tables
 	unaryCatalog[SchemaContentsRequestWire, ItemsResponseWire](w, s, "catalog_schema_contents_tables",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsRequestWire) (ItemsResponseWire, error) {
-			if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
-				items, err := w.writableSchemaContentsTables(wc, req.Path)
-				if err != nil {
-					return ItemsResponseWire{}, err
-				}
-				return ItemsResponseWire{Items: items}, nil
-			}
-			// Per-attach override (versioned-tables worker etc.): the handler
-			// inspects the attach_opaque_data (which can encode the resolved version)
-			// and returns the right set of tables.
-			if w.schemaContentsHandler != nil {
-				if items, ok := w.schemaContentsHandler(req.AttachOpaqueData, req.Path); ok {
-					out := make([][]byte, len(items))
-					for i, it := range items {
-						out[i] = []byte(it)
-					}
-					return ItemsResponseWire{Items: out}, nil
-				}
-			}
-			if w.catalog == nil {
-				return ItemsResponseWire{Items: [][]byte{}}, nil
-			}
-			si, ok := w.catalog.schemas[schemaPathKey(req.Path)]
-			if !ok || len(si.tables) == 0 {
-				return ItemsResponseWire{Items: [][]byte{}}, nil
-			}
-			var items [][]byte
-			for i := range si.tables {
-				data, err := w.serializeCatalogTable(req.Path, &si.tables[i])
-				if err != nil {
-					return ItemsResponseWire{}, err
-				}
-				items = append(items, data)
+			items, err := w.listTableItems(req.AttachOpaqueData, req.Path)
+			if err != nil {
+				return ItemsResponseWire{}, err
 			}
 			return ItemsResponseWire{Items: items}, nil
 		})
@@ -1394,28 +1327,9 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_contents_views
 	unaryCatalog[SchemaContentsRequestWire, ItemsResponseWire](w, s, "catalog_schema_contents_views",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsRequestWire) (ItemsResponseWire, error) {
-			if w.catalog == nil {
-				return ItemsResponseWire{Items: [][]byte{}}, nil
-			}
-			si, ok := w.catalog.schemas[schemaPathKey(req.Path)]
-			if !ok || len(si.views) == 0 {
-				return ItemsResponseWire{Items: [][]byte{}}, nil
-			}
-			var items [][]byte
-			for _, cv := range si.views {
-				info := &ViewInfo{
-					Name:           cv.Name,
-					SchemaPath:     req.Path,
-					Comment:        cv.Comment,
-					Tags:           cv.Tags,
-					Definition:     cv.Definition,
-					ColumnComments: cv.ColumnComments,
-				}
-				data, err := SerializeViewInfo(info)
-				if err != nil {
-					return ItemsResponseWire{}, err
-				}
-				items = append(items, data)
+			items, err := w.listViewItems(req.AttachOpaqueData, req.Path)
+			if err != nil {
+				return ItemsResponseWire{}, err
 			}
 			return ItemsResponseWire{Items: items}, nil
 		})
@@ -1424,25 +1338,9 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	unaryCatalog[SchemaContentsFunctionsRequestWire, ItemsResponseWire](w, s, "catalog_schema_contents_functions",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsFunctionsRequestWire) (ItemsResponseWire, error) {
 			LogCatalog.Debug("catalog: listing functions", "schema", schemaPathDisplay(req.Path), "type", req.Type)
-			if w.catalog == nil {
-				return ItemsResponseWire{Items: [][]byte{}}, nil
-			}
-
-			// attach_opaque_data has already been unwrapped to the catalog's own
-			// plaintext by unwrapReqOpaque (the unaryCatalog wrapper strips the
-			// framework UUID and opens any seal). For a plain catalog/alias it is
-			// []byte(catalog_name); for an alias-info catalog it is
-			// "<catalog_name>\x00<random>", so take the name up to the first NUL.
-			// Per-catalog function visibility (e.g. proj_repro_* only surfacing
-			// under projection_repro, accumulate_* only under accumulate) compares
-			// against it.
-			catalogName := w.catalogOfAttach(req.AttachOpaqueData)
-			items, ok, err := w.catalog.functionListing(schemaPathKey(req.Path), req.Type, catalogName)
+			items, err := w.listFunctionItems(req.AttachOpaqueData, req.Path, req.Type)
 			if err != nil {
 				return ItemsResponseWire{}, err
-			}
-			if !ok {
-				return ItemsResponseWire{Items: [][]byte{}}, nil
 			}
 			return ItemsResponseWire{Items: items}, nil
 		})
@@ -1741,35 +1639,9 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_schema_contents_macros
 	unaryCatalog[SchemaContentsMacrosRequestWire, ItemsResponseWire](w, s, "catalog_schema_contents_macros",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req SchemaContentsMacrosRequestWire) (ItemsResponseWire, error) {
-			if w.catalog == nil {
-				return ItemsResponseWire{Items: [][]byte{}}, nil
-			}
-			si, ok := w.catalog.schemas[schemaPathKey(req.Path)]
-			if !ok {
-				return ItemsResponseWire{Items: [][]byte{}}, nil
-			}
-
-			var items [][]byte
-			for _, cm := range si.macros {
-				// Filter by type if requested. An unrecognized type filters
-				// nothing.
-				if req.Type != "" {
-					switch want := macroKindFilter(req.Type); want {
-					case MacroTypeScalar, MacroTypeTable:
-						if cm.MacroType != want {
-							continue
-						}
-					}
-				}
-				info, err := macroInfoFromCatalogMacro(cm, req.Path)
-				if err != nil {
-					return ItemsResponseWire{}, err
-				}
-				data, err := SerializeMacroInfo(info)
-				if err != nil {
-					return ItemsResponseWire{}, err
-				}
-				items = append(items, data)
+			items, err := w.listMacroItems(req.AttachOpaqueData, req.Path, req.Type)
+			if err != nil {
+				return ItemsResponseWire{}, err
 			}
 			return ItemsResponseWire{Items: items}, nil
 		})

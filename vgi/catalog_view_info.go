@@ -4,6 +4,8 @@ package vgi
 
 import (
 	"bytes"
+	"maps"
+	"slices"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -62,7 +64,9 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 	if len(info.Tags) > 0 {
 		kb := tagsBuilder.KeyBuilder().(*array.StringBuilder)
 		vb := tagsBuilder.ItemBuilder().(*array.StringBuilder)
-		for k, v := range info.Tags {
+		// Sorted, so the same record always encodes to the same bytes.
+		for _, k := range slices.Sorted(maps.Keys(info.Tags)) {
+			v := info.Tags[k]
 			kb.Append(k)
 			vb.Append(v)
 		}
@@ -90,7 +94,9 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 	if len(info.ColumnComments) > 0 {
 		kb := colCommentsBuilder.KeyBuilder().(*array.StringBuilder)
 		vb := colCommentsBuilder.ItemBuilder().(*array.StringBuilder)
-		for k, v := range info.ColumnComments {
+		// Sorted, so the same record always encodes to the same bytes.
+		for _, k := range slices.Sorted(maps.Keys(info.ColumnComments)) {
+			v := info.ColumnComments[k]
 			kb.Append(k)
 			vb.Append(v)
 		}

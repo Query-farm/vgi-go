@@ -310,9 +310,12 @@ type Worker struct {
 	globalFunctionNames  []string
 	globalFunctionPrefix string
 	supportsTransactions bool
-	schemaComments       map[string]string
-	schemaTags           map[string]map[string]string
-	catalog              *DefaultReadOnlyCatalog
+	// catalogContentsDisabled turns off catalog_contents advertising on the
+	// default catalog's attach (WithCatalogContents(false)).
+	catalogContentsDisabled bool
+	schemaComments          map[string]string
+	schemaTags              map[string]map[string]string
+	catalog                 *DefaultReadOnlyCatalog
 	// extraCatalogs are additional catalog names this worker accepts via
 	// catalog_attach. They share the worker's registered functions but
 	// have their own (writable) table/schema state. Indexed by name.
@@ -516,6 +519,20 @@ func WithGlobalFunctionPrefix(prefix string) WorkerOption {
 func WithSupportsTransactions(v bool) WorkerOption {
 	return func(w *Worker) {
 		w.supportsTransactions = v
+	}
+}
+
+// WithCatalogContents controls whether the default catalog advertises
+// supports_catalog_contents on attach (default true), letting a client load
+// every schema and all of its contents with one catalog_contents call instead
+// of catalog_schemas plus a catalog_schema_contents_* call per schema and kind.
+// The default catalog is static and version-frozen, which is what that call
+// requires; pass false to keep clients on the per-schema RPCs (the RPC itself
+// stays registered). Writable catalogs (RegisterWritableCatalog) never
+// advertise it: their contents change inside transactions.
+func WithCatalogContents(enabled bool) WorkerOption {
+	return func(w *Worker) {
+		w.catalogContentsDisabled = !enabled
 	}
 }
 
@@ -1236,7 +1253,7 @@ const ProtocolName = "vgi.v2"
 // then default_schema) when one function name is registered in two schemas.
 // 2.0.0 represents every schema identity as a root-to-leaf list of components;
 // 2.1.0 adds supports_catalog_contents to CatalogAttachResult and the
-// catalog_contents RPC (bulk catalog fetch; not served by this SDK yet).
+// catalog_contents RPC (the whole catalog in one call; see catalog_contents.go).
 const ProtocolVersion = "2.1.0"
 
 // buildServer is the one place a worker's server is built, for every

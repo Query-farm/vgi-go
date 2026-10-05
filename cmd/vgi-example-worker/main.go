@@ -45,6 +45,11 @@ func main() {
 	w := vgi.NewWorker(
 		vgi.WithFunctionStorage(storage),
 		vgi.WithSupportsTransactions(true),
+		// Advertise catalog_contents (the whole catalog in one RPC) unless
+		// VGI_WORKER_DISABLE_CATALOG_CONTENTS is set — the knob the
+		// conformance lane uses to run the same suite over the per-schema
+		// catalog RPCs and show the two agree.
+		vgi.WithCatalogContents(os.Getenv("VGI_WORKER_DISABLE_CATALOG_CONTENTS") == ""),
 		vgi.WithCatalogName("example"),
 		vgi.WithCatalogComment("Example VGI catalog for testing"),
 		vgi.WithCatalogTags(map[string]string{

@@ -4,6 +4,8 @@ package vgi
 
 import (
 	"bytes"
+	"maps"
+	"slices"
 	"sort"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -93,7 +95,9 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 	if len(info.Tags) > 0 {
 		kb := tagsBuilder.KeyBuilder().(*array.StringBuilder)
 		vb := tagsBuilder.ItemBuilder().(*array.StringBuilder)
-		for k, v := range info.Tags {
+		// Sorted, so the same record always encodes to the same bytes.
+		for _, k := range slices.Sorted(maps.Keys(info.Tags)) {
+			v := info.Tags[k]
 			kb.Append(k)
 			vb.Append(v)
 		}

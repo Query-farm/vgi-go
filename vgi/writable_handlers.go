@@ -299,6 +299,10 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 		SupportsColumnStatistics: false,
 		GlobalFunctions:          SerializedItems{},
 		GlobalFunctionPrefix:     "",
+		// Transactional DDL changes this catalog's contents, and
+		// catalog_contents answers with the committed catalog only, so the
+		// client keeps to the per-schema RPCs.
+		SupportsCatalogContents: false,
 	}, nil
 }
 
@@ -306,19 +310,15 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 // Schema-listing handlers reroute to writable catalog when attach_opaque_data matches.
 // ============================================================================
 
-func (w *Worker) writableSchemas(c *WritableCatalog) ([][]byte, error) {
+// writableSchemaInfos lists a writable catalog's schemas for catalog_schemas.
+func (w *Worker) writableSchemaInfos(c *WritableCatalog) ([]*SchemaInfo, error) {
 	list, err := c.store.schemaList(c.Name)
 	if err != nil {
 		return nil, err
 	}
-	out := make([][]byte, 0, len(list))
+	out := make([]*SchemaInfo, 0, len(list))
 	for _, s := range list {
-		info := &SchemaInfo{Path: strings.Split(s.Name, "\x00"), Comment: s.Comment, AttachOpaqueData: c.attachOpaqueData}
-		data, err := SerializeSchemaInfo(info)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, data)
+		out = append(out, &SchemaInfo{Path: strings.Split(s.Name, "\x00"), Comment: s.Comment, AttachOpaqueData: c.attachOpaqueData})
 	}
 	return out, nil
 }

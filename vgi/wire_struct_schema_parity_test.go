@@ -78,6 +78,7 @@ var wireStructCases = []wireStructCase{
 	{method: "bind", value: BindResponseWire{}, schema: generated.BindResultSchema},
 	{method: "catalog_attach", value: CatalogAttachResultWire{}, schema: generated.CatalogAttachResultSchema},
 	{method: "catalog_catalogs", value: CatalogsResponseWire{}, schema: generated.CatalogCatalogsResultSchema},
+	{method: "catalog_contents", value: generated.CatalogContentsResponse{}, schema: generated.CatalogContentsResultSchema},
 	{method: "catalog_copy_from_formats", value: ItemsResponseWire{}, schema: generated.CatalogCopyFromFormatsResultSchema},
 	{method: "catalog_macro_get", value: ItemsResponseWire{}, schema: generated.CatalogMacroGetResultSchema},
 	{method: "catalog_schema_contents_functions", value: ItemsResponseWire{}, schema: generated.CatalogSchemaContentsFunctionsResultSchema},

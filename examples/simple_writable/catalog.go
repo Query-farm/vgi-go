@@ -237,6 +237,11 @@ func Options() []vgi.WorkerOption {
 	return []vgi.WorkerOption{
 		vgi.WithCatalogName(CatalogName),
 		vgi.WithSupportsTransactions(false),
+		// Its tables change under DML, so -- like vgi-python's
+		// simple_writable fixture, which overrides catalog_attach -- it does
+		// not advertise catalog_contents and clients keep to the per-schema
+		// catalog RPCs.
+		vgi.WithCatalogContents(false),
 		vgi.WithAttachValidator(func(req *vgi.CatalogAttachRequestWire, _ *vgirpc.CallContext) (*vgi.AttachDecision, error) {
 			if req.Name != CatalogName {
 				return nil, nil
