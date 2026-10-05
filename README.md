@@ -140,6 +140,31 @@ are advertised at catalog level, not inside a schema. Such a bind resolves by
 name within the catalog, and errors naming the schemas involved if that name is
 declared in more than one.
 
+### Attach options
+
+`vgi.WithAttachOptions(...)` declares the options a caller may pass at ATTACH
+time. `Required: true` marks one the catalog cannot be attached without.
+**Credential options (API keys, tokens, passwords) must be declared
+`Secret: true`.** Clients and the DuckDB extension mask a secret option's value
+and keep it out of cache keys, logs and exported configuration, and the
+extension can supply it from a `vgi_attach` DuckDB secret instead of the ATTACH
+text:
+
+```go
+w := vgi.NewWorker(vgi.WithAttachOptions(
+	vgi.AttachOptionSpec{Name: "api_key", Description: "API key",
+		Type: arrow.BinaryTypes.String, Required: true, Secret: true},
+))
+```
+
+```sql
+CREATE SECRET (TYPE vgi_attach, SCOPE 'https://worker.example.com', api_key '...');
+ATTACH 'https://worker.example.com' AS w (TYPE vgi);
+```
+
+`Secret` combines with `Required`. A secret option may declare a default, but
+normally has none, since the default is published to every client.
+
 ## Function shapes
 
 | Shape                   | Interface                                        | Use case                              |

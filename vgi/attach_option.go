@@ -29,12 +29,29 @@ import (
 // reads like an empty catalog. It is mutually exclusive with a default: an
 // option that falls back to a value is by definition satisfiable without the
 // caller.
+//
+// Secret marks an option whose value is a credential. Credential options (API
+// keys, tokens, passwords) MUST be declared Secret. Clients and the DuckDB
+// extension mask a secret option's value, keep it out of cache keys (the
+// extension keys results on a salted HMAC of the value, never the plain text),
+// out of logs and telemetry, and out of exported or shared configuration. The
+// extension can also supply a secret option from a `vgi_attach` DuckDB secret
+// scoped to the worker, so the credential never appears in the ATTACH text:
+//
+//	CREATE SECRET (TYPE vgi_attach, SCOPE 'https://worker.example.com', api_key '...');
+//	ATTACH 'https://worker.example.com' AS w (TYPE vgi);
+//
+// Secret combines freely with Required (a credential the catalog cannot be
+// attached without). It is allowed with a default, but a secret option
+// normally has none: a default credential would be published to every client
+// in the discovery listing.
 type AttachOptionSpec struct {
 	Name         string
 	Description  string
 	Type         arrow.DataType
 	DefaultBatch arrow.RecordBatch
 	Required     bool
+	Secret       bool
 }
 
 var attachOptionSpecSchema = arrow.NewSchema([]arrow.Field{
@@ -46,6 +63,9 @@ var attachOptionSpecSchema = arrow.NewSchema([]arrow.Field{
 	// batch by name and simply doesn't see it. Absent and explicit-null both
 	// mean "not required".
 	{Name: "required", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
+	// Appended after "required" on the same terms: readers look it up by
+	// name, and an absent or null column means "not secret".
+	{Name: "secret", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
 }, nil)
 
 // serializeAttachOptionSpec serializes an AttachOptionSpec to Arrow IPC bytes.
@@ -103,7 +123,13 @@ func serializeAttachOptionSpec(spec AttachOptionSpec) ([]byte, error) {
 	// NULL, for an option that simply isn't required.
 	reqB.Append(spec.Required)
 
-	cols := []arrow.Array{nameB.NewArray(), descB.NewArray(), typeB.NewArray(), defB.NewArray(), reqB.NewArray()}
+	secB := array.NewBooleanBuilder(mem)
+	defer secB.Release()
+	secB.Append(spec.Secret)
+
+	cols := []arrow.Array{
+		nameB.NewArray(), descB.NewArray(), typeB.NewArray(), defB.NewArray(), reqB.NewArray(), secB.NewArray(),
+	}
 	defer func() {
 		for _, c := range cols {
 			c.Release()
@@ -122,6 +148,83 @@ func serializeAttachOptionSpec(spec AttachOptionSpec) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// DeserializeAttachOptionSpec reads an AttachOptionSpec from the one-row Arrow
+// IPC batch produced by the worker's attach-option discovery listing.
+// Columns are looked up by name, so a batch from an older peer that lacks the
+// trailing "required" or "secret" column (or carries it as null) reads as
+// false. The returned DefaultBatch, when non-nil, is owned by the caller and
+// must be released.
+func DeserializeAttachOptionSpec(data []byte) (AttachOptionSpec, error) {
+	var spec AttachOptionSpec
+	r, err := ipc.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return spec, fmt.Errorf("reading attach option spec: %w", err)
+	}
+	defer r.Release()
+	if !r.Next() {
+		if err := r.Err(); err != nil {
+			return spec, fmt.Errorf("reading attach option spec: %w", err)
+		}
+		return spec, fmt.Errorf("attach option spec batch is empty")
+	}
+	batch := r.RecordBatch()
+	if batch.NumRows() != 1 {
+		return spec, fmt.Errorf("attach option spec batch has %d rows, expected 1", batch.NumRows())
+	}
+	column := func(name string) arrow.Array {
+		idx := batch.Schema().FieldIndices(name)
+		if len(idx) == 0 {
+			return nil
+		}
+		return batch.Column(idx[0])
+	}
+	flag := func(name string) (bool, error) {
+		col := column(name)
+		if col == nil || col.IsNull(0) {
+			return false, nil
+		}
+		b, ok := col.(*array.Boolean)
+		if !ok {
+			return false, fmt.Errorf("attach option spec column %q has type %s, expected bool", name, col.DataType())
+		}
+		return b.Value(0), nil
+	}
+
+	name, ok := column("name").(*array.String)
+	if !ok {
+		return spec, fmt.Errorf("attach option spec has no string `name` column")
+	}
+	spec.Name = name.Value(0)
+	if desc, ok := column("description").(*array.String); ok && !desc.IsNull(0) {
+		spec.Description = desc.Value(0)
+	}
+	typeCol, ok := column("type").(*array.Binary)
+	if !ok || typeCol.IsNull(0) {
+		return spec, fmt.Errorf("attach option %q: spec has no binary `type` column", spec.Name)
+	}
+	typeSchema, err := DeserializeSchema(typeCol.Value(0))
+	if err != nil {
+		return spec, fmt.Errorf("attach option %q type: %w", spec.Name, err)
+	}
+	if typeSchema.NumFields() != 1 {
+		return spec, fmt.Errorf("attach option %q type schema has %d fields, expected 1", spec.Name, typeSchema.NumFields())
+	}
+	spec.Type = typeSchema.Field(0).Type
+	if spec.Required, err = flag("required"); err != nil {
+		return spec, err
+	}
+	if spec.Secret, err = flag("secret"); err != nil {
+		return spec, err
+	}
+	if def, ok := column("default_value").(*array.Binary); ok && !def.IsNull(0) {
+		spec.DefaultBatch, err = DeserializeRecordBatch(def.Value(0))
+		if err != nil {
+			return spec, fmt.Errorf("attach option %q default: %w", spec.Name, err)
+		}
+	}
+	return spec, nil
 }
 
 // MissingAttachOptionsError reports an ATTACH that omitted options declared
