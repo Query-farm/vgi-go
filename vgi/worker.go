@@ -1234,8 +1234,10 @@ const ProtocolName = "vgi.v2"
 // and ScanBranch — the worker's own authoritative schema for the function it
 // just resolved, so a client no longer has to guess (the table's own schema,
 // then default_schema) when one function name is registered in two schemas.
-// 2.0.0 represents every schema identity as a root-to-leaf list of components.
-const ProtocolVersion = "2.0.0"
+// 2.0.0 represents every schema identity as a root-to-leaf list of components;
+// 2.1.0 adds supports_catalog_contents to CatalogAttachResult and the
+// catalog_contents RPC (bulk catalog fetch; not served by this SDK yet).
+const ProtocolVersion = "2.1.0"
 
 // buildServer is the one place a worker's server is built, for every
 // transport; see hosting.go for what it hosts. An error means the worker must

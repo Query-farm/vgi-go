@@ -125,6 +125,12 @@ type CatalogAttachResultWire struct {
 	GlobalFunctionPrefix          string          `vgirpc:"global_function_prefix"`
 	ResolvedDataVersion           *string         `vgirpc:"resolved_data_version"`
 	ResolvedImplementationVersion *string         `vgirpc:"resolved_implementation_version"`
+	// SupportsCatalogContents advertises the catalog_contents RPC (bulk
+	// catalog fetch). It is the last field, so positional schema matching
+	// puts it after resolved_implementation_version. This SDK does not serve
+	// catalog_contents yet, so it is always false and the client keeps using
+	// the per-object catalog_*_list RPCs.
+	SupportsCatalogContents bool `vgirpc:"supports_catalog_contents"`
 }
 
 // CatalogVersionRequestWire is the wire type for catalog_version.
