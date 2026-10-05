@@ -145,10 +145,11 @@ declared in more than one.
 `vgi.WithAttachOptions(...)` declares the options a caller may pass at ATTACH
 time. `Required: true` marks one the catalog cannot be attached without.
 **Credential options (API keys, tokens, passwords) must be declared
-`Secret: true`.** Clients and the DuckDB extension mask a secret option's value
-and keep it out of cache keys, logs and exported configuration, and the
-extension can supply it from a `vgi_attach` DuckDB secret instead of the ATTACH
-text:
+`Secret: true`.** Credentials are passed inline as attach options. The DuckDB
+extension redacts a secret option's value from `duckdb_databases()`, keeps only
+a salted hash of it in its cache key, and never logs it; clients mask it and
+keep it out of exported configuration. To keep the credential out of the SQL
+text, write it as an expression:
 
 ```go
 w := vgi.NewWorker(vgi.WithAttachOptions(
@@ -158,8 +159,8 @@ w := vgi.NewWorker(vgi.WithAttachOptions(
 ```
 
 ```sql
-CREATE SECRET (TYPE vgi_attach, SCOPE 'https://worker.example.com', api_key '...');
-ATTACH 'https://worker.example.com' AS w (TYPE vgi);
+ATTACH 'sales' (TYPE vgi, LOCATION 'https://worker.example.com',
+    api_key getenv('SALES_API_KEY'));
 ```
 
 `Secret` combines with `Required`. A secret option may declare a default, but

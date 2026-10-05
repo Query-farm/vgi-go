@@ -31,15 +31,14 @@ import (
 // caller.
 //
 // Secret marks an option whose value is a credential. Credential options (API
-// keys, tokens, passwords) MUST be declared Secret. Clients and the DuckDB
-// extension mask a secret option's value, keep it out of cache keys (the
-// extension keys results on a salted HMAC of the value, never the plain text),
-// out of logs and telemetry, and out of exported or shared configuration. The
-// extension can also supply a secret option from a `vgi_attach` DuckDB secret
-// scoped to the worker, so the credential never appears in the ATTACH text:
+// keys, tokens, passwords) MUST be declared Secret. Credentials are passed
+// inline as attach options. The DuckDB extension redacts a secret option's
+// value from duckdb_databases(), keeps only a salted hash of it in its cache
+// key, and never logs it; clients mask it and keep it out of exported or
+// shared configuration. To keep the credential out of the SQL text, write it
+// as an expression:
 //
-//	CREATE SECRET (TYPE vgi_attach, SCOPE 'https://worker.example.com', api_key '...');
-//	ATTACH 'https://worker.example.com' AS w (TYPE vgi);
+//	ATTACH 'sales' (TYPE vgi, LOCATION 'https://worker.example.com', api_key getenv('SALES_API_KEY'));
 //
 // Secret combines freely with Required (a credential the catalog cannot be
 // attached without). It is allowed with a default, but a secret option

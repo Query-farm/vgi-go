@@ -270,8 +270,8 @@ func RequiredCatalogAttachOptionSpecs() []vgi.AttachOptionSpec {
 	return []vgi.AttachOptionSpec{
 		// No DefaultBatch: Required and a default are mutually exclusive, since
 		// a default is exactly what makes an option optional. Secret because it
-		// is a credential: clients mask it, the extension keeps it out of cache
-		// keys and logs, and it can come from a `vgi_attach` DuckDB secret.
+		// is a credential: clients mask it, and the extension redacts it from
+		// duckdb_databases(), hashes it in its cache key and never logs it.
 		{Name: "api_key", Description: "API key", Type: arrow.BinaryTypes.String, Required: true, Secret: true},
 		{
 			Name:         "region",
