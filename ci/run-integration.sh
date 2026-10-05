@@ -374,6 +374,11 @@ EXPECTED_SKIP_REASONS=(
   'require-env VGI_DATABASE_RUST_WORKER'         # Rust package fixture belongs to its SDK lane
   'require-env VGI_MALFORMED_BATCH_WORKER'       # hostile malformed-Arrow fixture (vgi test/support only)
   'require-env VGI_ROWID_CONSTRAINT_WORKER'      # hostile rowid-constraint fixture (vgi test/support only)
+  # attach_secrets/*: driven only by vgi's test/run_http_attach_options_integration.sh
+  # (an HTTP attach-options worker on localhost, plus a bearer-auth one).
+  'require-env VGI_ATTACH_OPTIONS_HOST'
+  'require-env VGI_ATTACH_OPTIONS_BEARER_WORKER'
+  'require-env VGI_ATTACH_OPTIONS_DECLARES_SECRET'
 )
 # Lane-specific additions — a skip that is expected on one lane is a red flag on
 # another (e.g. VGI_TEST_DEDICATED_WORKER skipping on stdio would mean the crash
