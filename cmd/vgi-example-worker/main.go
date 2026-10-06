@@ -12,6 +12,7 @@ import (
 
 	"github.com/Query-farm/vgi-go/examples/accumulate"
 	"github.com/Query-farm/vgi-go/examples/all"
+	"github.com/Query-farm/vgi-go/examples/catalog_contents"
 	"github.com/Query-farm/vgi-go/examples/narrow_bind"
 	"github.com/Query-farm/vgi-go/examples/schema_reconcile"
 	"github.com/Query-farm/vgi-go/examples/table"
@@ -204,6 +205,11 @@ func main() {
 	// scan functions back the mismatch/consistent tables advertised by the
 	// composed catalog handlers above.
 	narrow_bind.RegisterAll(w)
+
+	// The catalog_contents fixture catalogs (contents_probe / _broken /
+	// _legacy / _memory / _reval / _hash), each served by its own routed
+	// catalog. See examples/catalog_contents.
+	catalog_contents.Register(w)
 
 	// Writable catalog (in-memory, per-process state). Gated off by default so
 	// the example worker's function inventory matches the reference vgi-python

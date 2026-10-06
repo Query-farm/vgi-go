@@ -357,7 +357,6 @@ esac
 EXPECTED_SKIP_REASONS=(
   'require-env VGI_BAD_ENUM_WORKER'              # malformed-ENUM fixture, not wired here
   'require-env VGI_BAD_PROTOCOL_WORKER'          # incompatible-protocol fixture, not wired here
-  'require-env VGI_CATALOG_CONTENTS_WORKER'      # vgi-python contents_* catalogs (catalog_contents*.test)
   'require-env VGI_RULES_WORKER'                 # vgi-rust multibatch-repro fixture
   'require-env VGI_SCHEMA_RECONCILE_DB'          # schema-reconcile sqlite fixture, not set here
   'require-env VGI_WORKER_SUPPORTS_DYNAMIC_CODE' # dynamic-code registration, not implemented
@@ -416,9 +415,9 @@ esac
 # http 254 executed. The floors sit ~15 below, leaving headroom for churn while
 # staying far above the handful a silent collapse would leave.
 case "$TRANSPORT" in
-  stdio)      MIN_EXECUTED="${MIN_EXECUTED:-250}" ;;
-  shm|launch) MIN_EXECUTED="${MIN_EXECUTED:-245}" ;;
-  http)       MIN_EXECUTED="${MIN_EXECUTED:-235}" ;;
+  stdio)      MIN_EXECUTED="${MIN_EXECUTED:-255}" ;;
+  shm|launch) MIN_EXECUTED="${MIN_EXECUTED:-250}" ;;
+  http)       MIN_EXECUTED="${MIN_EXECUTED:-240}" ;;
 esac
 
 cd "$STAGE"

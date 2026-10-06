@@ -404,6 +404,17 @@ type Worker struct {
 	// worker (one per RegisterCopyFrom). Surfaced via catalog_copy_from_formats
 	// so the VGI extension can register a DuckDB CopyFunction per entry.
 	copyFromFormats []copyFromFormatRecord
+
+	// routes are the catalogs this worker serves through a separate
+	// implementation (RegisterSubCatalog, RegisterMemoryCatalog), keyed by
+	// catalog name; see catalog_route.go.
+	routes map[string]catalogBackend
+	// catalogMethods records every catalog_* handler by method name, so a
+	// worker serving as a sub-catalog can be dispatched to without a server.
+	catalogMethods map[string]routedMethod
+	// routesPrepared guards prepareRoutes (buildServer may run more than once,
+	// e.g. in tests).
+	routesPrepared bool
 }
 
 // IrohBridgeOptions configures identity forwarded by the narrow
@@ -1295,6 +1306,10 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 			Loggers: w.logLoggers,
 		})
 	}
+
+	// Bring up the routed catalogs (sub-catalogs import their functions,
+	// homed in their own catalog) before the default catalog is built.
+	w.prepareRoutes()
 
 	// Build catalog from registered functions
 	w.catalog = NewDefaultReadOnlyCatalog(w.catalogName, w)

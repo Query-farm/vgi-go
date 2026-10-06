@@ -260,14 +260,15 @@ type CatalogContentsCall struct {
 	// CallCtx is the RPC call context.
 	CallCtx *vgirpc.CallContext
 
-	w *Worker
+	// build composes the default snapshot of the catalog being asked.
+	build func() ([]generated.SchemaContents, error)
 }
 
-// Contents builds the snapshot the worker serves when no handler is set:
+// Contents builds the snapshot the catalog serves when no handler is set:
 // every schema catalog_schemas lists, with each kind composed from the same
 // listings the catalog_schema_contents_* RPCs serve.
 func (c *CatalogContentsCall) Contents() ([]generated.SchemaContents, error) {
-	return c.w.defaultCatalogContents(c.AttachOpaqueData)
+	return c.build()
 }
 
 // CatalogContentsHandler answers catalog_contents for a catalog. It receives
@@ -429,23 +430,33 @@ func notModifiedResponse(version int64, etag string) generated.CatalogContentsRe
 // schemas; a catalog with no etag never yields not_modified; schema paths are
 // unique, each nested schema's parent is present, and parents come first.
 func (w *Worker) catalogContentsResponse(attachOpaqueData []byte, ifNoneMatch *string, version int64, callCtx *vgirpc.CallContext) (generated.CatalogContentsResponse, error) {
+	return answerCatalogContents(w.catalogContentsHandler, w.catalogContentsEtag, &CatalogContentsCall{
+		AttachOpaqueData: attachOpaqueData,
+		CatalogName:      w.catalogOfAttach(attachOpaqueData),
+		IfNoneMatch:      ifNoneMatch,
+		CatalogVersion:   version,
+		CallCtx:          callCtx,
+		build:            func() ([]generated.SchemaContents, error) { return w.defaultCatalogContents(attachOpaqueData) },
+	})
+}
+
+// answerCatalogContents is the catalog-independent half of catalog_contents:
+// it asks the handler (or, with none, the call's default composition) for the
+// snapshot and applies the protocol's rules and the etag mode. Every catalog
+// kind a worker serves — the default static catalog, a sub-catalog, a
+// MemoryCatalog — answers through it, so they all revalidate alike.
+func answerCatalogContents(handler CatalogContentsHandler, etagMode CatalogContentsEtagMode, call *CatalogContentsCall) (generated.CatalogContentsResponse, error) {
+	ifNoneMatch, version := call.IfNoneMatch, call.CatalogVersion
 	var result CatalogContentsResult
-	fromHandler := w.catalogContentsHandler != nil
+	fromHandler := handler != nil
 	if fromHandler {
 		var err error
-		result, err = w.catalogContentsHandler(&CatalogContentsCall{
-			AttachOpaqueData: attachOpaqueData,
-			CatalogName:      w.catalogOfAttach(attachOpaqueData),
-			IfNoneMatch:      ifNoneMatch,
-			CatalogVersion:   version,
-			CallCtx:          callCtx,
-			w:                w,
-		})
+		result, err = handler(call)
 		if err != nil {
 			return generated.CatalogContentsResponse{}, err
 		}
 	} else {
-		schemas, err := w.defaultCatalogContents(attachOpaqueData)
+		schemas, err := call.build()
 		if err != nil {
 			return generated.CatalogContentsResponse{}, err
 		}
@@ -476,7 +487,7 @@ func (w *Worker) catalogContentsResponse(attachOpaqueData []byte, ifNoneMatch *s
 	slices.SortStableFunc(schemas, func(a, b generated.SchemaContents) int { return len(a.Path) - len(b.Path) })
 
 	etag := result.Etag
-	if etag == nil && w.catalogContentsEtag == CatalogContentsEtagContentHash {
+	if etag == nil && etagMode == CatalogContentsEtagContentHash {
 		digest := CatalogContentsDigest(schemas)
 		etag = &digest
 	}

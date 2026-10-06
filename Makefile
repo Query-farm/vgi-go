@@ -197,8 +197,8 @@ new-worker:
 #                    fails the run, so a newly-gated test cannot quietly leave
 #                    the lane.
 #
-# Go runs 305 today.
-GO_MIN_EXECUTED ?= 300
+# Go runs 331 today (2026-10-06; +5 when the catalog_contents fixtures landed).
+GO_MIN_EXECUTED ?= 305
 COVERAGE_GATE := --min-executed $(GO_MIN_EXECUTED) \
 	--allow-skip 'require spatial' \
 	--allow-skip 'require-env VGI_DOCKER_IMAGE' \
@@ -222,7 +222,6 @@ COVERAGE_GATE := --min-executed $(GO_MIN_EXECUTED) \
 	--allow-skip 'require-env VGI_ATTACH_OPTIONS_REQUIRED_WORKER' \
 	--allow-skip 'require-env VGI_BAD_ENUM_WORKER' \
 	--allow-skip 'require-env VGI_BAD_PROTOCOL_WORKER' \
-	--allow-skip 'require-env VGI_CATALOG_CONTENTS_WORKER' \
 	--allow-skip 'require-env VGI_DATABASE_BUN_WORKER' \
 	--allow-skip 'require-env VGI_DATABASE_PYTHON_WORKER' \
 	--allow-skip 'require-env VGI_DATABASE_RUST_WORKER' \

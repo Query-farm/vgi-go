@@ -231,11 +231,36 @@ func (w *Worker) unwrapReqOpaque(reqPtr any, cc *vgirpc.CallContext) error {
 
 // unaryCatalog registers a catalog unary handler whose request opaque-data
 // fields are unwrapped before the handler body runs.
+//
+// The handler is also recorded by method name (Worker.catalogMethods), so a
+// worker registered as another worker's sub-catalog (RegisterSubCatalog) can be
+// dispatched to; s is nil when only recording. A request whose attach routes
+// to a sub-catalog or MemoryCatalog is handed to that catalog instead.
 func unaryCatalog[P any, R any](w *Worker, s *vgirpc.Server, name string,
 	handler func(context.Context, *vgirpc.CallContext, P) (R, error)) {
+	w.recordCatalogMethod(name, func(ctx context.Context, cc *vgirpc.CallContext, raw any) (any, error) {
+		req := raw.(*P)
+		if err := w.unwrapReqOpaque(req, cc); err != nil {
+			return nil, err
+		}
+		return handler(ctx, cc, *req)
+	})
+	if s == nil {
+		return
+	}
 	vgirpc.Unary[P, R](s, name, func(ctx context.Context, cc *vgirpc.CallContext, req P) (R, error) {
+		var zero R
+		if out, routed, err := w.dispatchRouted(ctx, cc, name, &req); routed || err != nil {
+			if err != nil {
+				return zero, err
+			}
+			r, ok := out.(R)
+			if !ok {
+				return zero, fmt.Errorf("vgi: routed %s returned %T", name, out)
+			}
+			return r, nil
+		}
 		if err := w.unwrapReqOpaque(&req, cc); err != nil {
-			var zero R
 			return zero, err
 		}
 		return handler(ctx, cc, req)
@@ -245,7 +270,20 @@ func unaryCatalog[P any, R any](w *Worker, s *vgirpc.Server, name string,
 // unaryVoidCatalog is unaryCatalog for void-returning catalog handlers.
 func unaryVoidCatalog[P any](w *Worker, s *vgirpc.Server, name string,
 	handler func(context.Context, *vgirpc.CallContext, P) error) {
+	w.recordCatalogMethod(name, func(ctx context.Context, cc *vgirpc.CallContext, raw any) (any, error) {
+		req := raw.(*P)
+		if err := w.unwrapReqOpaque(req, cc); err != nil {
+			return nil, err
+		}
+		return nil, handler(ctx, cc, *req)
+	})
+	if s == nil {
+		return
+	}
 	vgirpc.UnaryVoid[P](s, name, func(ctx context.Context, cc *vgirpc.CallContext, req P) error {
+		if _, routed, err := w.dispatchRouted(ctx, cc, name, &req); routed || err != nil {
+			return err
+		}
 		if err := w.unwrapReqOpaque(&req, cc); err != nil {
 			return err
 		}

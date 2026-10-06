@@ -45,6 +45,11 @@ func (w *Worker) catalogOfAttach(attachOpaqueData []byte) string {
 	if c := w.writableByAttachOpaqueData(attachOpaqueData); c != nil {
 		return c.Name
 	}
+	// A routed catalog's attach (RegisterSubCatalog / RegisterMemoryCatalog)
+	// names it; its functions are homed there.
+	if name, _, ok := parseRoutedAttach(attachOpaqueData); ok && w.routedCatalog(name) {
+		return name
+	}
 	name := catalogNameOf(attachOpaqueData)
 	if name == w.catalogName {
 		return name
@@ -661,6 +666,11 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 	// this worker — stays two distinct entries.
 	place := func(kind funcKind, name string, idx int, fi FunctionInfo) {
 		origin := w.originOf(kind, name, idx)
+		// A routed catalog's functions are listed (and their schemas
+		// created) by that catalog, not this one.
+		if w.routedCatalog(origin.catalog) {
+			return
+		}
 		fi.SchemaPath = strings.Split(origin.schema, "\x00")
 		fi.catalogHome = origin.catalog
 		fi.unlisted = origin.unlisted
@@ -765,46 +775,19 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 
 	// Populate catalog tables from worker registrations
 	for schemaPath, tables := range w.catalogTables {
-		si, ok := cat.schemas[schemaPath]
-		if !ok {
-			si = &catalogSchemaInfo{
-				info: &SchemaInfo{
-					Path:    strings.Split(schemaPath, "\x00"),
-					Comment: schemaPath + " schema",
-				},
-			}
-			cat.schemas[schemaPath] = si
-		}
+		si := schemaFor(schemaPath)
 		si.tables = append(si.tables, tables...)
 	}
 
 	// Populate catalog views from worker registrations
 	for schemaPath, views := range w.catalogViews {
-		si, ok := cat.schemas[schemaPath]
-		if !ok {
-			si = &catalogSchemaInfo{
-				info: &SchemaInfo{
-					Path:    strings.Split(schemaPath, "\x00"),
-					Comment: schemaPath + " schema",
-				},
-			}
-			cat.schemas[schemaPath] = si
-		}
+		si := schemaFor(schemaPath)
 		si.views = append(si.views, views...)
 	}
 
 	// Populate catalog macros from worker registrations
 	for schemaPath, macros := range w.catalogMacros {
-		si, ok := cat.schemas[schemaPath]
-		if !ok {
-			si = &catalogSchemaInfo{
-				info: &SchemaInfo{
-					Path:    strings.Split(schemaPath, "\x00"),
-					Comment: schemaPath + " schema",
-				},
-			}
-			cat.schemas[schemaPath] = si
-		}
+		si := schemaFor(schemaPath)
 		si.macros = append(si.macros, macros...)
 	}
 
@@ -971,12 +954,22 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				}
 				items = append(items, aData)
 			}
+			// Routed catalogs (sub-catalogs, memory catalogs) list themselves.
+			routed, err := w.routedCatalogInfos(ctx, callCtx)
+			if err != nil {
+				return CatalogsResponseWire{}, err
+			}
+			items = append(items, routed...)
 			return CatalogsResponseWire{Items: items}, nil
 		})
 
 	// catalog_attach
 	unaryCatalog[CatalogAttachRequestWire, CatalogAttachResultWire](w, s, "catalog_attach",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogAttachRequestWire) (CatalogAttachResultWire, error) {
+			// A routed catalog (sub-catalog, memory catalog) attaches itself.
+			if b, ok := w.routes[req.Name]; ok {
+				return w.attachRouted(ctx, callCtx, req, b)
+			}
 			// Writable catalogs are handled separately so they have their
 			// own attach_opaque_data and per-catalog table state.
 			if wc, ok := w.extraCatalogs[req.Name]; ok {
