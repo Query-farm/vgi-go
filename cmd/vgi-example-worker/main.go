@@ -50,6 +50,10 @@ func main() {
 		// conformance lane uses to run the same suite over the per-schema
 		// catalog RPCs and show the two agree.
 		vgi.WithCatalogContents(os.Getenv("VGI_WORKER_DISABLE_CATALOG_CONTENTS") == ""),
+		// Revalidation: the catalog answers catalog_contents with an etag, so
+		// a client holding it gets not_modified instead of the whole catalog
+		// again (and the conformance suite exercises the conditional path).
+		catalogContentsRevalidation(os.Getenv("VGI_WORKER_CATALOG_CONTENTS_ETAG")),
 		vgi.WithCatalogName("example"),
 		vgi.WithCatalogComment("Example VGI catalog for testing"),
 		vgi.WithCatalogTags(map[string]string{
@@ -1254,3 +1258,26 @@ func wkbPoint(x, y float64) []byte {
 }
 
 // Auth + OAuth env-var wiring lives in auth.go.
+
+// catalogContentsRevalidation picks how the example catalog revalidates
+// catalog_contents. By default it is a cheap validator, like vgi-python's
+// contents_reval fixture: the etag is a generation counter (the catalog
+// version, which this static catalog never bumps, so it only changes when the
+// catalog does), checked before anything is built. "content-hash" instead uses
+// the framework's etag, the SHA-256 of the built snapshot.
+func catalogContentsRevalidation(mode string) vgi.WorkerOption {
+	if mode == string(vgi.CatalogContentsEtagContentHash) {
+		return vgi.WithCatalogContentsEtag(vgi.CatalogContentsEtagContentHash)
+	}
+	return vgi.WithCatalogContentsHandler(func(call *vgi.CatalogContentsCall) (vgi.CatalogContentsResult, error) {
+		etag := fmt.Sprintf("%s-gen-%d", call.CatalogName, call.CatalogVersion)
+		if call.IfNoneMatch != nil && *call.IfNoneMatch == etag {
+			return vgi.CatalogContentsResult{Etag: &etag, NotModified: true}, nil
+		}
+		schemas, err := call.Contents()
+		if err != nil {
+			return vgi.CatalogContentsResult{}, err
+		}
+		return vgi.CatalogContentsResult{Schemas: schemas, Etag: &etag}, nil
+	})
+}

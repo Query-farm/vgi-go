@@ -3,18 +3,16 @@
 package vgi
 
 import (
-	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 
 	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
-	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/ipc"
-	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 // catalog_contents (protocol 2.1.0) returns every schema and all of its
@@ -24,12 +22,23 @@ import (
 // every item is byte-for-byte what the per-schema RPC returns and a client
 // decodes it with the decoder it already has. It mirrors vgi-python's
 // CatalogInterface.catalog_contents default.
+//
+// The response (generated.CatalogContentsResponse) carries one inline
+// SchemaContents struct row per schema (its path, then the items), plus an
+// optional etag: a client that holds the etag sends it back as if_none_match
+// and gets not_modified (no schemas) while the catalog is unchanged. A catalog
+// returns an etag through WithCatalogContentsHandler, or opts in to the
+// framework content hash with WithCatalogContentsEtag.
 
 // CatalogContentsRequestWire is the wire type for catalog_contents. It takes no
 // transaction: the client caches the answer for the whole attach, so it is the
 // committed catalog at catalog_version.
+//
+// IfNoneMatch is the etag of a snapshot the client already holds; when it
+// equals the current etag the answer is not_modified with no schemas.
 type CatalogContentsRequestWire struct {
-	AttachOpaqueData []byte `vgirpc:"attach_opaque_data"`
+	AttachOpaqueData []byte  `vgirpc:"attach_opaque_data"`
+	IfNoneMatch      *string `vgirpc:"if_none_match"`
 }
 
 // Function and macro kinds catalog_contents lists, as the per-schema RPCs'
@@ -212,30 +221,350 @@ func (w *Worker) listMacroItems(_ []byte, path SchemaPath, macroType string) ([]
 	return items, nil
 }
 
-// catalogContents answers catalog_contents: the catalog version and one
-// IPC-serialized SchemaContents per schema, parents before children.
-func (w *Worker) catalogContents(attachOpaqueData []byte, callCtx *vgirpc.CallContext) (generated.CatalogContentsResponse, error) {
-	version, err := w.catalogVersionOf(attachOpaqueData, callCtx)
-	if err != nil {
-		return generated.CatalogContentsResponse{}, err
+// ---------------------------------------------------------------------------
+// catalog_contents v2: revalidation and the catalog-level API
+// ---------------------------------------------------------------------------
+
+// CatalogContentsResult is a catalog_contents answer: a snapshot of every
+// schema, or "not modified". It mirrors vgi-python's CatalogContentsResult.
+type CatalogContentsResult struct {
+	// Schemas is one entry per schema. Each entry's Path must equal the
+	// SchemaInfo.path inside its Schema item; paths must be unique and every
+	// nested schema's parent must be present. The worker orders them parents
+	// first. Must be empty when NotModified is set.
+	Schemas []generated.SchemaContents
+	// Etag is an opaque validator for this snapshot (a generation counter, a
+	// schema version, a git sha, ...) that the client sends back as
+	// if_none_match. Nil means the catalog does not revalidate, unless the
+	// worker opts in to the framework content hash (WithCatalogContentsEtag).
+	Etag *string
+	// NotModified reports that the request's if_none_match equals the current
+	// etag, so the catalog skipped building the snapshot. It requires Etag
+	// (the matching validator) and no Schemas.
+	NotModified bool
+}
+
+// CatalogContentsCall is one catalog_contents request, as a
+// CatalogContentsHandler sees it.
+type CatalogContentsCall struct {
+	// AttachOpaqueData is the catalog's own attach plaintext (already
+	// unwrapped by the framework).
+	AttachOpaqueData []byte
+	// CatalogName is the catalog the attach belongs to.
+	CatalogName string
+	// IfNoneMatch is the etag of the snapshot the client already holds, or
+	// nil.
+	IfNoneMatch *string
+	// CatalogVersion is the catalog version the answer is for.
+	CatalogVersion int64
+	// CallCtx is the RPC call context.
+	CallCtx *vgirpc.CallContext
+
+	w *Worker
+}
+
+// Contents builds the snapshot the worker serves when no handler is set:
+// every schema catalog_schemas lists, with each kind composed from the same
+// listings the catalog_schema_contents_* RPCs serve.
+func (c *CatalogContentsCall) Contents() ([]generated.SchemaContents, error) {
+	return c.w.defaultCatalogContents(c.AttachOpaqueData)
+}
+
+// CatalogContentsHandler answers catalog_contents for a catalog. It receives
+// if_none_match, so a cheap validator can answer
+// CatalogContentsResult{Etag: &etag, NotModified: true} before building
+// anything; otherwise it returns the contents (typically call.Contents()) with
+// their etag, or with a nil etag when it does not revalidate.
+type CatalogContentsHandler func(call *CatalogContentsCall) (CatalogContentsResult, error)
+
+// WithCatalogContentsHandler replaces how the default catalog answers
+// catalog_contents: the catalog-level API, the counterpart of overriding
+// vgi-python's CatalogInterface.catalog_contents. The worker still enforces
+// the protocol's rules on what the handler returns (see catalogContents). A
+// worker with a handler does not cache catalog_contents responses, because the
+// handler may answer differently per attach or caller.
+func WithCatalogContentsHandler(h CatalogContentsHandler) WorkerOption {
+	return func(w *Worker) {
+		w.catalogContentsHandler = h
 	}
-	infos, err := w.listSchemaInfos(attachOpaqueData)
-	if err != nil {
-		return generated.CatalogContentsResponse{}, err
+}
+
+// CatalogContentsEtagMode is a framework etag mode for catalog_contents.
+type CatalogContentsEtagMode string
+
+// CatalogContentsEtagContentHash is the content-hash mode: when the catalog
+// returns no etag of its own, the worker uses the hex SHA-256 of the snapshot
+// (CatalogContentsDigest) as the etag and answers a matching if_none_match
+// with not_modified. It still builds the snapshot on every call, but saves the
+// transfer and the client's decode.
+const CatalogContentsEtagContentHash CatalogContentsEtagMode = "content-hash"
+
+// WithCatalogContentsEtag opts in to a framework etag for catalog_contents
+// (vgi-python: catalog_contents_etag = "content-hash"). Off by default: for a
+// catalog whose version is not frozen, a client that holds an etag
+// revalidates with catalog_contents at every transaction start instead of a
+// cheap catalog_version poll, so an etag that costs a full build each time
+// should be a deliberate choice. Pass "" to turn it off.
+func WithCatalogContentsEtag(mode CatalogContentsEtagMode) WorkerOption {
+	return func(w *Worker) {
+		w.catalogContentsEtag = mode
 	}
-	schemas := make([][]byte, 0, len(infos))
-	for _, info := range infos {
-		contents, err := w.schemaContentsOf(attachOpaqueData, info)
-		if err != nil {
-			return generated.CatalogContentsResponse{}, fmt.Errorf("catalog_contents: schema %s: %w", schemaPathDisplay(info.Path), err)
+}
+
+// CatalogContentsDigest is the hex SHA-256 over a catalog_contents snapshot:
+// the content-hash etag. It covers every schema's path and the exact item
+// bytes of every kind, in wire order, each length-prefixed (8-byte
+// little-endian) so no two different snapshots share an input. It is the same
+// function as vgi-python's catalog_contents_digest, so a snapshot hashes alike
+// in every SDK. Deterministic because the items' encoding is (map columns are
+// written in sorted key order).
+func CatalogContentsDigest(schemas []generated.SchemaContents) string {
+	h := sha256.New()
+	var n [8]byte
+	length := func(l int) {
+		binary.LittleEndian.PutUint64(n[:], uint64(l))
+		h.Write(n[:])
+	}
+	chunk := func(data []byte) {
+		length(len(data))
+		h.Write(data)
+	}
+	chunks := func(values [][]byte) {
+		length(len(values))
+		for _, v := range values {
+			chunk(v)
 		}
-		data, err := SerializeSchemaContents(&contents)
+	}
+	length(len(schemas))
+	for i := range schemas {
+		s := &schemas[i]
+		length(len(s.Path))
+		for _, part := range s.Path {
+			chunk([]byte(part))
+		}
+		chunk(s.Schema)
+		for _, kind := range [][][]byte{
+			s.Tables, s.Views, s.ScalarFunctions, s.AggregateFunctions,
+			s.TableFunctions, s.ScalarMacros, s.TableMacros, s.Indexes,
+		} {
+			chunks(kind)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// contentsCacheKey identifies one cached catalog_contents response: the
+// catalog instance (rebuilt with the server), the catalog name the attach
+// resolves to (aliases list different functions), and its version.
+type contentsCacheKey struct {
+	catalog *DefaultReadOnlyCatalog
+	name    string
+	version int64
+}
+
+// catalogContentsCacheable reports whether catalog_contents for this attach can
+// be built once and reused. The default catalog is version-frozen and static
+// (built when the server starts), and its contents depend on the attach only
+// through the catalog name, so it qualifies — unless the worker plugs in code
+// that may answer per attach: a catalog_contents handler, or a schema contents
+// handler (which sees the whole attach_opaque_data). Writable catalogs change
+// under DDL and are never cached.
+func (w *Worker) catalogContentsCacheable(attachOpaqueData []byte) bool {
+	return w.catalog != nil &&
+		w.catalogContentsHandler == nil &&
+		w.schemaContentsHandler == nil &&
+		w.writableByAttachOpaqueData(attachOpaqueData) == nil
+}
+
+// catalogContents answers catalog_contents.
+//
+// Revalidation: if_none_match goes to the handler (if any), which may answer
+// not_modified without building. A full answer carries the handler's etag or,
+// with WithCatalogContentsEtag(CatalogContentsEtagContentHash), the snapshot's
+// SHA-256; an etag equal to if_none_match turns it into not_modified. With no
+// etag, if_none_match is ignored.
+//
+// Caching: when catalogContentsCacheable, the response is built once per
+// (catalog, name, version) and reused by every later call.
+func (w *Worker) catalogContents(req CatalogContentsRequestWire, callCtx *vgirpc.CallContext) (generated.CatalogContentsResponse, error) {
+	// Check the version (and the attach, through the version hook) even on a
+	// cache hit.
+	version, err := w.catalogVersionOf(req.AttachOpaqueData, callCtx)
+	if err != nil {
+		return generated.CatalogContentsResponse{}, err
+	}
+	if !w.catalogContentsCacheable(req.AttachOpaqueData) {
+		return w.catalogContentsResponse(req.AttachOpaqueData, req.IfNoneMatch, version, callCtx)
+	}
+	key := contentsCacheKey{catalog: w.catalog, name: w.catalogOfAttach(req.AttachOpaqueData), version: version}
+	cached, ok := w.contentsCache.Load(key)
+	if !ok {
+		built, err := w.catalogContentsResponse(req.AttachOpaqueData, nil, version, callCtx)
 		if err != nil {
 			return generated.CatalogContentsResponse{}, err
 		}
-		schemas = append(schemas, data)
+		// Concurrent first calls may each build; they build the same thing,
+		// and every caller then serves the one that was stored.
+		cached, _ = w.contentsCache.LoadOrStore(key, built)
 	}
-	return generated.CatalogContentsResponse{CatalogVersion: version, Schemas: schemas}, nil
+	full := cached.(generated.CatalogContentsResponse)
+	if full.Etag != nil && req.IfNoneMatch != nil && *req.IfNoneMatch == *full.Etag {
+		return notModifiedResponse(version, *full.Etag), nil
+	}
+	return full, nil
+}
+
+func notModifiedResponse(version int64, etag string) generated.CatalogContentsResponse {
+	return generated.CatalogContentsResponse{
+		CatalogVersion: version,
+		Etag:           &etag,
+		NotModified:    true,
+		Schemas:        []generated.SchemaContents{},
+	}
+}
+
+// catalogContentsResponse asks the catalog (its handler, or the default
+// composition) for its contents and shapes the wire response, enforcing the
+// protocol's rules: not_modified needs an etag equal to if_none_match and no
+// schemas; a catalog with no etag never yields not_modified; schema paths are
+// unique, each nested schema's parent is present, and parents come first.
+func (w *Worker) catalogContentsResponse(attachOpaqueData []byte, ifNoneMatch *string, version int64, callCtx *vgirpc.CallContext) (generated.CatalogContentsResponse, error) {
+	var result CatalogContentsResult
+	fromHandler := w.catalogContentsHandler != nil
+	if fromHandler {
+		var err error
+		result, err = w.catalogContentsHandler(&CatalogContentsCall{
+			AttachOpaqueData: attachOpaqueData,
+			CatalogName:      w.catalogOfAttach(attachOpaqueData),
+			IfNoneMatch:      ifNoneMatch,
+			CatalogVersion:   version,
+			CallCtx:          callCtx,
+			w:                w,
+		})
+		if err != nil {
+			return generated.CatalogContentsResponse{}, err
+		}
+	} else {
+		schemas, err := w.defaultCatalogContents(attachOpaqueData)
+		if err != nil {
+			return generated.CatalogContentsResponse{}, err
+		}
+		result = CatalogContentsResult{Schemas: schemas}
+	}
+
+	if result.NotModified {
+		if result.Etag == nil || ifNoneMatch == nil || *result.Etag != *ifNoneMatch {
+			return generated.CatalogContentsResponse{}, &vgirpc.RpcError{Type: "ValueError",
+				Message: "catalog_contents returned not_modified, but only a catalog whose etag equals " +
+					"if_none_match may (and it must return that etag)"}
+		}
+		if len(result.Schemas) != 0 {
+			return generated.CatalogContentsResponse{}, &vgirpc.RpcError{Type: "ValueError",
+				Message: "catalog_contents returned not_modified with schemas; it must return none"}
+		}
+		return notModifiedResponse(version, *result.Etag), nil
+	}
+
+	schemas := slices.Clone(result.Schemas)
+	if schemas == nil {
+		schemas = []generated.SchemaContents{}
+	}
+	if err := checkContentsPaths(schemas, fromHandler); err != nil {
+		return generated.CatalogContentsResponse{}, &vgirpc.RpcError{Type: "ValueError", Message: err.Error()}
+	}
+	// Same parent-before-child order catalog_schemas guarantees.
+	slices.SortStableFunc(schemas, func(a, b generated.SchemaContents) int { return len(a.Path) - len(b.Path) })
+
+	etag := result.Etag
+	if etag == nil && w.catalogContentsEtag == CatalogContentsEtagContentHash {
+		digest := CatalogContentsDigest(schemas)
+		etag = &digest
+	}
+	if etag != nil && ifNoneMatch != nil && *etag == *ifNoneMatch {
+		return notModifiedResponse(version, *etag), nil
+	}
+	return generated.CatalogContentsResponse{CatalogVersion: version, Etag: etag, Schemas: schemas}, nil
+}
+
+// checkContentsPaths validates a snapshot's schema paths: non-empty, unique,
+// and every nested schema's parent present. For a handler's answer it also
+// checks that each Path equals the SchemaInfo.path its Schema item carries (the
+// default composition sets Path from that same SchemaInfo).
+func checkContentsPaths(schemas []generated.SchemaContents, verifyItems bool) error {
+	keys := make(map[string]bool, len(schemas))
+	for i := range schemas {
+		path := schemas[i].Path
+		if len(path) == 0 {
+			return fmt.Errorf("catalog_contents returned a schema with an empty path")
+		}
+		key := schemaPathKey(path)
+		if keys[key] {
+			return fmt.Errorf("catalog_contents returned duplicate schema path %s", schemaPathDisplay(path))
+		}
+		keys[key] = true
+		if verifyItems {
+			itemPath, err := schemaInfoItemPath(schemas[i].Schema)
+			if err != nil {
+				return fmt.Errorf("catalog_contents schema %s: decoding its SchemaInfo item: %w", schemaPathDisplay(path), err)
+			}
+			if !slices.Equal(itemPath, path) {
+				return fmt.Errorf("catalog_contents schema path %s differs from its SchemaInfo.path %s",
+					schemaPathDisplay(path), schemaPathDisplay(itemPath))
+			}
+		}
+	}
+	for i := range schemas {
+		path := schemas[i].Path
+		if len(path) > 1 && !keys[schemaPathKey(path[:len(path)-1])] {
+			return fmt.Errorf("catalog_contents returned schema path %s without its parent", schemaPathDisplay(path))
+		}
+	}
+	return nil
+}
+
+// schemaInfoItemPath reads the path column of a serialized SchemaInfo item.
+func schemaInfoItemPath(item []byte) ([]string, error) {
+	rec, err := DeserializeRecordBatch(item)
+	if err != nil {
+		return nil, err
+	}
+	defer rec.Release()
+	idx := rec.Schema().FieldIndices("path")
+	if len(idx) != 1 || rec.NumRows() < 1 {
+		return nil, fmt.Errorf("not a SchemaInfo record")
+	}
+	list, ok := rec.Column(idx[0]).(*array.List)
+	if !ok {
+		return nil, fmt.Errorf("SchemaInfo.path is %T", rec.Column(idx[0]))
+	}
+	values, ok := list.ListValues().(*array.String)
+	if !ok {
+		return nil, fmt.Errorf("SchemaInfo.path holds %T", list.ListValues())
+	}
+	start, end := list.ValueOffsets(0)
+	out := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		out = append(out, values.Value(int(i)))
+	}
+	return out, nil
+}
+
+// defaultCatalogContents composes every schema catalog_schemas lists, parents
+// first, with each kind from the per-schema listings.
+func (w *Worker) defaultCatalogContents(attachOpaqueData []byte) ([]generated.SchemaContents, error) {
+	infos, err := w.listSchemaInfos(attachOpaqueData)
+	if err != nil {
+		return nil, err
+	}
+	schemas := make([]generated.SchemaContents, 0, len(infos))
+	for _, info := range infos {
+		contents, err := w.schemaContentsOf(attachOpaqueData, info)
+		if err != nil {
+			return nil, fmt.Errorf("catalog_contents: schema %s: %w", schemaPathDisplay(info.Path), err)
+		}
+		schemas = append(schemas, contents)
+	}
+	return schemas, nil
 }
 
 // schemaContentsOf gathers one schema's items, kind by kind. A kind whose
@@ -269,6 +598,7 @@ func (w *Worker) schemaContentsOf(attachOpaqueData []byte, info *SchemaInfo) (ge
 		return func() ([][]byte, error) { return w.listMacroItems(attachOpaqueData, path, t) }
 	}
 	contents := generated.SchemaContents{
+		Path:               slices.Clone([]string(path)),
 		Schema:             schemaItem,
 		Tables:             kind("table", func() ([][]byte, error) { return w.listTableItems(attachOpaqueData, path) }),
 		Views:              kind("view", func() ([][]byte, error) { return w.listViewItems(attachOpaqueData, path) }),
@@ -282,222 +612,4 @@ func (w *Worker) schemaContentsOf(attachOpaqueData []byte, info *SchemaInfo) (ge
 		Indexes: [][]byte{},
 	}
 	return contents, firstErr
-}
-
-// SerializeSchemaContents encodes one catalog_contents schema entry as Arrow
-// IPC bytes matching generated.SchemaContentsSchema.
-func SerializeSchemaContents(contents *generated.SchemaContents) ([]byte, error) {
-	return encodeWireRecord(generated.SchemaContentsSchema, contents)
-}
-
-// DeserializeSchemaContents decodes one catalog_contents schema entry.
-func DeserializeSchemaContents(data []byte) (generated.SchemaContents, error) {
-	var out generated.SchemaContents
-	err := decodeWireRecord(data, &out)
-	return out, err
-}
-
-// ---------------------------------------------------------------------------
-// Generated-record codec
-// ---------------------------------------------------------------------------
-
-// The generated record types (generated/protocol_types.go) are vgirpc-tagged
-// structs. vgi-rpc-go serializes one itself when it is a method's params or
-// result, but a record nested as an opaque binary blob (SchemaContents inside
-// CatalogContentsResponse.schemas) is this SDK's to encode. These two do that
-// for any generated record, column by column against the schema codegen owns,
-// matching each column to the field whose vgirpc tag names it. They cover the
-// Go types the record generator emits for the records it lists; anything else
-// is an error, not a guess.
-
-// encodeWireRecord encodes v (a pointer to a vgirpc-tagged struct) as a
-// one-row Arrow IPC stream with the given schema.
-func encodeWireRecord(schema *arrow.Schema, v any) ([]byte, error) {
-	rv := reflect.Indirect(reflect.ValueOf(v))
-	fields := wireFieldIndex(rv.Type())
-	mem := memory.NewGoAllocator()
-	cols := make([]arrow.Array, 0, schema.NumFields())
-	defer func() {
-		for _, c := range cols {
-			c.Release()
-		}
-	}()
-	for _, f := range schema.Fields() {
-		idx, ok := fields[f.Name]
-		if !ok {
-			return nil, fmt.Errorf("%s: no field tagged %q", rv.Type(), f.Name)
-		}
-		b := array.NewBuilder(mem, f.Type)
-		err := appendWireValue(b, rv.Field(idx))
-		if err == nil && b.Len() != 1 {
-			err = fmt.Errorf("built %d values", b.Len())
-		}
-		if err != nil {
-			b.Release()
-			return nil, fmt.Errorf("%s.%s: %w", rv.Type(), f.Name, err)
-		}
-		cols = append(cols, b.NewArray())
-		b.Release()
-	}
-	batch := array.NewRecordBatch(schema, cols, 1)
-	defer batch.Release()
-	var buf bytes.Buffer
-	wtr := ipc.NewWriter(&buf, ipc.WithSchema(schema))
-	if err := wtr.Write(batch); err != nil {
-		return nil, err
-	}
-	if err := wtr.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// decodeWireRecord decodes the first row of an IPC stream into out (a pointer
-// to a vgirpc-tagged struct). Columns with no matching field are ignored, so a
-// record a newer peer appended to still decodes.
-func decodeWireRecord(data []byte, out any) error {
-	reader, err := ipc.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	defer reader.Release()
-	if !reader.Next() {
-		if err := reader.Err(); err != nil {
-			return err
-		}
-		return fmt.Errorf("record carries no batch")
-	}
-	batch := reader.RecordBatch()
-	if batch.NumRows() < 1 {
-		return fmt.Errorf("record batch has no rows")
-	}
-	rv := reflect.ValueOf(out).Elem()
-	fields := wireFieldIndex(rv.Type())
-	for i, f := range batch.Schema().Fields() {
-		idx, ok := fields[f.Name]
-		if !ok {
-			continue
-		}
-		if err := setWireValue(rv.Field(idx), batch.Column(i), 0); err != nil {
-			return fmt.Errorf("%s.%s: %w", rv.Type(), f.Name, err)
-		}
-	}
-	return nil
-}
-
-// wireFieldIndex maps each vgirpc tag name of t to its field index.
-func wireFieldIndex(t reflect.Type) map[string]int {
-	out := make(map[string]int, t.NumField())
-	for i := range t.NumField() {
-		tag := t.Field(i).Tag.Get("vgirpc")
-		if tag == "" || tag == "-" {
-			continue
-		}
-		name, _, _ := strings.Cut(tag, ",")
-		out[name] = i
-	}
-	return out
-}
-
-// appendWireValue appends one Go value to an Arrow builder of the matching
-// type. A nil pointer is a null.
-func appendWireValue(b array.Builder, v reflect.Value) error {
-	if v.Kind() == reflect.Pointer {
-		if v.IsNil() {
-			b.AppendNull()
-			return nil
-		}
-		v = v.Elem()
-	}
-	switch b := b.(type) {
-	case *array.BooleanBuilder:
-		b.Append(v.Bool())
-	case *array.Int32Builder:
-		b.Append(int32(v.Int()))
-	case *array.Int64Builder:
-		b.Append(v.Int())
-	case *array.StringBuilder:
-		b.Append(v.String())
-	case *array.BinaryBuilder:
-		if v.Kind() == reflect.String {
-			b.AppendString(v.String())
-		} else {
-			b.Append(v.Bytes())
-		}
-	case *array.ListBuilder:
-		b.Append(true)
-		for i := range v.Len() {
-			if err := appendWireValue(b.ValueBuilder(), v.Index(i)); err != nil {
-				return err
-			}
-		}
-	case *array.MapBuilder:
-		b.Append(true)
-		keys := v.MapKeys()
-		// Sorted, so the same record always encodes to the same bytes.
-		slices.SortFunc(keys, func(x, y reflect.Value) int { return strings.Compare(fmt.Sprint(x), fmt.Sprint(y)) })
-		for _, k := range keys {
-			if err := appendWireValue(b.KeyBuilder(), k); err != nil {
-				return err
-			}
-			if err := appendWireValue(b.ItemBuilder(), v.MapIndex(k)); err != nil {
-				return err
-			}
-		}
-	default:
-		return fmt.Errorf("unsupported Arrow builder %T for Go %s", b, v.Type())
-	}
-	return nil
-}
-
-// setWireValue stores row i of an Arrow array into a Go field of the
-// matching type. A null leaves a pointer field nil.
-func setWireValue(field reflect.Value, arr arrow.Array, i int) error {
-	if field.Kind() == reflect.Pointer {
-		if arr.IsNull(i) {
-			field.SetZero()
-			return nil
-		}
-		field.Set(reflect.New(field.Type().Elem()))
-		field = field.Elem()
-	}
-	switch arr := arr.(type) {
-	case *array.Boolean:
-		field.SetBool(arr.Value(i))
-	case *array.Int32:
-		field.SetInt(int64(arr.Value(i)))
-	case *array.Int64:
-		field.SetInt(arr.Value(i))
-	case *array.String:
-		field.SetString(arr.Value(i))
-	case *array.Binary:
-		field.SetBytes(bytes.Clone(arr.Value(i)))
-	case *array.List:
-		start, end := arr.ValueOffsets(i)
-		out := reflect.MakeSlice(field.Type(), int(end-start), int(end-start))
-		for j := start; j < end; j++ {
-			if err := setWireValue(out.Index(int(j-start)), arr.ListValues(), int(j)); err != nil {
-				return err
-			}
-		}
-		field.Set(out)
-	case *array.Map:
-		start, end := arr.ValueOffsets(i)
-		out := reflect.MakeMapWithSize(field.Type(), int(end-start))
-		for j := start; j < end; j++ {
-			k := reflect.New(field.Type().Key()).Elem()
-			val := reflect.New(field.Type().Elem()).Elem()
-			if err := setWireValue(k, arr.Keys(), int(j)); err != nil {
-				return err
-			}
-			if err := setWireValue(val, arr.Items(), int(j)); err != nil {
-				return err
-			}
-			out.SetMapIndex(k, val)
-		}
-		field.Set(out)
-	default:
-		return fmt.Errorf("unsupported Arrow array %T for Go %s", arr, field.Type())
-	}
-	return nil
 }

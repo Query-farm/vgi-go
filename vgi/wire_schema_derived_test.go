@@ -84,8 +84,8 @@ func derivedRecordCases() []derivedRecordCase {
 		{"TableBufferingCombineRequest", reflect.TypeOf(TableBufferingCombineRequestWire{}), generated.TableBufferingCombineRequestSchema},
 		{"TableBufferingDestructorRequest", reflect.TypeOf(TableBufferingDestructorRequestWire{}), generated.TableBufferingDestructorRequestSchema},
 
-		// Generated from vgi-python (generated/protocol_types.go) and encoded
-		// by encodeWireRecord as a catalog_contents schema entry.
+		// Generated from vgi-python (generated/protocol_types.go): the inline
+		// struct row of CatalogContentsResponse.schemas.
 		{"SchemaContents", reflect.TypeOf(generated.SchemaContents{}), generated.SchemaContentsSchema},
 	}
 }

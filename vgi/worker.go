@@ -313,9 +313,19 @@ type Worker struct {
 	// catalogContentsDisabled turns off catalog_contents advertising on the
 	// default catalog's attach (WithCatalogContents(false)).
 	catalogContentsDisabled bool
-	schemaComments          map[string]string
-	schemaTags              map[string]map[string]string
-	catalog                 *DefaultReadOnlyCatalog
+	// catalogContentsHandler, when set, answers catalog_contents in place of
+	// the default composition (WithCatalogContentsHandler).
+	catalogContentsHandler CatalogContentsHandler
+	// catalogContentsEtag is the opt-in framework etag mode
+	// (WithCatalogContentsEtag); "" means none.
+	catalogContentsEtag CatalogContentsEtagMode
+	// contentsCache holds built catalog_contents responses of the default
+	// catalog, per (catalog instance, catalog name, version); see
+	// catalogContentsCacheable.
+	contentsCache  sync.Map
+	schemaComments map[string]string
+	schemaTags     map[string]map[string]string
+	catalog        *DefaultReadOnlyCatalog
 	// extraCatalogs are additional catalog names this worker accepts via
 	// catalog_attach. They share the worker's registered functions but
 	// have their own (writable) table/schema state. Indexed by name.

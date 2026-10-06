@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/Query-farm/vgi-go/vgi/generated"
@@ -666,7 +668,11 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		si.functions = append(si.functions, fi)
 	}
 
-	for name, fns := range w.scalars {
+	// Registries are maps; walk them in name order so every listing (and so
+	// every catalog_contents snapshot and its content hash) comes out in the
+	// same order on every build. Overloads keep their registration order.
+	for _, name := range slices.Sorted(maps.Keys(w.scalars)) {
+		fns := w.scalars[name]
 		for i, fn := range fns {
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeScalar, meta, fn.ArgumentSpecs())
@@ -681,7 +687,8 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		}
 	}
 
-	for name, fns := range w.tables {
+	for _, name := range slices.Sorted(maps.Keys(w.tables)) {
+		fns := w.tables[name]
 		for i, fn := range fns {
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs())
@@ -689,7 +696,8 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		}
 	}
 
-	for name, fns := range w.tableInOuts {
+	for _, name := range slices.Sorted(maps.Keys(w.tableInOuts)) {
+		fns := w.tableInOuts[name]
 		for i, fn := range fns {
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeTable, meta, fn.ArgumentSpecs()) // table-in-out registers as "table"
@@ -702,7 +710,8 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		}
 	}
 
-	for name, fns := range w.tableBufferings {
+	for _, name := range slices.Sorted(maps.Keys(w.tableBufferings)) {
+		fns := w.tableBufferings[name]
 		for i, fn := range fns {
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeTableBuffering, meta, fn.ArgumentSpecs())
@@ -710,7 +719,8 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		}
 	}
 
-	for name, fns := range w.aggregates {
+	for _, name := range slices.Sorted(maps.Keys(w.aggregates)) {
+		fns := w.aggregates[name]
 		for i, fn := range fns {
 			meta := fn.Metadata()
 			fi := buildFunctionInfo(name, FunctionTypeAggregate, meta, fn.ArgumentSpecs())
@@ -1220,7 +1230,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// below serve; see catalog_contents.go.
 	unaryCatalog[CatalogContentsRequestWire, generated.CatalogContentsResponse](w, s, "catalog_contents",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogContentsRequestWire) (generated.CatalogContentsResponse, error) {
-			return w.catalogContents(req.AttachOpaqueData, callCtx)
+			return w.catalogContents(req, callCtx)
 		})
 
 	// catalog_transaction_begin — allocate a fresh transaction id when the

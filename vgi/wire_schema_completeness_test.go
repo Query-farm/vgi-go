@@ -305,24 +305,6 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 			},
 		},
 		{
-			origin: "SchemaContents",
-			schema: generated.SchemaContentsSchema,
-			build: func() ([]byte, error) {
-				item := []byte("item")
-				return SerializeSchemaContents(&generated.SchemaContents{
-					Schema:             item,
-					Tables:             [][]byte{item},
-					Views:              [][]byte{item},
-					ScalarFunctions:    [][]byte{item},
-					AggregateFunctions: [][]byte{item},
-					TableFunctions:     [][]byte{item},
-					ScalarMacros:       [][]byte{item},
-					TableMacros:        [][]byte{item},
-					Indexes:            [][]byte{item},
-				})
-			},
-		},
-		{
 			origin: "AttachCatalogInfo",
 			schema: generated.AttachCatalogInfoSchema,
 			build: func() ([]byte, error) {

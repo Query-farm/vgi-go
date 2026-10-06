@@ -5,8 +5,10 @@ package vgi
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
@@ -218,9 +220,10 @@ func BuildArgSchema(specs []ArgSpec) *arrow.Schema {
 		if len(meta) > 0 {
 			keys := make([]string, 0, len(meta))
 			vals := make([]string, 0, len(meta))
-			for k, v := range meta {
+			// Sorted, so the same function always encodes to the same bytes.
+			for _, k := range slices.Sorted(maps.Keys(meta)) {
 				keys = append(keys, k)
-				vals = append(vals, v)
+				vals = append(vals, meta[k])
 			}
 			fieldMeta = arrow.NewMetadata(keys, vals)
 		}
