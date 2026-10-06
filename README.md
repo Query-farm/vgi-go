@@ -300,15 +300,16 @@ make build              # build all example worker binaries
 make fmt                # gofmt
 make vet                # go vet
 make lint               # golangci-lint (requires golangci-lint in PATH)
-make test               # full integration suite over stdio (requires ../vgi)
+make test               # full integration suite over stdio (requires $VGI_DIR)
 make test-http          # full suite over HTTP transport
 make test-all           # both transports
 make test-single TEST=test/sql/integration/scalar/add_values.test
 go test ./...           # pure Go unit tests
 ```
 
-Integration tests live in the sibling DuckDB extension repo at `../vgi` and
-use the DuckDB sqllogictest format.
+Integration tests live in the DuckDB VGI extension repo, located by `VGI_DIR`
+(default: the sibling checkout `../vgi`; e.g. `make test VGI_DIR=/path/to/vgi`),
+and use the DuckDB sqllogictest format.
 
 See [Iroh operations](docs/iroh.md) for bridge-ready raw and HTTP workers.
 

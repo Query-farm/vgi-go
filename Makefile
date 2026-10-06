@@ -1,7 +1,7 @@
 # VGI-Go Makefile
 #
 # Builds the example VGI worker binary and runs integration tests against
-# the DuckDB VGI extension (expected at ../vgi).
+# the DuckDB VGI extension checkout at $(VGI_DIR) (default ../vgi).
 #
 # Usage:
 #   make build                  Build the worker binary
@@ -35,8 +35,11 @@ ATTACH_OPTIONS_CMD      := ./cmd/vgi-example-attach-options-worker
 SIMPLE_WRITABLE_BINARY  := vgi-example-simple-writable-worker-go
 SIMPLE_WRITABLE_CMD     := ./cmd/vgi-example-simple-writable-worker
 
-# Path to the sibling DuckDB VGI extension repo (contains tests).
-VGI_EXT_DIR  := ../vgi
+# Path to the DuckDB VGI extension checkout (contains the tests and the built
+# unittest runner). Defaults to a sibling checkout; point it elsewhere with
+#   make test VGI_DIR=/path/to/vgi
+# VGI_EXT_DIR is the older name for the same setting and is still honored.
+VGI_DIR      ?= $(or $(VGI_EXT_DIR),../vgi)
 
 # Toggle between "release" and "debug" DuckDB builds.
 # Override on the command line or via environment:
@@ -53,10 +56,10 @@ TEST_TIMEOUT ?= 60
 SHM_SIZE_BYTES ?= 268435456
 
 # Path to the DuckDB unittest runner for the selected build type.
-UNITTEST     := $(VGI_EXT_DIR)/build/$(BUILD_TYPE)/test/unittest
-DEBUG_BIN    := $(VGI_EXT_DIR)/build/debug/test/unittest
+UNITTEST     := $(VGI_DIR)/build/$(BUILD_TYPE)/test/unittest
+DEBUG_BIN    := $(VGI_DIR)/build/debug/test/unittest
 
-# The same runners, addressed from inside $(VGI_EXT_DIR). The sqllogictest
+# The same runners, addressed from inside $(VGI_DIR). The sqllogictest
 # runner resolves a test path against its own working directory, so the HTTP
 # lane cds into the extension repo and names tests relative to it — exactly as
 # the stdio `test` target does. Passing an out-of-tree path instead silently
@@ -72,7 +75,7 @@ ATTACH_OPTIONS_WORKER_PATH   := $(CURDIR)/$(ATTACH_OPTIONS_BINARY)
 SIMPLE_WRITABLE_WORKER_PATH  := $(CURDIR)/$(SIMPLE_WRITABLE_BINARY)
 
 # Test directory inside the extension repo.
-TEST_DIR     := $(VGI_EXT_DIR)/test/sql
+TEST_DIR     := $(VGI_DIR)/test/sql
 
 # Discover all .test files and derive target names: test/sql/foo/bar.test → test/foo/bar
 TEST_FILES       := $(shell find $(TEST_DIR) -name '*.test' 2>/dev/null)
@@ -84,12 +87,12 @@ HTTP_TEST_TARGETS := $(patsubst $(TEST_DIR)/%.test,test-http/%,$(TEST_FILES))
 # vgi_worker_pool asserts on the error a *bad worker location* produces, which
 # over HTTP is whatever DuckDB's httpfs says about the URL rather than the
 # worker's own "Unknown function" / spawn failure. The reference runner
-# (../vgi/test/run_http_integration.sh) only covers test/sql/integration/*, so
+# ($(VGI_DIR)/test/run_http_integration.sh) only covers test/sql/integration/*, so
 # it never runs these; the Python worker fails them over HTTP exactly as this
 # one does.
 HTTP_XFAIL_TESTS := vgi_worker_pool
 
-# The HTTP worker is started with its working directory set to $(VGI_EXT_DIR),
+# The HTTP worker is started with its working directory set to $(VGI_DIR),
 # the same directory the unittest runner runs from. COPY ... TO writes the file
 # itself, and the test scripts name it with a path relative to that directory
 # (duckdb_unittest_tempdir/...). Over stdio the worker inherits DuckDB's cwd for
@@ -227,7 +230,7 @@ COVERAGE_GATE := --min-executed $(GO_MIN_EXECUTED) \
 	--allow-skip 'require-env VGI_ROWID_CONSTRAINT_WORKER'
 
 test: build
-	cd $(VGI_EXT_DIR) && \
+	cd $(VGI_DIR) && \
 	    VGI_SYNC_INIT_GLOBAL=1 \
 	    VGI_TEST_WORKER=$(WORKER_PATH) \
 	    VGI_VERSIONED_WORKER=$(VERSIONED_WORKER_PATH) \
@@ -241,14 +244,14 @@ test: build
 # Example:
 #   make test-single TEST=test/sql/integration/scalar/add_values.test
 test-single: build
-	cd $(VGI_EXT_DIR) && \
+	cd $(VGI_DIR) && \
 	    VGI_SYNC_INIT_GLOBAL=1 \
 	    VGI_TEST_WORKER=$(WORKER_PATH) \
 	    VGI_VERSIONED_WORKER=$(VERSIONED_WORKER_PATH) \
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
-	    $(UNITTEST) "$(TEST)"
+	    $(UNITTEST_REL) "$(TEST)"
 
 # Run the full integration test suite with the shared-memory side-channel
 # enabled. Identical to `make test` plus VGI_RPC_SHM_SIZE_BYTES, which makes
@@ -259,7 +262,7 @@ test-single: build
 #   make test-shm                         # 256 MiB segment (default)
 #   make test-shm SHM_SIZE_BYTES=67108864 # 64 MiB segment
 test-shm: build
-	cd $(VGI_EXT_DIR) && \
+	cd $(VGI_DIR) && \
 	    VGI_SYNC_INIT_GLOBAL=1 \
 	    VGI_RPC_SHM_SIZE_BYTES=$(SHM_SIZE_BYTES) \
 	    VGI_TEST_WORKER=$(WORKER_PATH) \
@@ -267,7 +270,7 @@ test-shm: build
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
-	    $(UNITTEST) "test/*" "~test/sql/integration/writable/*"
+	    $(UNITTEST_REL) "test/*" "~test/sql/integration/writable/*"
 
 # Run the full integration test suite over HTTP transport.
 # Each test starts a fresh HTTP worker, discovers the port, runs the test,
@@ -295,7 +298,7 @@ test-http: build $(HTTP_TEST_TARGETS)
 # SUITE_GLOB is test/sql/integration/* only). Excluding it here keeps `make
 # test-launcher` matching what CI actually runs.
 test-launcher: build
-	cd $(VGI_EXT_DIR) && \
+	cd $(VGI_DIR) && \
 	    VGI_SYNC_INIT_GLOBAL=1 \
 	    VGI_REQUIRE_LAUNCHER_TRANSPORT=1 \
 	    VGI_TEST_WORKER="launch:$(WORKER_PATH)" \
@@ -303,7 +306,7 @@ test-launcher: build
 	    VGI_VERSIONED_TABLES_WORKER="launch:$(VERSIONED_TABLES_WORKER_PATH)" \
 	    VGI_ATTACH_OPTIONS_WORKER="launch:$(ATTACH_OPTIONS_WORKER_PATH)" \
 	    VGI_SIMPLE_WRITABLE_WORKER="launch:$(SIMPLE_WRITABLE_WORKER_PATH)" \
-	    $(UNITTEST) "test/*" "~test/sql/integration/writable/*" "~test/sql/vgi_worker_pool.test"
+	    $(UNITTEST_REL) "test/*" "~test/sql/integration/writable/*" "~test/sql/vgi_worker_pool.test"
 
 # Run stdio, stdio+shm, HTTP, and launcher tests.
 test-all: test test-shm test-http test-launcher
@@ -317,7 +320,7 @@ test-http/%: build
 	fi; \
 	port_fifo=$$(mktemp -u); \
 	mkfifo "$$port_fifo"; \
-	(cd $(VGI_EXT_DIR) && exec $(WORKER_PATH) --http) > "$$port_fifo" 2>/dev/null & \
+	(cd $(VGI_DIR) && exec $(WORKER_PATH) --http) > "$$port_fifo" 2>/dev/null & \
 	http_pid=$$!; \
 	cleanup() { kill $$http_pid 2>/dev/null; wait $$http_pid 2>/dev/null; rm -f "$$port_fifo"; }; \
 	trap cleanup EXIT; \
@@ -334,7 +337,7 @@ test-http/%: build
 	for xf in $(HTTP_XFAIL_TESTS); do \
 		if [ "$$xf" = "$*" ]; then is_xfail=true; break; fi; \
 	done; \
-	out=$$(cd $(VGI_EXT_DIR) && timeout $(TEST_TIMEOUT) $(UNITTEST_REL) "test/sql/$*.test" 2>&1); \
+	out=$$(cd $(VGI_DIR) && timeout $(TEST_TIMEOUT) $(UNITTEST_REL) "test/sql/$*.test" 2>&1); \
 	rc=$$?; \
 	if [ $$rc -eq 0 ] && printf '%s' "$$out" | grep -q "All tests were skipped"; then \
 		echo "SKIP  $* [http]"; \
@@ -351,7 +354,7 @@ test-http/%: build
 		else \
 			echo "FAIL  $* [http] (release, rc=$$rc) — rerunning with debug binary..."; \
 			printf '%s\n' "$$out" | tail -40; \
-			(cd $(VGI_EXT_DIR) && timeout $(TEST_TIMEOUT) $(DEBUG_BIN_REL) -s "test/sql/$*.test" 2>&1) || true; \
+			(cd $(VGI_DIR) && timeout $(TEST_TIMEOUT) $(DEBUG_BIN_REL) -s "test/sql/$*.test" 2>&1) || true; \
 			kill $$http_pid 2>/dev/null; wait $$http_pid 2>/dev/null; \
 			exit 1; \
 		fi; \

@@ -27,7 +27,7 @@ make vet                                    # Static analysis
 
 Always rebuild the worker before running tests (`make test` does this automatically).
 
-Tests live in the VGI DuckDB extension repo at `../vgi/test/sql/` and use the DuckDB sqllogictest format. Refer to the documentation at https://duckdb.org/docs/stable/dev/sqllogictest/intro when debugging test files.
+Tests live in the VGI DuckDB extension repo at `$(VGI_DIR)/test/sql/` (`VGI_DIR` defaults to the sibling checkout `../vgi`; override with `make test VGI_DIR=/path/to/vgi`) and use the DuckDB sqllogictest format. Refer to the documentation at https://duckdb.org/docs/stable/dev/sqllogictest/intro when debugging test files.
 
 ### HTTP tests
 
