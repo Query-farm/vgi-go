@@ -21,5 +21,9 @@ func (w *Worker) NewHttpServerForTest() (*vgirpc.HttpServer, error) {
 // RunTcp builds, calling onBound once listening. It returns after idleTimeout
 // with no open connection.
 func (w *Worker) ServeTcpForTest(idleTimeout time.Duration, onBound func(host string, port int)) error {
-	return w.buildServer(transportTCP).RunTcp("127.0.0.1", 0, idleTimeout, onBound)
+	s, err := w.buildServer(transportTCP)
+	if err != nil {
+		return err
+	}
+	return s.RunTcp("127.0.0.1", 0, idleTimeout, onBound)
 }

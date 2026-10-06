@@ -19,6 +19,8 @@ import (
 	"github.com/Query-farm/vgi-go/internal/workercli"
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-go/vgi/storage/resolve"
+	"github.com/Query-farm/vgi-rpc-go/conformance"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
@@ -1077,6 +1079,15 @@ func main() {
 		return nil, fmt.Errorf("no scan function for %s.%s", schemaPath, tableName)
 	})
 
+	// conformance.Secondary.v1 beside vgi.v2, on every transport, through the
+	// SDK's hosted-protocols hook -- what vgi-rpc's hosted-protocols
+	// conformance group (vgi-rpc-test-hosted) asserts against this worker.
+	// Additive: it cannot change vgi.v2 dispatch, because every request routes
+	// on its protocol name.
+	vgi.WithHostedProtocols(func() ([]*vgirpc.Server, error) {
+		return []*vgirpc.Server{conformance.NewSecondary()}, nil
+	})(w)
+
 	// HTTP-only hooks: bearer/JWT auth and the OAuth resource metadata document
 	// have no meaning on the stdio/socket transports.
 	if *cli.HTTP {
@@ -1084,6 +1095,14 @@ func main() {
 		if jwtCleanup != nil {
 			defer jwtCleanup()
 		}
+		// vgi_rpc.Identity.v1 under the IDENTITY_CONFORMANCE_FIXTURE policy
+		// (vgi-rpc-test-hosted --identity), and the conformance caller-identity
+		// headers it is asserted through. Those headers are honoured only when
+		// present -- every other request authenticates exactly as before -- and
+		// they are trivially spoofable: a test fixture, never a deployment.
+		identityCfg, _ := conformance.IdentityConfigFor(conformance.IdentityModeBoth)
+		vgi.WithIdentity(identityCfg)(w)
+		authFn = withConformanceIdentityAuth(authFn)
 		if authFn != nil {
 			w.SetAuthenticate(authFn)
 		}

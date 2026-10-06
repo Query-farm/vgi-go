@@ -219,6 +219,69 @@ DuckDB rather than the generic `RuntimeError`:
 Panics inside user functions during `bind`, `init`, `cardinality`, and
 `statistics` dispatch are recovered automatically.
 
+## Hosting more protocols
+
+A worker always hosts `vgi.v2` and `vgi_rpc.Reflection.v1`. To host another
+application protocol beside them -- a reporting protocol, say -- return it from
+the hosted-protocols hook. Define it the way vgi-rpc-go defines any protocol:
+
+```go
+w := vgi.NewWorker(
+    vgi.WithHostedProtocols(func() ([]*vgirpc.Server, error) {
+        reports := vgirpc.NewProtocol("acme.Reports.v1")
+        vgirpc.Unary(reports, "status", reportStatus)
+        return []*vgirpc.Server{reports}, nil
+    }),
+)
+```
+
+The hook is called once when the worker's server is built and may read
+configuration; what it returns is hosted after `vgi.v2` on **every** transport
+(stdio, unix, TCP, HTTP) and fixed for the life of the process. It cannot
+change `vgi.v2`: every request routes on its protocol name. A returned protocol
+named under the reserved `vgi_rpc.` prefix, named `vgi.v2`, or named twice
+stops the worker from starting, with an error naming the hook.
+
+## Identity (`vgi_rpc.Identity.v1`)
+
+A worker can resolve opaque bearer credentials to principals for a reverse
+proxy (`introspect_token`), and mint short-lived grants for the calling user
+(`issue_grant`), by opting in with `vgi.WithIdentity`:
+
+```go
+w := vgi.NewWorker(vgi.WithIdentity(vgirpc.IdentityConfig{
+    ResolveToken: func(token string) (vgirpc.TokenIdentity, bool, error) {
+        row, err := apiKeys.Lookup(token)
+        if err != nil {
+            // "I could not find out" -- not "the credential is bad".
+            return vgirpc.TokenIdentity{}, false, &vgirpc.AuthUnavailableError{Detail: err.Error(), RetryAfter: 5}
+        }
+        if row == nil {
+            return vgirpc.TokenIdentity{}, false, nil // the store answered: unknown
+        }
+        return vgirpc.NewTokenIdentity(row.Principal), true, nil
+    },
+    IntrospectPrincipals: []string{"proxy@example.com"},
+}))
+```
+
+- The protocol is hosted on HTTP only, and only the methods whose hook is set:
+  with neither hook it is absent, not hosted-and-refusing.
+- `introspect_token` needs an allowlist of principals permitted to ask --
+  `IntrospectPrincipals`, or `VGI_INTROSPECT_PRINCIPALS` (comma-separated).
+  There is no permissive default; a worker with `ResolveToken` and no allowlist
+  **refuses to start**, because "any authenticated caller" lets any user
+  resolve any other user's credential to its owner.
+- For a **transient** failure (a store or sidecar is down), return
+  `*vgirpc.AuthUnavailableError` with a `RetryAfter` -- the error an
+  authenticator returns for an outage -- or `*vgirpc.IdentityUnavailableError`.
+  The framework sends either as `identity_unavailable` / `UNAVAILABLE` with
+  that retry hint as `RetryInfo`, which tells the caller not to negative-cache
+  the answer. Return `ok=false` with no error only when the store answered and
+  the credential is unknown. Never report an outage as a `ValueError`
+  `*RpcError`: `ChainAuthenticate` reads that as "not my credential, try the
+  next", so a thirty-second blip becomes a 401 for everyone.
+
 ## Examples
 
 The `cmd/vgi-example-worker` binary registers every example function via

@@ -51,3 +51,38 @@ jobs:
           path: coverage.out
           if-no-files-found: warn
 
+  # vgi-rpc's hosted-protocols conformance group against the example worker:
+  # conformance.Secondary.v1 hosted through vgi.WithHostedProtocols on stdio,
+  # unix and HTTP, and vgi_rpc.Identity.v1 (vgi.WithIdentity) over HTTP. The
+  # reference is unpinned main by design, as in the port CI: a reference change
+  # that breaks this SDK turns it red the same day.
+  hosted-protocols:
+    name: Hosted protocols (vgi-rpc conformance)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Clone vgi-rpc-python reference
+        run: git clone --depth 1 https://github.com/Query-farm/vgi-rpc-python.git "$RUNNER_TEMP/vgi-rpc-python"
+
+      - name: Install the reference's conformance suite
+        run: |
+          python -m pip install --upgrade pip
+          pip install "${RUNNER_TEMP}/vgi-rpc-python[http,conformance]" pytest pytest-timeout
+
+      - name: Build example worker
+        run: make build
+
+      - name: Hosted-protocols group (stdio, unix, HTTP + identity)
+        env:
+          PYTHON: python
+        run: timeout 600 ci/run-hosted-protocols.sh

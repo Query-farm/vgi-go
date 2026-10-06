@@ -20,7 +20,10 @@ func TestProtocolNameIsVgiV2(t *testing.T) {
 func TestBuiltServerHostsProtocolName(t *testing.T) {
 	for _, transport := range []serverTransport{transportStdio, transportHTTP, transportUnix, transportTCP} {
 		w := NewWorker()
-		s := w.buildServer(transport)
+		s, err := w.buildServer(transport)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if got := s.ServiceName(); got != ProtocolName {
 			t.Errorf("transport %d: server hosts %q, want %q", transport, got, ProtocolName)
 		}

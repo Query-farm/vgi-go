@@ -356,12 +356,17 @@ type Worker struct {
 	attachScanBranchesGetHandler  AttachScanBranchesGetHandler
 	attachWriteFunctionGetHandler AttachWriteFunctionGetHandler
 	catalogVersionHook            CatalogVersionHook
-	authenticateFunc              vgirpc.AuthenticateFunc
-	oauthMetadata                 *vgirpc.OAuthResourceMetadata
-	oauthPkce                     *vgirpc.OAuthPkceConfig
-	secretTypes                   []SecretTypeSpec
-	attachCatalogs                []AttachCatalogInfo
-	attachOptions                 []AttachOptionSpec
+	// hostedProtocols supplies the protocols hosted beside vgi.v2
+	// (WithHostedProtocols); identity opts into vgi_rpc.Identity.v1 over HTTP
+	// (WithIdentity). See hosting.go.
+	hostedProtocols  HostedProtocolsFunc
+	identity         *vgirpc.IdentityConfig
+	authenticateFunc vgirpc.AuthenticateFunc
+	oauthMetadata    *vgirpc.OAuthResourceMetadata
+	oauthPkce        *vgirpc.OAuthPkceConfig
+	secretTypes      []SecretTypeSpec
+	attachCatalogs   []AttachCatalogInfo
+	attachOptions    []AttachOptionSpec
 	// catalogAttachOptions holds per-alias-catalog option specs
 	// (WithAttachOptionsForCatalog); a catalog absent here falls back to
 	// attachOptions.
@@ -1232,7 +1237,11 @@ const ProtocolName = "vgi.v2"
 // 2.0.0 represents every schema identity as a root-to-leaf list of components.
 const ProtocolVersion = "2.0.0"
 
-func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
+// buildServer is the one place a worker's server is built, for every
+// transport; see hosting.go for what it hosts. An error means the worker must
+// not start: a hosted-protocols hook failed or returned an invalid protocol, or
+// identity was enabled without an introspector allowlist.
+func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) {
 	// Configure structured logging.
 	// If a custom slog.Handler was supplied, install it directly — the caller
 	// owns level/format. Otherwise (re)configure the named-logger registry
@@ -1318,18 +1327,45 @@ func (w *Worker) buildServer(transport serverTransport) *vgirpc.Server {
 	// Table-buffering sink RPCs (process/combine/destructor).
 	w.registerTableBufferingRPCs(s)
 
+	// The worker's additional protocols, after vgi.v2 and on every transport.
+	if err := w.hostProtocols(s); err != nil {
+		return nil, err
+	}
+
 	// Browser clients discover the application protocol through Reflection.v1.
 	// Register it after the application methods so vgi.v2 remains primary.
 	if err := vgirpc.RegisterReflection(s); err != nil {
-		panic(fmt.Errorf("register VGI reflection: %w", err))
+		return nil, fmt.Errorf("register VGI reflection: %w", err)
 	}
 
+	// vgi_rpc.Identity.v1 only where callers are authenticated.
+	if transport == transportHTTP {
+		if err := w.hostIdentity(s); err != nil {
+			return nil, err
+		}
+	}
+
+	return s, nil
+}
+
+// mustBuildServer builds the server for a transport whose Run method has no
+// error to return, and refuses to start -- message on stderr, exit status 1 --
+// when the build fails.
+func (w *Worker) mustBuildServer(transport serverTransport) *vgirpc.Server {
+	s, err := w.buildServer(transport)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "vgi: worker refused to start: %v\n", err)
+		os.Exit(1)
+	}
 	return s
 }
 
 // RunStdio runs the worker serving RPC over stdin/stdout.
+//
+// A worker that cannot be built (see [WithHostedProtocols], [WithIdentity])
+// refuses to start: the reason goes to stderr and the process exits 1.
 func (w *Worker) RunStdio() {
-	s := w.buildServer(transportStdio)
+	s := w.mustBuildServer(transportStdio)
 	s.RunStdio()
 }
 
@@ -1339,7 +1375,10 @@ func (w *Worker) RunStdio() {
 // self-shuts-down after idleTimeout with no active connections (<=0 disables
 // the timeout). Mutually exclusive with HTTP.
 func (w *Worker) RunUnix(path string, idleTimeout time.Duration) error {
-	s := w.buildServer(transportUnix)
+	s, err := w.buildServer(transportUnix)
+	if err != nil {
+		return err
+	}
 	return s.RunUnix(path, idleTimeout, func(bound string) {
 		fmt.Println("UNIX:" + bound)
 		os.Stdout.Sync()
@@ -1356,7 +1395,10 @@ func (w *Worker) RunUnix(path string, idleTimeout time.Duration) error {
 // Raw TCP framing carries no auth/encryption — bind loopback / a trusted
 // network only; use RunHttp for untrusted networks.
 func (w *Worker) RunTcp(host string, port int, idleTimeout time.Duration) error {
-	s := w.buildServer(transportTCP)
+	s, err := w.buildServer(transportTCP)
+	if err != nil {
+		return err
+	}
 	return s.RunTcp(host, port, idleTimeout, func(boundHost string, boundPort int) {
 		fmt.Printf("TCP:%s:%d\n", boundHost, boundPort)
 		_ = os.Stdout.Sync()
@@ -1379,7 +1421,10 @@ func (w *Worker) RunIrohTcpUpstream(host string, port int, idleTimeout time.Dura
 	if len(options.TrustedProxyAddresses) == 0 {
 		options.TrustedProxyAddresses = []string{"127.0.0.1"}
 	}
-	s := w.buildServer(transportTCP)
+	s, err := w.buildServer(transportTCP)
+	if err != nil {
+		return err
+	}
 	policy := vgirpc.ObservePeerIdentity
 	if options.Authenticate {
 		policy = vgirpc.PeerIdentityPrimary("iroh")
@@ -1436,7 +1481,10 @@ func (w *Worker) RunHttp(addr string) error {
 // listener -- so an in-process test can serve exactly what a deployed worker
 // does.
 func (w *Worker) newHttpServer() (*vgirpc.HttpServer, error) {
-	s := w.buildServer(transportHTTP)
+	s, err := w.buildServer(transportHTTP)
+	if err != nil {
+		return nil, err
+	}
 	// Resolve the signing key once so the worker (catalog opaque-data
 	// sealing — see crypto.go) and the HTTP state-token machinery share the
 	// same key. Generate an ephemeral per-process key when the operator did

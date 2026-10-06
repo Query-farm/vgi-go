@@ -11,9 +11,24 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Query-farm/vgi-rpc-go/conformance"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth"
 )
+
+// withConformanceIdentityAuth authenticates a request carrying the
+// X-Conformance-Principal header the way IDENTITY_CONFORMANCE_FIXTURE.md
+// specifies, and hands every other request to next unchanged.
+//
+// SECURITY: the header is trivially spoofable. Test fixture only.
+func withConformanceIdentityAuth(next vgirpc.AuthenticateFunc) vgirpc.AuthenticateFunc {
+	return func(r *http.Request) (*vgirpc.AuthContext, error) {
+		if r.Header.Get(conformance.IdentityPrincipalHeader) != "" || next == nil {
+			return conformance.IdentityAuthenticate(r)
+		}
+		return next(r)
+	}
+}
 
 // resolveAuthenticate builds an AuthenticateFunc from environment variables.
 // Returns nil if no auth env vars are set. When both bearer and JWT are
