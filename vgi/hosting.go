@@ -80,6 +80,43 @@ func WithIdentity(cfg vgirpc.IdentityConfig) WorkerOption {
 	}
 }
 
+// WithGrantKeys turns on sealed grants with an explicit configuration
+// ([vgirpc.NewGrantKeys], [vgirpc.ParseGrantKeys]). Without it the worker
+// reads VGI_RPC_GRANT_KEYS, VGI_RPC_GRANT_AUDIENCE and
+// VGI_RPC_GRANT_MAX_TTL_SECONDS; the example workers also accept repeated
+// --grant-key flags. Nil turns grants off regardless of the environment.
+//
+// With keys configured, over HTTP the worker hosts vgi_rpc.Identity.v1's
+// issue_grant -- minting sealed grants unless WithIdentity supplies MintGrant
+// -- and accepts its own grants back as bearer credentials, after the
+// authenticator set with SetAuthenticate. A grant authenticates as domain
+// "grant" with no auth_time, so it can never mint another grant. Grants are
+// not individually revocable: keep the max TTL short and remove a key to
+// revoke everything it minted.
+func WithGrantKeys(keys *vgirpc.GrantKeys) WorkerOption {
+	return func(w *Worker) { w.SetGrantKeys(keys) }
+}
+
+// SetGrantKeys is [WithGrantKeys] for an already-built worker.
+func (w *Worker) SetGrantKeys(keys *vgirpc.GrantKeys) {
+	w.grantKeys = keys
+	w.grantKeysSet = true
+}
+
+// resolveGrantKeys returns the explicit configuration, else the environment's.
+// A malformed key is an error: the worker must not start with a key it
+// misread.
+func (w *Worker) resolveGrantKeys() (*vgirpc.GrantKeys, error) {
+	if w.grantKeysSet {
+		return w.grantKeys, nil
+	}
+	keys, err := vgirpc.GrantKeysFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("sealed grant keys: %w", err)
+	}
+	return keys, nil
+}
+
 // IntrospectPrincipalsEnv names the environment variable read for the
 // introspector allowlist when WithIdentity supplies none.
 const IntrospectPrincipalsEnv = "VGI_INTROSPECT_PRINCIPALS"
@@ -127,12 +164,20 @@ func (w *Worker) hostProtocols(s *vgirpc.Server) error {
 	return nil
 }
 
-// hostIdentity hosts vgi_rpc.Identity.v1 on s when the worker opted in.
-func (w *Worker) hostIdentity(s *vgirpc.Server) error {
-	if w.identity == nil || (w.identity.ResolveToken == nil && w.identity.MintGrant == nil) {
+// hostIdentity hosts vgi_rpc.Identity.v1 on s when the worker opted in --
+// with WithIdentity hooks, or with sealed-grant keys alone, which host
+// issue_grant minting sealed grants.
+func (w *Worker) hostIdentity(s *vgirpc.Server, grantKeys *vgirpc.GrantKeys) error {
+	var cfg vgirpc.IdentityConfig
+	if w.identity != nil {
+		cfg = *w.identity
+	}
+	if cfg.GrantKeys == nil {
+		cfg.GrantKeys = grantKeys
+	}
+	if cfg.ResolveToken == nil && cfg.MintGrant == nil && cfg.GrantKeys == nil {
 		return nil
 	}
-	cfg := *w.identity
 	if cfg.ResolveToken != nil && len(cfg.IntrospectPrincipals) == 0 {
 		for _, p := range strings.Split(os.Getenv(IntrospectPrincipalsEnv), ",") {
 			if p = strings.TrimSpace(p); p != "" {

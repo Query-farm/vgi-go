@@ -282,6 +282,34 @@ w := vgi.NewWorker(vgi.WithIdentity(vgirpc.IdentityConfig{
   `*RpcError`: `ChainAuthenticate` reads that as "not my credential, try the
   next", so a thirty-second blip becomes a 401 for everyone.
 
+## Sealed grants
+
+`issue_grant` mints a credential for unattended automation to present later as
+an ordinary bearer. Configure grant keys and the worker closes that loop
+itself: over HTTP it hosts `issue_grant` (minting sealed grants, unless
+`WithIdentity` supplies a `MintGrant`) and accepts its own grants back as
+`Bearer` credentials, after your `SetAuthenticate` authenticator.
+
+```bash
+VGI_RPC_GRANT_KEYS=$(openssl rand -base64 32) ./my-worker --http
+./my-worker --http --grant-key "$NEW_KEY" --grant-key "$OLD_KEY"   # first mints, all verify
+```
+
+or `vgi.WithGrantKeys(keys)` in code. Optional `VGI_RPC_GRANT_AUDIENCE` and
+`VGI_RPC_GRANT_MAX_TTL_SECONDS` (default 7 days). A malformed key stops the
+worker at startup.
+
+- A grant authenticates as domain `grant`, its owner's principal, and claims
+  `grant_id`, `scopes`, `purpose` -- with no `auth_time`, so a grant can never
+  mint another grant.
+- Grants are not individually revocable: keep the max TTL short, and remove a
+  key to revoke everything it minted.
+- A `ResolveToken` hook (`WithIdentity`) is consulted for bearers too: resolved
+  means authenticated (domain `token`); unknown falls through to 401; an
+  outage is a 503 with your `RetryAfter`.
+- Your authenticator must return a `ValueError` `*vgirpc.RpcError` for a bearer
+  it does not recognise, or the grant verifier is never reached.
+
 ## Examples
 
 The `cmd/vgi-example-worker` binary registers every example function via

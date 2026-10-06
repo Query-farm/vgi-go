@@ -64,6 +64,11 @@ func optionalTestBearerAuthenticate() vgirpc.AuthenticateFunc {
 		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 			return vgirpc.Anonymous(), nil
 		}
+		if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "+vgirpc.GrantTokenPrefix) {
+			// Not ours: let the sealed-grant verifier the HTTP server
+			// appends answer it (WithGrantKeys / VGI_RPC_GRANT_KEYS).
+			return nil, &vgirpc.RpcError{Type: "ValueError", Message: "sealed grant"}
+		}
 		ctx, err := validate(r)
 		if err != nil {
 			return vgirpc.Anonymous(), nil

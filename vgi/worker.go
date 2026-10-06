@@ -372,8 +372,12 @@ type Worker struct {
 	// hostedProtocols supplies the protocols hosted beside vgi.v2
 	// (WithHostedProtocols); identity opts into vgi_rpc.Identity.v1 over HTTP
 	// (WithIdentity). See hosting.go.
-	hostedProtocols  HostedProtocolsFunc
-	identity         *vgirpc.IdentityConfig
+	hostedProtocols HostedProtocolsFunc
+	identity        *vgirpc.IdentityConfig
+	// grantKeys is the explicit sealed-grant configuration
+	// (WithGrantKeys / SetGrantKeys); unset reads VGI_RPC_GRANT_KEYS.
+	grantKeys        *vgirpc.GrantKeys
+	grantKeysSet     bool
 	authenticateFunc vgirpc.AuthenticateFunc
 	oauthMetadata    *vgirpc.OAuthResourceMetadata
 	oauthPkce        *vgirpc.OAuthPkceConfig
@@ -1382,9 +1386,17 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 		return nil, fmt.Errorf("register VGI reflection: %w", err)
 	}
 
+	// Sealed-grant keys are resolved on every transport, so a malformed key
+	// stops the worker however it is started -- even though only HTTP, the
+	// transport that authenticates callers, uses them.
+	grantKeys, err := w.resolveGrantKeys()
+	if err != nil {
+		return nil, err
+	}
+
 	// vgi_rpc.Identity.v1 only where callers are authenticated.
 	if transport == transportHTTP {
-		if err := w.hostIdentity(s); err != nil {
+		if err := w.hostIdentity(s, grantKeys); err != nil {
 			return nil, err
 		}
 	}
@@ -1618,6 +1630,12 @@ func (w *Worker) newHttpServer() (*vgirpc.HttpServer, error) {
 	// Pre-render the remaining pages / oauth routes deterministically rather
 	// than lazily on the first request.
 	hs.InitPages()
+	// Compose the identity bearer authenticators (sealed grants, then
+	// resolve_token) after the configured authenticator now, so a
+	// configuration the server must refuse stops the worker at startup.
+	if err := hs.InitIdentityBearer(); err != nil {
+		return nil, err
+	}
 	return hs, nil
 }
 

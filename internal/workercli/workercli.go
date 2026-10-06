@@ -17,12 +17,14 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Query-farm/vgi-go/internal/covflush"
 	"github.com/Query-farm/vgi-go/vgi"
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
 
 // Flags holds the transport flags registered on flag.CommandLine.
@@ -41,6 +43,17 @@ type Flags struct {
 	irohObserve      *bool
 	idle             *float64
 	logFlags         *vgi.LoggingFlags
+	grantKeys        grantKeyFlag
+}
+
+// grantKeyFlag collects repeated --grant-key values, minting key first.
+type grantKeyFlag []string
+
+func (g *grantKeyFlag) String() string { return strings.Join(*g, ",") }
+
+func (g *grantKeyFlag) Set(v string) error {
+	*g = append(*g, v)
+	return nil
 }
 
 // Register defines the standard worker transport + logging flags on
@@ -62,6 +75,8 @@ func Register() *Flags {
 	// socket/stdio transports, so they are a no-op here.
 	flag.Bool("describe", true, "Enable description pages (accepted for launcher compatibility)")
 	flag.Bool("no-describe", false, "Disable description pages (accepted for launcher compatibility)")
+	flag.Var(&f.grantKeys, "grant-key",
+		"Sealed-grant key, standard base64 of 32 bytes (repeatable; the first mints). Overrides VGI_RPC_GRANT_KEYS")
 	f.logFlags = vgi.RegisterLoggingFlags(flag.CommandLine)
 	return f
 }
@@ -85,6 +100,7 @@ func (f *Flags) Parse(args []string) error {
 		"log-level":          true,
 		"log-format":         true,
 		"log-logger":         true,
+		"grant-key":          true,
 	})); err != nil {
 		return err
 	}
@@ -115,6 +131,16 @@ func (f *Flags) Parse(args []string) error {
 // Serve runs w on the transport the flags selected, blocking until it stops.
 // The default is stdio.
 func (f *Flags) Serve(w *vgi.Worker) error {
+	if len(f.grantKeys) > 0 {
+		// --grant-key replaces VGI_RPC_GRANT_KEYS; the audience and max TTL
+		// still come from the environment. A malformed key stops the worker.
+		keys, err := vgirpc.GrantKeysFromValues(f.grantKeys, "",
+			os.Getenv(vgirpc.GrantAudienceEnv), os.Getenv(vgirpc.GrantMaxTTLEnv))
+		if err != nil {
+			return err
+		}
+		w.SetGrantKeys(keys)
+	}
 	irohOptions := vgi.IrohBridgeOptions{
 		Issuer:                *f.irohIssuer,
 		TrustedProxyAddresses: splitExactAddresses(*f.irohTrustedProxy),

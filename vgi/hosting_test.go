@@ -5,8 +5,13 @@ package vgi
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
@@ -94,4 +99,60 @@ func TestIdentityWithoutAnAllowlistRefusesToStart(t *testing.T) {
 	if _, err := NewWorker(WithIdentity(vgirpc.IdentityConfig{MintGrant: mint})).buildServer(transportHTTP); err != nil {
 		t.Fatalf("mint-only identity: %v", err)
 	}
+}
+
+// Sealed-grant keys: a malformed VGI_RPC_GRANT_KEYS stops the worker on every
+// transport; well-formed keys alone host Identity.v1 (issue_grant) over HTTP;
+// an explicit WithGrantKeys(nil) turns grants off whatever the environment says.
+func TestGrantKeysFromTheEnvironment(t *testing.T) {
+	t.Setenv(vgirpc.GrantKeysEnv, "not-a-key")
+	for _, transport := range []serverTransport{transportStdio, transportHTTP, transportUnix, transportTCP} {
+		if _, err := NewWorker().buildServer(transport); err == nil || !strings.Contains(err.Error(), "grant") {
+			t.Errorf("transport %d: malformed grant key: %v, want a refusal", transport, err)
+		}
+	}
+	if _, err := NewWorker(WithGrantKeys(nil)).buildServer(transportHTTP); err != nil {
+		t.Errorf("WithGrantKeys(nil) must ignore the environment: %v", err)
+	}
+
+	t.Setenv(vgirpc.GrantKeysEnv, "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+	hs, err := NewWorker().newHttpServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(hs)
+	defer ts.Close()
+	client, err := vgirpc.NewHttpClient(ts.URL, vgirpc.WithClientProtocol(vgirpc.IdentityProtocolName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	params := array.NewRecordBatch(arrow.NewSchema([]arrow.Field{
+		{Name: "purpose", Type: arrow.BinaryTypes.String},
+		{Name: "scopes", Type: arrow.ListOf(arrow.BinaryTypes.String)},
+		{Name: "ttl_seconds", Type: arrow.PrimitiveTypes.Int64},
+	}, nil), grantParamsColumns(), 1)
+	defer params.Release()
+	_, callErr := client.CallUnary(context.Background(), "issue_grant", params, nil)
+	var rpcErr *vgirpc.RpcError
+	// Hosted: an anonymous caller is refused stale_auth. Unhosted would be
+	// protocol_not_supported.
+	if !errors.As(callErr, &rpcErr) || rpcErr.Kind != "stale_auth" {
+		t.Fatalf("issue_grant with grant keys from the environment: %v; want stale_auth from a hosted issue_grant", callErr)
+	}
+	stdio, err := NewWorker().buildServer(transportStdio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = stdio
+}
+
+func grantParamsColumns() []arrow.Array {
+	purpose := array.NewStringBuilder(memory.DefaultAllocator)
+	purpose.Append("p")
+	scopes := array.NewListBuilder(memory.DefaultAllocator, arrow.BinaryTypes.String)
+	scopes.Append(true)
+	ttl := array.NewInt64Builder(memory.DefaultAllocator)
+	ttl.Append(60)
+	return []arrow.Array{purpose.NewArray(), scopes.NewArray(), ttl.NewArray()}
 }
