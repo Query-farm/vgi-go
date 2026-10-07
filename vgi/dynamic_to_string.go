@@ -6,9 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
-	"github.com/apache/arrow-go/v18/arrow"
 )
 
 // DynamicToStringHook is the optional interface a TableFunction may implement
@@ -55,11 +53,6 @@ type TableFunctionDynamicToStringRequestWire struct {
 type TableFunctionDynamicToStringResponseWire struct {
 	Keys   []string `vgirpc:"keys"`
 	Values []string `vgirpc:"values"`
-}
-
-func (w *Worker) registerDynamicToStringRPCs(s *vgirpc.Server) {
-	vgirpc.Unary[TableFunctionDynamicToStringRequestWire, TableFunctionDynamicToStringResponseWire](
-		s, "table_function_dynamic_to_string", w.handleTableFunctionDynamicToString)
 }
 
 func (w *Worker) handleTableFunctionDynamicToString(ctx context.Context, callCtx *vgirpc.CallContext, req TableFunctionDynamicToStringRequestWire) (TableFunctionDynamicToStringResponseWire, error) {
@@ -114,16 +107,4 @@ func (w *Worker) lookupTable(name string) (TableFunction, error) {
 		return nil, fmt.Errorf("table function %q not registered", name)
 	}
 	return fns[0], nil
-}
-
-// These request types carry the protocol's wrapped shape: a single `request`
-// binary column holding an IPC-encoded inner batch. The Go fields describe that
-// inner batch and deserializeParams unwraps it, but what the server *advertises*
-// has to be the wrapped shape — a client that builds its request from the
-// advertised schema (the TypeScript client does) otherwise finds none of its
-// keys and sends a batch of all-nulls.
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for table_function_dynamic_to_string.
-func (TableFunctionDynamicToStringRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.TableFunctionDynamicToStringParamsSchema
 }

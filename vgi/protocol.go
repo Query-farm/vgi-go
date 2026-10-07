@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -1692,11 +1691,11 @@ func (w *Worker) getArgSpecs(fn interface{}) []ArgSpec {
 // ---------------------------------------------------------------------------
 
 // globalInitResponseWireSchema is the init stream's header schema: the
-// generated GlobalInitResponseSchema, used both to advertise the header and to
-// serialize it, so the two cannot drift apart. It was once spelled out by hand
+// generated registry's vgiInitHeaderSchema, used both to advertise the header
+// and to serialize it, so the two cannot drift apart. It was once spelled out by hand
 // with max_workers before opaque_data, which put the advertised header out of
 // the generated order and so changed vgi.v2's protocol hash.
-var globalInitResponseWireSchema = generated.GlobalInitResponseSchema
+var globalInitResponseWireSchema = vgiInitHeaderSchema
 
 // ArrowSchema returns the Arrow schema used to serialize a GlobalInitResponseWire.
 func (r *GlobalInitResponseWire) ArrowSchema() *arrow.Schema {

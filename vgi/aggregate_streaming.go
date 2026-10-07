@@ -9,7 +9,6 @@ import (
 	"hash/fnv"
 	"sync"
 
-	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -139,12 +138,6 @@ func (s *streamingSessionStore) drop(execID []byte) *streamingSession {
 	sess := s.sessions[string(execID)]
 	delete(s.sessions, string(execID))
 	return sess
-}
-
-func (w *Worker) registerAggregateStreamingRPCs(s *vgirpc.Server) {
-	vgirpc.Unary[AggregateStreamingOpenRequestWire, AggregateStreamingOpenResponseWire](s, "aggregate_streaming_open", w.handleAggregateStreamingOpen)
-	vgirpc.Unary[AggregateStreamingChunkRequestWire, AggregateStreamingChunkResponseWire](s, "aggregate_streaming_chunk", w.handleAggregateStreamingChunk)
-	vgirpc.Unary[AggregateStreamingCloseRequestWire, AggregateStreamingCloseResponseWire](s, "aggregate_streaming_close", w.handleAggregateStreamingClose)
 }
 
 func (w *Worker) handleAggregateStreamingOpen(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateStreamingOpenRequestWire) (AggregateStreamingOpenResponseWire, error) {
@@ -314,25 +307,3 @@ func PartitionKey(chunk arrow.RecordBatch, partitionKeyCount, i int) uint64 {
 }
 
 var _ = memory.NewGoAllocator
-
-// These request types carry the protocol's wrapped shape: a single `request`
-// binary column holding an IPC-encoded inner batch. The Go fields describe that
-// inner batch and deserializeParams unwraps it, but what the server *advertises*
-// has to be the wrapped shape — a client that builds its request from the
-// advertised schema (the TypeScript client does) otherwise finds none of its
-// keys and sends a batch of all-nulls.
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_streaming_chunk.
-func (AggregateStreamingChunkRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.AggregateStreamingChunkParamsSchema
-}
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_streaming_close.
-func (AggregateStreamingCloseRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.AggregateStreamingCloseParamsSchema
-}
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_streaming_open.
-func (AggregateStreamingOpenRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.AggregateStreamingOpenParamsSchema
-}

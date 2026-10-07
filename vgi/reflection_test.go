@@ -99,64 +99,58 @@ func TestVgiV2ProtocolHash(t *testing.T) {
 }
 
 // vgi.v2 methods this SDK hosts but does not implement refuse every call with
-// UNIMPLEMENTED / method_not_implemented, never a silent success.
+// UNIMPLEMENTED / method_not_implemented, never a silent success -- for this
+// worker's own catalog and for a routed sub-catalog alike. The catalog_*
+// stubs are registered through the same routing as every catalog method, so
+// they are called with a real attach.
 func TestUnimplementedVgiV2MethodsRefuse(t *testing.T) {
-	w := vgi.NewWorker(vgi.WithCatalogName("example"))
-	hs, err := w.NewHttpServerForTest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ts := httptest.NewServer(hs)
-	defer ts.Close()
-	client, err := vgirpc.NewHttpClient(ts.URL,
-		vgirpc.WithClientProtocol(vgi.ProtocolName),
-		vgirpc.WithClientProtocolVersion(vgi.ProtocolVersion))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-
-	indexCreate := jsonRow(t, generated.IndexCreateRequestSchema, map[string]any{
-		"attach_opaque_data": []byte("a"), "schema_path": []string{"main"}, "name": "i",
-		"table_name": "t", "index_type": "ART", "constraint_type": "none",
-		"expressions": []string{"x"}, "on_conflict": "error", "options": []any{},
-	})
-	calls := map[string]arrow.RecordBatch{
-		"catalog_index_create": wrapRequest(t, indexCreate),
-		"catalog_index_drop": jsonRow(t, generated.CatalogIndexDropParamsSchema, map[string]any{
-			"attach_opaque_data": []byte("a"), "schema_path": []string{"main"}, "name": "i",
-			"ignore_not_found": false, "cascade": false,
-		}),
-		"catalog_index_get": jsonRow(t, generated.CatalogIndexGetParamsSchema, map[string]any{
-			"attach_opaque_data": []byte("a"), "schema_path": []string{"main"}, "name": "i",
-		}),
-		"catalog_schema_contents_indexes": jsonRow(t, generated.CatalogSchemaContentsIndexesParamsSchema, map[string]any{
-			"attach_opaque_data": []byte("a"), "path": []string{"main"},
-		}),
-		"catalog_table_column_comment_set": jsonRow(t, generated.CatalogTableColumnCommentSetParamsSchema, map[string]any{
-			"attach_opaque_data": []byte("a"), "schema_path": []string{"main"}, "name": "t",
-			"column_name": "x", "comment": "c", "ignore_not_found": false,
-		}),
-	}
-	for method, params := range calls {
-		t.Run(method, func(t *testing.T) {
-			defer params.Release()
-			out, err := client.CallUnary(context.Background(), method, params, nil)
-			if err == nil {
-				out.Release()
-				t.Fatalf("%s succeeded; an unimplemented method must refuse", method)
-			}
-			var rpcErr *vgirpc.RpcError
-			if !errors.As(err, &rpcErr) {
-				t.Fatalf("%s: %T %v, want an *RpcError", method, err, err)
-			}
-			if rpcErr.Code != "UNIMPLEMENTED" || rpcErr.Kind != "method_not_implemented" {
-				t.Fatalf("%s: code %q kind %q, want UNIMPLEMENTED / method_not_implemented (%v)", method, rpcErr.Code, rpcErr.Kind, err)
-			}
-			if want := method + " is not implemented by this worker"; !strings.Contains(rpcErr.Message, want) {
-				t.Fatalf("%s: message %q, want %q", method, rpcErr.Message, want)
-			}
+	parent := vgi.NewWorker(vgi.WithCatalogName("example"))
+	parent.RegisterSubCatalog(staticChild("kid"))
+	c := newContentsClient(t, parent)
+	for _, catalog := range []string{"example", "kid"} {
+		attach := c.attach(catalog).AttachOpaqueData
+		indexCreate := jsonRow(t, generated.IndexCreateRequestSchema, map[string]any{
+			"attach_opaque_data": attach, "schema_path": []string{"main"}, "name": "i",
+			"table_name": "t", "index_type": "ART", "constraint_type": "none",
+			"expressions": []string{"x"}, "on_conflict": "error", "options": []any{},
 		})
+		calls := map[string]arrow.RecordBatch{
+			"catalog_index_create": wrapRequest(t, indexCreate),
+			"catalog_index_drop": jsonRow(t, generated.CatalogIndexDropParamsSchema, map[string]any{
+				"attach_opaque_data": attach, "schema_path": []string{"main"}, "name": "i",
+				"ignore_not_found": false, "cascade": false,
+			}),
+			"catalog_index_get": jsonRow(t, generated.CatalogIndexGetParamsSchema, map[string]any{
+				"attach_opaque_data": attach, "schema_path": []string{"main"}, "name": "i",
+			}),
+			"catalog_schema_contents_indexes": jsonRow(t, generated.CatalogSchemaContentsIndexesParamsSchema, map[string]any{
+				"attach_opaque_data": attach, "path": []string{"main"},
+			}),
+			"catalog_table_column_comment_set": jsonRow(t, generated.CatalogTableColumnCommentSetParamsSchema, map[string]any{
+				"attach_opaque_data": attach, "schema_path": []string{"main"}, "name": "t",
+				"column_name": "x", "comment": "c", "ignore_not_found": false,
+			}),
+		}
+		for method, params := range calls {
+			t.Run(catalog+"/"+method, func(t *testing.T) {
+				defer params.Release()
+				out, err := c.client.CallUnary(context.Background(), method, params, nil)
+				if err == nil {
+					out.Release()
+					t.Fatalf("%s succeeded; an unimplemented method must refuse", method)
+				}
+				var rpcErr *vgirpc.RpcError
+				if !errors.As(err, &rpcErr) {
+					t.Fatalf("%s: %T %v, want an *RpcError", method, err, err)
+				}
+				if rpcErr.Code != "UNIMPLEMENTED" || rpcErr.Kind != "method_not_implemented" {
+					t.Fatalf("%s: code %q kind %q, want UNIMPLEMENTED / method_not_implemented (%v)", method, rpcErr.Code, rpcErr.Kind, err)
+				}
+				if want := method + " is not implemented by this worker"; !strings.Contains(rpcErr.Message, want) {
+					t.Fatalf("%s: message %q, want %q", method, rpcErr.Message, want)
+				}
+			})
+		}
 	}
 }
 

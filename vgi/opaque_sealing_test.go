@@ -98,7 +98,7 @@ func TestOpaqueValuesRejectUniformly(t *testing.T) {
 		_, err := w.openAttach(v, alice)
 		check("attach "+name, err)
 		// The request path too: no shape skips the open.
-		req := &CatalogVersionRequestWire{AttachOpaqueData: v}
+		req := &CatalogVersionParams{AttachOpaqueData: v}
 		check("unwrap "+name, w.unwrapReqOpaque(req, alice))
 	}
 	for name, cc := range map[string]*vgirpc.CallContext{"bob": bob, "other domain": aliceOtherDomain, "anonymous": anon, "no call context": nil} {
@@ -137,7 +137,7 @@ func TestUnroutableAttachIsTheUniformError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := &CatalogVersionRequestWire{AttachOpaqueData: attach}
+	req := &CatalogVersionParams{AttachOpaqueData: attach}
 	_, routed, err := w.dispatchRouted(t.Context(), alice, "catalog_version", req)
 	if !routed || err == nil || wireError(t, err) != wireError(t, attachRejected()) {
 		t.Fatalf("unroutable attach: routed=%v err=%v", routed, err)

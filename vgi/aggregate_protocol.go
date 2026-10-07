@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -197,18 +196,6 @@ type AggregateWindowDestructorResponseWire struct{}
 // ============================================================================
 // Handlers
 // ============================================================================
-
-func (w *Worker) registerAggregateRPCs(s *vgirpc.Server) {
-	vgirpc.Unary[AggregateBindRequestWire, AggregateBindResponseWire](s, "aggregate_bind", w.handleAggregateBind)
-	vgirpc.Unary[AggregateUpdateRequestWire, AggregateUpdateResponseWire](s, "aggregate_update", w.handleAggregateUpdate)
-	vgirpc.Unary[AggregateCombineRequestWire, AggregateCombineResponseWire](s, "aggregate_combine", w.handleAggregateCombine)
-	vgirpc.Unary[AggregateFinalizeRequestWire, AggregateFinalizeResponseWire](s, "aggregate_finalize", w.handleAggregateFinalize)
-	vgirpc.Unary[AggregateDestructorRequestWire, AggregateDestructorResponseWire](s, "aggregate_destructor", w.handleAggregateDestructor)
-	vgirpc.Unary[AggregateWindowInitRequestWire, AggregateWindowInitResponseWire](s, "aggregate_window_init", w.handleAggregateWindowInit)
-	vgirpc.Unary[AggregateWindowRequestWire, AggregateWindowResponseWire](s, "aggregate_window", w.handleAggregateWindow)
-	vgirpc.Unary[AggregateWindowBatchRequestWire, AggregateWindowBatchResponseWire](s, "aggregate_window_batch", w.handleAggregateWindowBatch)
-	vgirpc.Unary[AggregateWindowDestructorRequestWire, AggregateWindowDestructorResponseWire](s, "aggregate_window_destructor", w.handleAggregateWindowDestructor)
-}
 
 // lookupAggregate resolves the aggregate one unary RPC names.
 //
@@ -815,56 +802,4 @@ func uniqueInt64(in []int64) []int64 {
 		out = append(out, v)
 	}
 	return out
-}
-
-// These request types carry the protocol's wrapped shape: a single `request`
-// binary column holding an IPC-encoded inner batch. The Go fields describe that
-// inner batch and deserializeParams unwraps it, but what the server *advertises*
-// has to be the wrapped shape — a client that builds its request from the
-// advertised schema (the TypeScript client does) otherwise finds none of its
-// keys and sends a batch of all-nulls.
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_bind.
-func (AggregateBindRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.AggregateBindParamsSchema
-}
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_combine.
-func (AggregateCombineRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.AggregateCombineParamsSchema
-}
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_destructor.
-func (AggregateDestructorRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.AggregateDestructorParamsSchema
-}
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_finalize.
-func (AggregateFinalizeRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.AggregateFinalizeParamsSchema
-}
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_update.
-func (AggregateUpdateRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.AggregateUpdateParamsSchema
-}
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_window.
-func (AggregateWindowRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.AggregateWindowParamsSchema
-}
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_window_batch.
-func (AggregateWindowBatchRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.AggregateWindowBatchParamsSchema
-}
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_window_destructor.
-func (AggregateWindowDestructorRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.AggregateWindowDestructorParamsSchema
-}
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for aggregate_window_init.
-func (AggregateWindowInitRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.AggregateWindowInitParamsSchema
 }

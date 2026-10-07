@@ -19,7 +19,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -1351,42 +1350,9 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 		// no cleanup hook (concurrent connections, like unix)
 	}
 
-	// Register bind (unary)
-	vgirpc.Unary[BindRequestWire, BindResponseWire](s, "bind", w.handleBind)
-
-	// Register init (dynamic stream with header). The header schema is the one
-	// GlobalInitResponseWire serializes against — shared rather than restated so
-	// the advertised header and the emitted header cannot drift apart.
-	vgirpc.DynamicStreamWithHeader[InitRequestWire](s, "init", globalInitResponseWireSchema, w.handleInit)
-
-	// Register table_function_cardinality (unary)
-	vgirpc.Unary[CardinalityRequestWire, TableCardinality](s, "table_function_cardinality", w.handleCardinality)
-
-	// Register table_function_plan (unary). Split-based scan planning.
-	vgirpc.Unary[PlanRequestWire, PlanResponseWire](s, "table_function_plan", w.handlePlan)
-
-	// Register table_function_statistics (unary). Uses []byte result to avoid
-	// vgi-rpc-go's struct-to-IPC double-wrap — the C++ extension parses the
-	// IPC payload directly (see catalog_table_column_statistics_get).
-	// The result is nullable, as the reference declares it: null means "no
-	// statistics", which is what a nil *[]byte sends.
-	vgirpc.Unary[CardinalityRequestWire, *[]byte](s, "table_function_statistics", w.handleTableFunctionStatistics)
-
-	// Register all catalog methods
-	w.registerCatalogMethods(s)
-
-	// Register aggregate RPC handlers
-	w.registerAggregateRPCs(s)
-	w.registerAggregateStreamingRPCs(s)
-
-	// Optional table-function profiling hook (EXPLAIN ANALYZE Extra Info).
-	w.registerDynamicToStringRPCs(s)
-
-	// Table-buffering sink RPCs (process/combine/destructor).
-	w.registerTableBufferingRPCs(s)
-
-	// The rest of vgi.v2: hosted, but refused with UNIMPLEMENTED.
-	registerUnimplementedMethods(s)
+	// Host vgi.v2: every method, from the generated registration table. What
+	// the SDK does not implement answers UNIMPLEMENTED (vgi_service.go).
+	registerVgiService(w, s, w.vgiService())
 
 	// The worker's additional protocols, after vgi.v2 and on every transport.
 	if err := w.hostProtocols(s); err != nil {
@@ -1734,27 +1700,4 @@ func (w *Worker) functionStorage() (FunctionStorage, error) {
 		w.fs = s
 	})
 	return w.fs, w.fsErr
-}
-
-// These request types carry the protocol's wrapped shape: a single `request`
-// binary column holding an IPC-encoded inner batch. The Go fields describe that
-// inner batch and deserializeParams unwraps it, but what the server *advertises*
-// has to be the wrapped shape — a client that builds its request from the
-// advertised schema (the TypeScript client does) otherwise finds none of its
-// keys and sends a batch of all-nulls.
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for bind.
-func (BindRequestWire) VgiRpcParamsSchema() *arrow.Schema { return generated.BindParamsSchema }
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for init.
-func (InitRequestWire) VgiRpcParamsSchema() *arrow.Schema { return generated.InitParamsSchema }
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for table_function_plan.
-func (PlanRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.TableFunctionPlanParamsSchema
-}
-
-// VgiRpcParamsSchema advertises the wrapped protocol shape for table_function_cardinality.
-func (CardinalityRequestWire) VgiRpcParamsSchema() *arrow.Schema {
-	return generated.TableFunctionCardinalityParamsSchema
 }

@@ -82,7 +82,7 @@ func TestCatalogContentsCache(t *testing.T) {
 	}
 	call := func(w *Worker, attach string, inm *string) generated.CatalogContentsResponse {
 		t.Helper()
-		resp, err := w.catalogContents(CatalogContentsRequestWire{AttachOpaqueData: []byte(attach), IfNoneMatch: inm}, nil)
+		resp, err := w.catalogContents(CatalogContentsParams{AttachOpaqueData: []byte(attach), IfNoneMatch: inm}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

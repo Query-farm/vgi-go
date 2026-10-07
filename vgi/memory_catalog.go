@@ -111,8 +111,8 @@ func NewMemoryCatalog(name string, opts ...MemoryCatalogOption) *MemoryCatalog {
 		"catalog_version":                   memoryMethod(m.versionRPC),
 		"catalog_contents":                  memoryMethod(m.contents),
 		"catalog_transaction_begin":         memoryMethod(m.transactionBegin),
-		"catalog_transaction_commit":        memoryVoid(m.transactionEnd),
-		"catalog_transaction_rollback":      memoryVoid(m.transactionEnd),
+		"catalog_transaction_commit":        memoryVoid(m.transactionCommit),
+		"catalog_transaction_rollback":      memoryVoid(m.transactionRollback),
 		"catalog_schemas":                   memoryMethod(m.schemasRPC),
 		"catalog_schema_get":                memoryMethod(m.schemaGet),
 		"catalog_schema_create":             memoryVoid(m.schemaCreate),
@@ -221,14 +221,14 @@ func newMemorySchema(path SchemaPath, comment string) *memorySchema {
 		tables: map[string]memoryObject{}, views: map[string]memoryObject{}}
 }
 
-func (m *MemoryCatalog) detach(req *DetachRequestWire) error {
+func (m *MemoryCatalog) detach(req *CatalogDetachParams) error {
 	m.mu.Lock()
 	delete(m.attaches, string(req.AttachOpaqueData))
 	m.mu.Unlock()
 	return nil
 }
 
-func (m *MemoryCatalog) versionRPC(_ *vgirpc.CallContext, req *CatalogVersionRequestWire) (CatalogVersionResponseWire, error) {
+func (m *MemoryCatalog) versionRPC(_ *vgirpc.CallContext, req *CatalogVersionParams) (CatalogVersionResponseWire, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	st, err := m.state(req.AttachOpaqueData)
@@ -238,13 +238,15 @@ func (m *MemoryCatalog) versionRPC(_ *vgirpc.CallContext, req *CatalogVersionReq
 	return CatalogVersionResponseWire{Version: m.reportedVersion(st)}, nil
 }
 
-func (m *MemoryCatalog) transactionBegin(*vgirpc.CallContext, *TransactionBeginRequestWire) (TransactionBeginResponseWire, error) {
+func (m *MemoryCatalog) transactionBegin(*vgirpc.CallContext, *CatalogTransactionBeginParams) (TransactionBeginResponseWire, error) {
 	return TransactionBeginResponseWire{}, nil
 }
 
-func (m *MemoryCatalog) transactionEnd(*TransactionRequestWire) error { return nil }
+func (m *MemoryCatalog) transactionCommit(*CatalogTransactionCommitParams) error { return nil }
 
-func (m *MemoryCatalog) contents(cc *vgirpc.CallContext, req *CatalogContentsRequestWire) (generated.CatalogContentsResponse, error) {
+func (m *MemoryCatalog) transactionRollback(*CatalogTransactionRollbackParams) error { return nil }
+
+func (m *MemoryCatalog) contents(cc *vgirpc.CallContext, req *CatalogContentsParams) (generated.CatalogContentsResponse, error) {
 	m.mu.Lock()
 	st, err := m.state(req.AttachOpaqueData)
 	var version int64
@@ -330,7 +332,7 @@ func (m *MemoryCatalog) schema(attach []byte, path SchemaPath) (*memorySchema, *
 	return st.schemas[schemaPathKey(path)], st, nil
 }
 
-func (m *MemoryCatalog) schemasRPC(_ *vgirpc.CallContext, req *SchemasRequestWire) (ItemsResponseWire, error) {
+func (m *MemoryCatalog) schemasRPC(_ *vgirpc.CallContext, req *CatalogSchemasParams) (ItemsResponseWire, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	st, err := m.state(req.AttachOpaqueData)
@@ -348,7 +350,7 @@ func (m *MemoryCatalog) schemasRPC(_ *vgirpc.CallContext, req *SchemasRequestWir
 	return ItemsResponseWire{Items: items}, nil
 }
 
-func (m *MemoryCatalog) schemaGet(_ *vgirpc.CallContext, req *SchemaGetRequestWire) (ItemsResponseWire, error) {
+func (m *MemoryCatalog) schemaGet(_ *vgirpc.CallContext, req *CatalogSchemaGetParams) (ItemsResponseWire, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, _, err := m.schema(req.AttachOpaqueData, req.Path)
@@ -362,7 +364,7 @@ func (m *MemoryCatalog) schemaGet(_ *vgirpc.CallContext, req *SchemaGetRequestWi
 	return ItemsResponseWire{Items: [][]byte{item}}, nil
 }
 
-func (m *MemoryCatalog) schemaCreate(req *SchemaCreateRequestWire) error {
+func (m *MemoryCatalog) schemaCreate(req *CatalogSchemaCreateParams) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	existing, st, err := m.schema(req.AttachOpaqueData, req.Path)
@@ -391,7 +393,7 @@ func (m *MemoryCatalog) schemaCreate(req *SchemaCreateRequestWire) error {
 	return nil
 }
 
-func (m *MemoryCatalog) schemaDrop(req *SchemaDropRequestWire) error {
+func (m *MemoryCatalog) schemaDrop(req *CatalogSchemaDropParams) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, st, err := m.schema(req.AttachOpaqueData, req.Path)
@@ -451,28 +453,28 @@ func (m *MemoryCatalog) listObjects(attach []byte, path SchemaPath, views bool) 
 	return ItemsResponseWire{Items: objectItems(s.tables)}, nil
 }
 
-func (m *MemoryCatalog) contentsTables(_ *vgirpc.CallContext, req *SchemaContentsRequestWire) (ItemsResponseWire, error) {
+func (m *MemoryCatalog) contentsTables(_ *vgirpc.CallContext, req *CatalogSchemaContentsTablesParams) (ItemsResponseWire, error) {
 	return m.listObjects(req.AttachOpaqueData, req.Path, false)
 }
 
-func (m *MemoryCatalog) contentsViews(_ *vgirpc.CallContext, req *SchemaContentsRequestWire) (ItemsResponseWire, error) {
+func (m *MemoryCatalog) contentsViews(_ *vgirpc.CallContext, req *CatalogSchemaContentsViewsParams) (ItemsResponseWire, error) {
 	return m.listObjects(req.AttachOpaqueData, req.Path, true)
 }
 
 // A MemoryCatalog has no functions, macros or COPY formats.
-func (m *MemoryCatalog) contentsFunctions(*vgirpc.CallContext, *SchemaContentsFunctionsRequestWire) (ItemsResponseWire, error) {
+func (m *MemoryCatalog) contentsFunctions(*vgirpc.CallContext, *CatalogSchemaContentsFunctionsParams) (ItemsResponseWire, error) {
 	return ItemsResponseWire{Items: [][]byte{}}, nil
 }
 
-func (m *MemoryCatalog) contentsMacros(*vgirpc.CallContext, *SchemaContentsMacrosRequestWire) (ItemsResponseWire, error) {
+func (m *MemoryCatalog) contentsMacros(*vgirpc.CallContext, *CatalogSchemaContentsMacrosParams) (ItemsResponseWire, error) {
 	return ItemsResponseWire{Items: [][]byte{}}, nil
 }
 
-func (m *MemoryCatalog) copyFromFormats(*vgirpc.CallContext, *CopyFromFormatsRequestWire) (ItemsResponseWire, error) {
+func (m *MemoryCatalog) copyFromFormats(*vgirpc.CallContext, *CatalogCopyFromFormatsParams) (ItemsResponseWire, error) {
 	return ItemsResponseWire{Items: [][]byte{}}, nil
 }
 
-func (m *MemoryCatalog) macroGet(*vgirpc.CallContext, *MacroGetRequestWire) (ItemsResponseWire, error) {
+func (m *MemoryCatalog) macroGet(*vgirpc.CallContext, *CatalogMacroGetParams) (ItemsResponseWire, error) {
 	return ItemsResponseWire{Items: [][]byte{}}, nil
 }
 
@@ -495,11 +497,11 @@ func (m *MemoryCatalog) getObject(attach []byte, path SchemaPath, name string, v
 	return ItemsResponseWire{Items: [][]byte{}}, nil
 }
 
-func (m *MemoryCatalog) tableGet(_ *vgirpc.CallContext, req *TableGetRequestWire) (ItemsResponseWire, error) {
+func (m *MemoryCatalog) tableGet(_ *vgirpc.CallContext, req *CatalogTableGetParams) (ItemsResponseWire, error) {
 	return m.getObject(req.AttachOpaqueData, req.SchemaPath, req.Name, false)
 }
 
-func (m *MemoryCatalog) viewGet(_ *vgirpc.CallContext, req *ViewGetRequestWire) (ItemsResponseWire, error) {
+func (m *MemoryCatalog) viewGet(_ *vgirpc.CallContext, req *CatalogViewGetParams) (ItemsResponseWire, error) {
 	return m.getObject(req.AttachOpaqueData, req.SchemaPath, req.Name, true)
 }
 
@@ -579,11 +581,11 @@ func (m *MemoryCatalog) tableCreate(req *TableCreateRequestWire) error {
 	return m.putObject(req.AttachOpaqueData, req.SchemaPath, req.Name, "Table", req.OnConflict, false, item)
 }
 
-func (m *MemoryCatalog) tableDrop(req *TableDropRequestWire) error {
+func (m *MemoryCatalog) tableDrop(req *CatalogTableDropParams) error {
 	return m.dropObject(req.AttachOpaqueData, req.SchemaPath, req.Name, "Table", req.IgnoreNotFound, false)
 }
 
-func (m *MemoryCatalog) viewCreate(req *ViewCreateRequestWire) error {
+func (m *MemoryCatalog) viewCreate(req *CatalogViewCreateParams) error {
 	item, err := SerializeViewInfo(&ViewInfo{Name: req.Name, SchemaPath: slices.Clone(req.SchemaPath), Definition: req.Definition})
 	if err != nil {
 		return err
@@ -591,6 +593,6 @@ func (m *MemoryCatalog) viewCreate(req *ViewCreateRequestWire) error {
 	return m.putObject(req.AttachOpaqueData, req.SchemaPath, req.Name, "View", req.OnConflict, true, item)
 }
 
-func (m *MemoryCatalog) viewDrop(req *ViewDropRequestWire) error {
+func (m *MemoryCatalog) viewDrop(req *CatalogViewDropParams) error {
 	return m.dropObject(req.AttachOpaqueData, req.SchemaPath, req.Name, "View", req.IgnoreNotFound, true)
 }

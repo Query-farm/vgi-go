@@ -361,12 +361,12 @@ func ptr(s string) *string { return &s }
 // The request wire type derives exactly the protocol's params schema
 // (if_none_match: nullable utf8).
 func TestCatalogContentsRequestWireMatchesParams(t *testing.T) {
-	got, err := vgirpc.SchemaForStruct(reflect.TypeOf(vgi.CatalogContentsRequestWire{}))
+	got, err := vgirpc.SchemaForStruct(reflect.TypeOf(vgi.CatalogContentsParams{}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !got.Equal(generated.CatalogContentsParamsSchema) {
-		t.Fatalf("CatalogContentsRequestWire derives\n%v\nthe protocol declares\n%v", got, generated.CatalogContentsParamsSchema)
+		t.Fatalf("CatalogContentsParams derives\n%v\nthe protocol declares\n%v", got, generated.CatalogContentsParamsSchema)
 	}
 }
 

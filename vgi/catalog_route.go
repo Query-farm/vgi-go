@@ -251,7 +251,7 @@ func (sc *subCatalog) prepare(parent *Worker) {
 	child := sc.child
 	child.routesPrepared = true
 	child.catalog = NewDefaultReadOnlyCatalog(child.catalogName, child)
-	child.registerCatalogMethods(nil)
+	registerVgiCatalogMethods(child, nil, child.vgiService())
 	home := child.catalogName
 	importRegistry(parent, child, parent.scalars, child.scalars, kindScalar, home)
 	importRegistry(parent, child, parent.tables, child.tables, kindTable, home)
@@ -284,7 +284,7 @@ func (sc *subCatalog) catalogInfoItems(ctx context.Context, cc *vgirpc.CallConte
 	if !ok {
 		return nil, nil
 	}
-	out, err := m(ctx, cc, &struct{}{})
+	out, err := m(ctx, cc, &CatalogCatalogsParams{})
 	if err != nil {
 		return nil, err
 	}

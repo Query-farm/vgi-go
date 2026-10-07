@@ -30,17 +30,6 @@ import (
 // returns an etag through WithCatalogContentsHandler, or opts in to the
 // framework content hash with WithCatalogContentsEtag.
 
-// CatalogContentsRequestWire is the wire type for catalog_contents. It takes no
-// transaction: the client caches the answer for the whole attach, so it is the
-// committed catalog at catalog_version.
-//
-// IfNoneMatch is the etag of a snapshot the client already holds; when it
-// equals the current etag the answer is not_modified with no schemas.
-type CatalogContentsRequestWire struct {
-	AttachOpaqueData []byte  `vgirpc:"attach_opaque_data"`
-	IfNoneMatch      *string `vgirpc:"if_none_match"`
-}
-
 // Function and macro kinds catalog_contents lists, as the per-schema RPCs'
 // type filter spells them.
 const (
@@ -387,7 +376,7 @@ func (w *Worker) catalogContentsCacheable(attachOpaqueData []byte) bool {
 //
 // Caching: when catalogContentsCacheable, the response is built once per
 // (catalog, name, version) and reused by every later call.
-func (w *Worker) catalogContents(req CatalogContentsRequestWire, callCtx *vgirpc.CallContext) (generated.CatalogContentsResponse, error) {
+func (w *Worker) catalogContents(req CatalogContentsParams, callCtx *vgirpc.CallContext) (generated.CatalogContentsResponse, error) {
 	// Check the version (and the attach, through the version hook) even on a
 	// cache hit.
 	version, err := w.catalogVersionOf(req.AttachOpaqueData, callCtx)

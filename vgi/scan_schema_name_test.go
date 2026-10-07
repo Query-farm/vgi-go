@@ -201,7 +201,7 @@ func sameNameProbeWorker(t *testing.T) *Worker {
 func TestResolveScanFunctionCarriesSchemaPath(t *testing.T) {
 	w := sameNameProbeWorker(t)
 	for _, schema := range []string{"main", "data"} {
-		result, err := w.resolveScanFunction(TableScanFunctionGetRequestWire{
+		result, err := w.resolveScanFunction(CatalogTableScanFunctionGetParams{
 			SchemaPath: SchemaPath{schema},
 			Name:       "test_same_name_table",
 		})
