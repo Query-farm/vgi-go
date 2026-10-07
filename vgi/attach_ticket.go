@@ -115,6 +115,7 @@ var (
 // Detail never contains the ticket.
 type AttachTicketInvalidError struct{ Detail string }
 
+// Error returns the rejection detail, which is the whole wire message.
 func (e *AttachTicketInvalidError) Error() string { return e.Detail }
 
 // ErrorType is the exception class name a client sees.
@@ -139,6 +140,7 @@ func (e *AttachTicketInvalidError) ErrorDetails() []vgirpc.ErrorDetail {
 // opened under the caller's principal.
 type AttachTicketExpiredError struct{ Detail string }
 
+// Error returns the rejection detail, which is the whole wire message.
 func (e *AttachTicketExpiredError) Error() string { return e.Detail }
 
 // ErrorType is the exception class name a client sees.

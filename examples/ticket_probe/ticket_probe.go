@@ -178,8 +178,7 @@ func (f *probeFunction) NewState(*vgi.ProcessParams) (*probeState, error) { retu
 
 func (f *probeFunction) Process(_ context.Context, params *vgi.ProcessParams, state *probeState, out *vgirpc.OutputCollector) error {
 	if state.Emitted {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	// AttachScope is the opened attach value of the query's ATTACH.
 	region, digest, err := probeRow(params.AttachScope)
@@ -198,7 +197,9 @@ func (f *probeFunction) Process(_ context.Context, params *vgi.ProcessParams, st
 	defer dc.Release()
 	batch := array.NewRecordBatch(probeSchema, []arrow.Array{rc, dc}, 1)
 	defer batch.Release()
-	out.Emit(batch)
+	if err := out.Emit(batch); err != nil {
+		return err
+	}
 	state.Emitted = true
 	return nil
 }
