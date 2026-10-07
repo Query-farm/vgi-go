@@ -29,4 +29,13 @@ type InitRecipe struct {
 	// serialization so a rehydrated process/finalize turn routes storage to the
 	// same DO without re-opening the auth-scoped seal. "" for non-attach paths.
 	ShardKey string
+	// ScopesOpened is true when init opened the bind call's sealed values with
+	// the live caller: AttachScope (the catalog's own attach bytes) and
+	// TransactionScope are then the plaintexts OnBind saw. A rehydrated turn
+	// has no caller to reopen the seal with, so it restores them from here --
+	// inside the state token, which the HTTP server seals in turn -- instead
+	// of reading the sealed envelopes as if they were plaintext.
+	ScopesOpened     bool
+	AttachScope      []byte
+	TransactionScope []byte
 }

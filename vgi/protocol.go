@@ -969,6 +969,11 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		IsSecondary:     initParams.IsSecondary,
 		SubstreamID:     processParams.SubstreamID,
 	}
+	if callCtx != nil {
+		recipe.ScopesOpened = true
+		recipe.AttachScope = bindParams.AttachOpaqueData
+		recipe.TransactionScope = bindParams.TransactionOpaqueData
+	}
 	if req.PushdownFilters != nil {
 		recipe.PushdownFilterIPC = *req.PushdownFilters
 	}
@@ -1556,13 +1561,30 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 		// prefix stripped. Rehydration (callCtx == nil) has no auth context to
 		// reopen the auth-scoped seal, so it keeps the raw value.
 		if callCtx != nil {
-			params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
+			plain, err := w.openAttach(*req.AttachOpaqueData, callCtx)
+			if err != nil {
+				return nil, err
+			}
+			params.AttachOpaqueData = plain
 		} else {
 			params.AttachOpaqueData = *req.AttachOpaqueData
 		}
 	}
 	if req.TransactionOpaqueData != nil {
+		// Opened like every catalog request's: bound to the caller and to the
+		// sealed attach this call carries.
 		params.TransactionOpaqueData = *req.TransactionOpaqueData
+		if callCtx != nil {
+			var sealedAttach []byte
+			if req.AttachOpaqueData != nil {
+				sealedAttach = *req.AttachOpaqueData
+			}
+			plain, err := w.openTransaction(*req.TransactionOpaqueData, sealedAttach, callCtx)
+			if err != nil {
+				return nil, err
+			}
+			params.TransactionOpaqueData = plain
+		}
 	}
 
 	params.ResolvedSecretsProvided = req.ResolvedSecretsProvided

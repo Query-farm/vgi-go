@@ -227,7 +227,10 @@ func (w *Worker) lookupAggregate(name string, schemaPath *SchemaPath, attach *[]
 }
 
 func (w *Worker) handleAggregateBind(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateBindRequestWire) (AggregateBindResponseWire, error) {
-	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	if err != nil {
+		return AggregateBindResponseWire{}, err
+	}
 	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateBindResponseWire{}, err
@@ -323,7 +326,10 @@ func (w *Worker) loadAggArgs(funcName string, execID []byte, shardKey string) *A
 }
 
 func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateUpdateRequestWire) (AggregateUpdateResponseWire, error) {
-	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	if err != nil {
+		return AggregateUpdateResponseWire{}, err
+	}
 	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateUpdateResponseWire{}, err
@@ -347,6 +353,7 @@ func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.Call
 		Auth: callCtx.Auth,
 	}
 	if req.AttachOpaqueData != nil {
+		// Opened (and so verified) by shardKeyForAttachPtr above.
 		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 	}
 
@@ -400,7 +407,10 @@ func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.Call
 }
 
 func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateCombineRequestWire) (AggregateCombineResponseWire, error) {
-	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	if err != nil {
+		return AggregateCombineResponseWire{}, err
+	}
 	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateCombineResponseWire{}, err
@@ -436,6 +446,7 @@ func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.Cal
 		Auth: callCtx.Auth,
 	}
 	if req.AttachOpaqueData != nil {
+		// Opened (and so verified) by shardKeyForAttachPtr above.
 		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 	}
 
@@ -492,7 +503,10 @@ func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.Cal
 }
 
 func (w *Worker) handleAggregateFinalize(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateFinalizeRequestWire) (AggregateFinalizeResponseWire, error) {
-	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	if err != nil {
+		return AggregateFinalizeResponseWire{}, err
+	}
 	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateFinalizeResponseWire{}, err
@@ -525,6 +539,7 @@ func (w *Worker) handleAggregateFinalize(ctx context.Context, callCtx *vgirpc.Ca
 		Auth:         callCtx.Auth,
 	}
 	if req.AttachOpaqueData != nil {
+		// Opened (and so verified) by shardKeyForAttachPtr above.
 		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 	}
 
@@ -562,7 +577,10 @@ func (w *Worker) handleAggregateFinalize(ctx context.Context, callCtx *vgirpc.Ca
 }
 
 func (w *Worker) handleAggregateDestructor(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateDestructorRequestWire) (AggregateDestructorResponseWire, error) {
-	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	if err != nil {
+		return AggregateDestructorResponseWire{}, err
+	}
 	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID, shardKey)
 	if err := bucket.clear(); err != nil {
 		return AggregateDestructorResponseWire{}, err
@@ -571,7 +589,10 @@ func (w *Worker) handleAggregateDestructor(ctx context.Context, callCtx *vgirpc.
 }
 
 func (w *Worker) handleAggregateWindowInit(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowInitRequestWire) (AggregateWindowInitResponseWire, error) {
-	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	if err != nil {
+		return AggregateWindowInitResponseWire{}, err
+	}
 	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateWindowInitResponseWire{}, err
@@ -592,6 +613,7 @@ func (w *Worker) handleAggregateWindowInit(ctx context.Context, callCtx *vgirpc.
 			Auth:         callCtx.Auth,
 		}
 		if req.AttachOpaqueData != nil {
+			// Opened (and so verified) by shardKeyForAttachPtr above.
 			params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 		}
 		ws, err := wfn.WindowInit(partition, params)
@@ -619,7 +641,10 @@ func (w *Worker) handleAggregateWindowInit(ctx context.Context, callCtx *vgirpc.
 }
 
 func (w *Worker) handleAggregateWindow(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowRequestWire) (AggregateWindowResponseWire, error) {
-	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	if err != nil {
+		return AggregateWindowResponseWire{}, err
+	}
 	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateWindowResponseWire{}, err
@@ -639,6 +664,7 @@ func (w *Worker) handleAggregateWindow(ctx context.Context, callCtx *vgirpc.Call
 		Auth:         callCtx.Auth,
 	}
 	if req.AttachOpaqueData != nil {
+		// Opened (and so verified) by shardKeyForAttachPtr above.
 		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 	}
 	if len(req.FrameStarts) != len(req.FrameEnds) {
@@ -672,7 +698,10 @@ func (w *Worker) handleAggregateWindow(ctx context.Context, callCtx *vgirpc.Call
 // and the extension enables it, only the per-row handleAggregateWindow runs.
 // Kept symmetric with the per-row path so it works the moment it lands.
 func (w *Worker) handleAggregateWindowBatch(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowBatchRequestWire) (AggregateWindowBatchResponseWire, error) {
-	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	if err != nil {
+		return AggregateWindowBatchResponseWire{}, err
+	}
 	fn, err := w.lookupAggregate(req.FunctionName, req.SchemaPath, req.AttachOpaqueData, callCtx)
 	if err != nil {
 		return AggregateWindowBatchResponseWire{}, err
@@ -691,6 +720,7 @@ func (w *Worker) handleAggregateWindowBatch(ctx context.Context, callCtx *vgirpc
 		Auth:         callCtx.Auth,
 	}
 	if req.AttachOpaqueData != nil {
+		// Opened (and so verified) by shardKeyForAttachPtr above.
 		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
 	}
 
@@ -725,7 +755,10 @@ func (w *Worker) handleAggregateWindowBatch(ctx context.Context, callCtx *vgirpc
 }
 
 func (w *Worker) handleAggregateWindowDestructor(ctx context.Context, callCtx *vgirpc.CallContext, req AggregateWindowDestructorRequestWire) (AggregateWindowDestructorResponseWire, error) {
-	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, callCtx)
+	if err != nil {
+		return AggregateWindowDestructorResponseWire{}, err
+	}
 	bucket := w.aggStorage.bucket(req.FunctionName, req.ExecutionID, shardKey)
 	if err := bucket.deleteWindowPartition(req.PartitionID); err != nil {
 		return AggregateWindowDestructorResponseWire{}, err

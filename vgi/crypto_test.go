@@ -108,7 +108,7 @@ func TestWorkerHelpersPassThroughWithoutSigningKey(t *testing.T) {
 }
 
 func TestWorkerHelpersSealWithSigningKey(t *testing.T) {
-	// sealOpaqueData mirrors WithHttpSigningKey: an explicit key opts into sealing.
+	// sealOpaqueData is what serving HTTP sets.
 	w := &Worker{httpSigningKey: []byte("a-32-byte-or-any-length-signkey!"), sealOpaqueData: true}
 	alice := &vgirpc.CallContext{Auth: authCtx("test", "alice")}
 	bob := &vgirpc.CallContext{Auth: authCtx("test", "bob")}
@@ -134,7 +134,7 @@ func TestWorkerHelpersSealWithSigningKey(t *testing.T) {
 		t.Fatalf("alice openFull: %q err=%v", full, err)
 	}
 	// Bob cannot.
-	if _, err := w.openAttach(sealed, bob); err != errOpaqueDataRejected {
+	if _, err := w.openAttach(sealed, bob); err == nil || err.Error() != attachRejected().Error() {
 		t.Fatalf("expected bob to be rejected, got %v", err)
 	}
 }

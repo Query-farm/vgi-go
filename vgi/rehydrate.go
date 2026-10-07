@@ -209,6 +209,14 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 	if err != nil {
 		return nil, nil, err
 	}
+	// The values init opened with the live caller, when it had one; else the
+	// raw (unsealed-transport) value with its UUID stripped.
+	attachScope := coldAttachScope(bindParams.AttachOpaqueData)
+	if recipe.ScopesOpened {
+		attachScope = recipe.AttachScope
+		bindParams.AttachOpaqueData = recipe.AttachScope
+		bindParams.TransactionOpaqueData = recipe.TransactionScope
+	}
 
 	// Resolve the function. The recipe replays the original bind_call, so the
 	// schema the caller named survives the state-token round trip. The attach
@@ -218,7 +226,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		Name:        recipe.FunctionName,
 		Type:        recipe.FunctionType,
 		Schema:      schemaPathKey(bindParams.SchemaPath),
-		Catalog:     w.catalogOfAttach(coldAttachScope(bindParams.AttachOpaqueData)),
+		Catalog:     w.catalogOfAttach(attachScope),
 		Args:        bindParams.Args,
 		InputSchema: bindParams.InputSchema,
 	})
@@ -256,7 +264,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		InitOpaqueData:   recipe.InitOpaqueData,
 		AtUnit:           bindParams.AtUnit,
 		AtValue:          bindParams.AtValue,
-		AttachScope:      coldAttachScope(bindParams.AttachOpaqueData),
+		AttachScope:      attachScope,
 		CopyFrom:         bindParams.CopyFrom,
 		CopyTo:           bindParams.CopyTo,
 	}

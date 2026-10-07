@@ -977,7 +977,10 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				if err != nil {
 					return res, err
 				}
-				if res.AttachOpaqueData, err = w.sealAttach(res.AttachOpaqueData, callCtx); err != nil {
+				// Minted and sealed like every other attach value: the
+				// "writable:<name>" bytes travel inside the seal, never as a
+				// plaintext the worker would trust on sight.
+				if res.AttachOpaqueData, err = w.mintAttach(res.AttachOpaqueData, callCtx); err != nil {
 					return CatalogAttachResultWire{}, err
 				}
 				return res, nil
@@ -1187,14 +1190,10 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			// unlike the random-nonce ciphertext or the (possibly non-unique)
 			// catalog bytes. openAttach strips the UUID back off, so the catalog
 			// only ever sees its own bytes.
-			u := uuid.New()
-			minted := make([]byte, attachUUIDLen+len(result.AttachOpaqueData))
-			copy(minted, u[:])
-			copy(minted[attachUUIDLen:], result.AttachOpaqueData)
 			// Seal the attach value into an AEAD envelope bound to the
 			// caller's identity before it leaves the worker (HTTP transport;
 			// pass-through on subprocess / unix).
-			sealed, sErr := w.sealAttach(minted, callCtx)
+			sealed, sErr := w.mintAttach(result.AttachOpaqueData, callCtx)
 			if sErr != nil {
 				return CatalogAttachResultWire{}, sErr
 			}
@@ -1234,7 +1233,13 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 			if !w.supportsTransactions {
 				return TransactionBeginResponseWire{}, nil
 			}
-			id := uuid.New()
+			id, err := uuid.NewRandom()
+			if err != nil {
+				return TransactionBeginResponseWire{}, err
+			}
+			// Sealed for the caller and bound to the sealed attach in the
+			// unaryCatalog wrapper (sealTransactionResult), which still holds
+			// the sealed attach this handler only sees opened.
 			tx := append([]byte(nil), id[:]...)
 			return TransactionBeginResponseWire{TransactionOpaqueData: &tx}, nil
 		})

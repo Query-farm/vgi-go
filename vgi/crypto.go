@@ -3,6 +3,7 @@
 package vgi
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,6 +12,7 @@ import (
 	"reflect"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
@@ -55,8 +57,30 @@ var (
 	// errOpaqueDataRejected is the single uniform error every open-failure
 	// maps to — wrong principal, wrong parent attach, tampered, malformed,
 	// or simply unknown — so a probing caller cannot distinguish them.
+	// Catalog values surface it as attachRejected / transactionRejected.
 	errOpaqueDataRejected = errors.New("opaque data not recognized")
 )
+
+// opaqueRejectedKind is the error_kind of every opaque-value rejection.
+const opaqueRejectedKind = "opaque_data_not_recognized"
+
+// attachRejected is the one error for an attach_opaque_data that does not
+// open: wrong caller, tampered, malformed, unknown key, or a route this worker
+// does not serve. Identical in every case (vgi-opaque-data-sealing.md rule 4):
+// INVALID_ARGUMENT, kind opaque_data_not_recognized, exactly the message
+// "attach_opaque_data not recognized", no details. It differs from
+// transactionRejected only in the field name. A fresh value per call.
+func attachRejected() error {
+	return &vgirpc.StatusError{Code: vgirpc.CodeInvalidArgument, Kind: opaqueRejectedKind,
+		Message: "attach_opaque_data not recognized"}
+}
+
+// transactionRejected is attachRejected for transaction_opaque_data, which
+// also fails when presented under another attach.
+func transactionRejected() error {
+	return &vgirpc.StatusError{Code: vgirpc.CodeInvalidArgument, Kind: opaqueRejectedKind,
+		Message: "transaction_opaque_data not recognized"}
+}
 
 // normalizeCryptoKey stretches/compresses an arbitrary-length key to the 32
 // bytes XChaCha20-Poly1305 requires. Matches vgi-python's normalize_key.
@@ -141,14 +165,18 @@ func openBytes(token, key, aad []byte, version byte) ([]byte, error) {
 
 // --- Worker-bound seal/open helpers ---------------------------------------
 //
-// When the worker has no signing key (subprocess / unix transports) every
-// helper is a transparent pass-through. The catalog implementation always
-// sees plaintext; the client only ever sees sealed envelopes.
+// On HTTP -- the transport that authenticates callers -- every value is sealed
+// with the worker's resolved signing key: VGI_SIGNING_KEY / WithHttpSigningKey
+// when configured, else the key generated at startup. An unset key never means
+// "don't seal". On the OS-owned transports (stdio, unix socket, TCP launcher)
+// sealOpaqueData is false and every helper is a pass-through. There is no
+// plaintext fallback: a value that does not open is rejected, whatever its
+// shape. The catalog implementation always sees plaintext.
 
 // sealAttach seals a plaintext attach value into an envelope bound to the
 // caller's identity.
 func (w *Worker) sealAttach(plaintext []byte, cc *vgirpc.CallContext) ([]byte, error) {
-	if len(w.httpSigningKey) == 0 || !w.sealOpaqueData {
+	if !w.sealOpaqueData {
 		return plaintext, nil
 	}
 	return sealBytes(plaintext, w.httpSigningKey, attachAAD(cc.Auth), attachEnvelopeVersion)
@@ -159,10 +187,46 @@ func (w *Worker) sealAttach(plaintext []byte, cc *vgirpc.CallContext) ([]byte, e
 // on the leading UUID, so the function-execution paths use this to derive the
 // shard key. Pass-through when there is no signing key.
 func (w *Worker) openAttachFull(envelope []byte, cc *vgirpc.CallContext) ([]byte, error) {
-	if len(w.httpSigningKey) == 0 || !w.sealOpaqueData {
+	if !w.sealOpaqueData {
 		return envelope, nil
 	}
-	return openBytes(envelope, w.httpSigningKey, attachAAD(cc.Auth), attachEnvelopeVersion)
+	plain, err := openBytes(envelope, w.httpSigningKey, attachAAD(callAuth(cc)), attachEnvelopeVersion)
+	if err != nil {
+		return nil, attachRejected()
+	}
+	return plain, nil
+}
+
+// callAuth is the caller's auth context; a missing call context is anonymous,
+// never a reason to skip the open.
+func callAuth(cc *vgirpc.CallContext) *vgirpc.AuthContext {
+	if cc == nil {
+		return nil
+	}
+	return cc.Auth
+}
+
+// mintAttach is catalog_attach's last step: prepend a fresh framework UUID to
+// the catalog's own bytes (uuid(16) || catalog_bytes; storage shards on the
+// UUID, which comes from crypto/rand) and seal the result for the caller.
+func (w *Worker) mintAttach(catalogBytes []byte, cc *vgirpc.CallContext) ([]byte, error) {
+	u, err := uuid.NewRandom()
+	if err != nil {
+		return nil, err
+	}
+	minted := make([]byte, 0, attachUUIDLen+len(catalogBytes))
+	minted = append(minted, u[:]...)
+	minted = append(minted, catalogBytes...)
+	return w.sealAttach(minted, cc)
+}
+
+// sealTransaction seals a transaction value for the caller, bound to the
+// sealed attach value the same call carried.
+func (w *Worker) sealTransaction(plaintext, attachEnvelope []byte, cc *vgirpc.CallContext) ([]byte, error) {
+	if !w.sealOpaqueData {
+		return plaintext, nil
+	}
+	return sealBytes(plaintext, w.httpSigningKey, transactionAAD(callAuth(cc), attachEnvelope), transactionEnvelopeVersion)
 }
 
 // openAttach opens an attach_opaque_data envelope, returning the catalog's own
@@ -184,31 +248,33 @@ func (w *Worker) openAttach(envelope []byte, cc *vgirpc.CallContext) ([]byte, er
 // the (sealed) attach_opaque_data the same call carried — it must match the
 // attach the transaction was minted under, or the open fails.
 func (w *Worker) openTransaction(envelope, attachEnvelope []byte, cc *vgirpc.CallContext) ([]byte, error) {
-	if len(w.httpSigningKey) == 0 || !w.sealOpaqueData {
+	if !w.sealOpaqueData {
 		return envelope, nil
 	}
-	return openBytes(envelope, w.httpSigningKey, transactionAAD(cc.Auth, attachEnvelope), transactionEnvelopeVersion)
+	plain, err := openBytes(envelope, w.httpSigningKey, transactionAAD(callAuth(cc), attachEnvelope), transactionEnvelopeVersion)
+	if err != nil {
+		return nil, transactionRejected()
+	}
+	return plain, nil
 }
 
 // unwrapReqOpaque unwraps the AttachOpaqueData ([]byte) and, if present,
 // TransactionOpaqueData (*[]byte) fields of a catalog request struct in
 // place, so handler bodies always see plaintext. The transaction envelope is
 // opened with the *sealed* attach value as part of its AAD, so it stays bound
-// to its parent attach. A no-op when the worker has no signing key.
+// to its parent attach. Pass-through (UUID stripped) on the unsealed
+// transports.
 func (w *Worker) unwrapReqOpaque(reqPtr any, cc *vgirpc.CallContext) error {
 	v := reflect.ValueOf(reqPtr).Elem()
 	var sealedAttach []byte
 	if af := v.FieldByName("AttachOpaqueData"); af.IsValid() && af.Kind() == reflect.Slice {
 		sealedAttach = af.Bytes()
-		// Writable-catalog attach values ("writable:<name>") are routed by name
-		// and are neither UUID-minted nor sealed, so leave them untouched. Every
-		// other attach value is the framework envelope minted in catalog_attach
-		// (uuid(16) || catalog_bytes, then sealed); openAttach strips the UUID
-		// and opens the seal. openAttach strips the UUID even with no signing key
-		// (subprocess/unix), so handler bodies always see the catalog's own bytes
-		// regardless of transport — without this, subprocess handlers received
-		// the raw UUID-prefixed blob and mis-parsed it.
-		if len(sealedAttach) > 0 && w.writableByAttachOpaqueData(sealedAttach) == nil {
+		// Every attach value -- writable catalogs' included -- is the framework
+		// envelope minted in catalog_attach (uuid(16) || catalog_bytes, then
+		// sealed on HTTP). openAttach opens the seal and strips the UUID, so
+		// handler bodies always see the catalog's own bytes regardless of
+		// transport. No shape of value skips the open.
+		if len(sealedAttach) > 0 {
 			plain, err := w.openAttach(sealedAttach, cc)
 			if err != nil {
 				return err
@@ -216,7 +282,7 @@ func (w *Worker) unwrapReqOpaque(reqPtr any, cc *vgirpc.CallContext) error {
 			af.SetBytes(plain)
 		}
 	}
-	if len(w.httpSigningKey) == 0 {
+	if !w.sealOpaqueData {
 		return nil
 	}
 	if tf := v.FieldByName("TransactionOpaqueData"); tf.IsValid() && tf.Kind() == reflect.Ptr && !tf.IsNil() {
@@ -250,6 +316,7 @@ func unaryCatalog[P any, R any](w *Worker, s *vgirpc.Server, name string,
 	}
 	vgirpc.Unary[P, R](s, name, func(ctx context.Context, cc *vgirpc.CallContext, req P) (R, error) {
 		var zero R
+		sealedAttach := sealedAttachOf(&req)
 		if out, routed, err := w.dispatchRouted(ctx, cc, name, &req); routed || err != nil {
 			if err != nil {
 				return zero, err
@@ -258,12 +325,16 @@ func unaryCatalog[P any, R any](w *Worker, s *vgirpc.Server, name string,
 			if !ok {
 				return zero, fmt.Errorf("vgi: routed %s returned %T", name, out)
 			}
-			return r, nil
+			return r, w.sealTransactionResult(&r, sealedAttach, cc)
 		}
 		if err := w.unwrapReqOpaque(&req, cc); err != nil {
 			return zero, err
 		}
-		return handler(ctx, cc, req)
+		r, err := handler(ctx, cc, req)
+		if err != nil {
+			return r, err
+		}
+		return r, w.sealTransactionResult(&r, sealedAttach, cc)
 	})
 }
 
@@ -289,4 +360,30 @@ func unaryVoidCatalog[P any](w *Worker, s *vgirpc.Server, name string,
 		}
 		return handler(ctx, cc, req)
 	})
+}
+
+// sealedAttachOf copies a request's AttachOpaqueData as it arrived, before the
+// handler opens it.
+func sealedAttachOf(reqPtr any) []byte {
+	af := reflect.ValueOf(reqPtr).Elem().FieldByName("AttachOpaqueData")
+	if !af.IsValid() || af.Kind() != reflect.Slice {
+		return nil
+	}
+	return bytes.Clone(af.Bytes())
+}
+
+// sealTransactionResult seals the transaction value catalog_transaction_begin
+// returns (any catalog, routed or not) for the caller, bound to the sealed
+// attach the request carried. Every other result passes through.
+func (w *Worker) sealTransactionResult(resultPtr any, sealedAttach []byte, cc *vgirpc.CallContext) error {
+	tb, ok := resultPtr.(*TransactionBeginResponseWire)
+	if !ok || tb.TransactionOpaqueData == nil {
+		return nil
+	}
+	sealed, err := w.sealTransaction(*tb.TransactionOpaqueData, sealedAttach, cc)
+	if err != nil {
+		return err
+	}
+	tb.TransactionOpaqueData = &sealed
+	return nil
 }

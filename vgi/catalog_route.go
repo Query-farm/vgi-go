@@ -11,7 +11,6 @@ import (
 	"slices"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
-	"github.com/google/uuid"
 )
 
 // Routed catalogs: one worker process serving several independent catalogs.
@@ -168,12 +167,10 @@ func (w *Worker) dispatchRouted(ctx context.Context, cc *vgirpc.CallContext, met
 	if !af.IsValid() || af.Kind() != reflect.Slice || af.Len() == 0 {
 		return nil, false, nil
 	}
-	if w.writableByAttachOpaqueData(af.Bytes()) != nil {
-		return nil, false, nil
-	}
-	plain, err := w.openAttach(af.Bytes(), cc)
+	sealedAttach := bytes.Clone(af.Bytes())
+	plain, err := w.openAttach(sealedAttach, cc)
 	if err != nil {
-		return nil, false, nil
+		return nil, true, err
 	}
 	name, inner, ok := parseRoutedAttach(plain)
 	if !ok {
@@ -181,13 +178,24 @@ func (w *Worker) dispatchRouted(ctx context.Context, cc *vgirpc.CallContext, met
 	}
 	b, ok := w.routes[name]
 	if !ok {
-		return nil, true, &vgirpc.RpcError{Type: "ValueError",
-			Message: fmt.Sprintf("No worker handles catalog '%s'", name)}
+		// Routing is a check too: an unroutable value gets the same answer as
+		// one that does not open, naming nothing this worker serves.
+		return nil, true, attachRejected()
 	}
 	m, ok := b.method(method)
 	if !ok {
 		return nil, true, &vgirpc.RpcError{Type: "NotImplementedError",
 			Message: fmt.Sprintf("catalog '%s' does not support %s", name, method)}
+	}
+	// The routed catalog never sees a sealed value: open the transaction here,
+	// bound to the sealed attach, before handing over the inner attach.
+	if tf := reflect.ValueOf(reqPtr).Elem().FieldByName("TransactionOpaqueData"); w.sealOpaqueData &&
+		tf.IsValid() && tf.Kind() == reflect.Ptr && !tf.IsNil() {
+		txPlain, err := w.openTransaction(tf.Elem().Bytes(), sealedAttach, cc)
+		if err != nil {
+			return nil, true, err
+		}
+		tf.Set(reflect.ValueOf(&txPlain))
 	}
 	af.SetBytes(inner)
 	out, err := m(ctx, cc, reqPtr)
@@ -210,11 +218,7 @@ func (w *Worker) attachRouted(ctx context.Context, cc *vgirpc.CallContext, req C
 		return CatalogAttachResultWire{}, fmt.Errorf("vgi: catalog %q attach returned %T", req.Name, out)
 	}
 	routed := encodeRoutedAttach(req.Name, res.AttachOpaqueData)
-	u := uuid.New()
-	minted := make([]byte, 0, attachUUIDLen+len(routed))
-	minted = append(minted, u[:]...)
-	minted = append(minted, routed...)
-	if res.AttachOpaqueData, err = w.sealAttach(minted, cc); err != nil {
+	if res.AttachOpaqueData, err = w.mintAttach(routed, cc); err != nil {
 		return CatalogAttachResultWire{}, err
 	}
 	// Routing lives in the attach value, so the client must keep sending it.

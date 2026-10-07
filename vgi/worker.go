@@ -396,12 +396,12 @@ type Worker struct {
 	httpSigningKey       []byte       // HMAC key for HTTP state tokens (explicit via WithHttpSigningKey, else ephemeral per-process)
 	irohBridge           *IrohBridgeOptions
 	// sealOpaqueData gates AEAD sealing of catalog opaque-data envelopes. It is
-	// enabled only when an explicit signing key is configured (WithHttpSigningKey),
-	// matching vgi-python: an anonymous worker with an ephemeral, per-process key
-	// (generated only so the HTTP state-token machinery has one) does not seal —
-	// sealing binds opaque-data to a principal, and there is none without auth, so
-	// it would only add a cross-implementation incompatibility (the published
-	// extension round-trips plaintext opaque-data, not the longer sealed envelope).
+	// set when the worker serves HTTP -- the transport that authenticates
+	// callers -- with the resolved signing key, configured or generated at
+	// startup: an unset key never means "don't seal"
+	// (vgi-opaque-data-sealing.md rule 1). Anonymous callers get sealed values
+	// too, bound to the anonymous identity. The OS-owned transports (stdio,
+	// unix, TCP launcher) leave it false.
 	sealOpaqueData bool
 
 	// copyFromFormats holds the custom COPY ... FROM formats advertised by this
@@ -822,10 +822,6 @@ func WithLoggers(names ...string) WorkerOption {
 func WithHttpSigningKey(key []byte) WorkerOption {
 	return func(w *Worker) {
 		w.httpSigningKey = key
-		// An explicit key opts the worker into sealing catalog opaque-data
-		// (identity-binding); the ephemeral key generated when none is
-		// configured is for state tokens only and does not enable sealing.
-		w.sealOpaqueData = len(key) > 0
 	}
 }
 
@@ -1552,6 +1548,9 @@ func (w *Worker) newHttpServer() (*vgirpc.HttpServer, error) {
 			return nil, fmt.Errorf("http signing key: %w", err)
 		}
 	}
+	// HTTP seals every attach and transaction value with that key, configured
+	// or generated.
+	w.sealOpaqueData = true
 	hs, err := vgirpc.NewHttpServerWithKey(s, w.httpSigningKey)
 	if err != nil {
 		return nil, fmt.Errorf("http signing key: %w", err)

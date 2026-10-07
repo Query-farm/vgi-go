@@ -187,8 +187,13 @@ func (w *Worker) handleTableBufferingCombine(ctx context.Context, cc *vgirpc.Cal
 }
 
 func (w *Worker) handleTableBufferingDestructor(ctx context.Context, cc *vgirpc.CallContext, req TableBufferingDestructorRequestWire) (TableBufferingDestructorResponseWire, error) {
-	// Best-effort cleanup: clear all execution-scoped state. Never errors.
-	shardKey, _ := w.shardKeyForAttachPtr(req.AttachOpaqueData, cc)
+	// Best-effort cleanup: clear all execution-scoped state. An attach value
+	// that does not open is still refused -- no cleanup on someone else's
+	// behalf.
+	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, cc)
+	if err != nil {
+		return TableBufferingDestructorResponseWire{}, err
+	}
 	w.bufferingParams.Delete(hex.EncodeToString(req.ExecutionID))
 	storage, err := w.getOrCreateStorage(ctx, req.ExecutionID, shardKey)
 	if err == nil {
