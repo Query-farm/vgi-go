@@ -128,6 +128,12 @@ func (f *Flags) Parse(args []string) error {
 	return nil
 }
 
+// GrantKeysConfigured reports whether sealed-grant keys are configured, by
+// --grant-key or VGI_RPC_GRANT_KEYS.
+func (f *Flags) GrantKeysConfigured() bool {
+	return len(f.grantKeys) > 0 || strings.TrimSpace(os.Getenv(vgirpc.GrantKeysEnv)) != ""
+}
+
 // Serve runs w on the transport the flags selected, blocking until it stops.
 // The default is stdio.
 func (f *Flags) Serve(w *vgi.Worker) error {

@@ -16,6 +16,7 @@ import (
 	"github.com/Query-farm/vgi-go/examples/narrow_bind"
 	"github.com/Query-farm/vgi-go/examples/schema_reconcile"
 	"github.com/Query-farm/vgi-go/examples/table"
+	"github.com/Query-farm/vgi-go/examples/ticket_probe"
 	"github.com/Query-farm/vgi-go/examples/twin_catalogs"
 	"github.com/Query-farm/vgi-go/internal/workercli"
 	"github.com/Query-farm/vgi-go/vgi"
@@ -210,6 +211,12 @@ func main() {
 	// _legacy / _memory / _reval / _hash), each served by its own routed
 	// catalog. See examples/catalog_contents.
 	catalog_contents.Register(w)
+
+	// ticket_probe: attach tickets (vgi.attach_tickets.v1) -- one plain and
+	// one secret attach option whose effect a table reveals. Over HTTP the
+	// protocol is hosted when VGI_SIGNING_KEY and VGI_RPC_GRANT_KEYS are both
+	// set.
+	ticket_probe.Register(w)
 
 	// Writable catalog (in-memory, per-process state). Gated off by default so
 	// the example worker's function inventory matches the reference vgi-python
@@ -1116,6 +1123,14 @@ func main() {
 		// present -- every other request authenticates exactly as before -- and
 		// they are trivially spoofable: a test fixture, never a deployment.
 		identityCfg, _ := conformance.IdentityConfigFor(conformance.IdentityModeBoth)
+		if cli.GrantKeysConfigured() {
+			// With grant keys the worker mints real sealed grants, which it
+			// accepts back as bearers -- the attach-ticket round trip
+			// (vgi_export_session, then ATTACH with bearer_token <grant>)
+			// depends on it. The conformance minter's tokens authenticate no
+			// one, so it gives way.
+			identityCfg.MintGrant = nil
+		}
 		vgi.WithIdentity(identityCfg)(w)
 		authFn = withConformanceIdentityAuth(authFn)
 		if authFn != nil {

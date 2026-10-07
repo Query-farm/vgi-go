@@ -966,6 +966,12 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// catalog_attach
 	unaryCatalog[CatalogAttachRequestWire, CatalogAttachResultWire](w, s, "catalog_attach",
 		func(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogAttachRequestWire) (CatalogAttachResultWire, error) {
+			// A vgi_attach_ticket is redeemed before anything else -- before
+			// routing, so the sealed catalog name picks the catalog, and
+			// before any catalog code sees the options.
+			if err := w.redeemAttachTicketInPlace(&req, callCtx); err != nil {
+				return CatalogAttachResultWire{}, err
+			}
 			// A routed catalog (sub-catalog, memory catalog) attaches itself.
 			if b, ok := w.routes[req.Name]; ok {
 				return w.attachRouted(ctx, callCtx, req, b)

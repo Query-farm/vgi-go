@@ -127,13 +127,22 @@ func transactionAAD(auth *vgirpc.AuthContext, attachEnvelope []byte) []byte {
 
 // sealBytes seals payload into an AEAD envelope: version || nonce || ct+tag.
 func sealBytes(payload, key, aad []byte, version byte) ([]byte, error) {
-	aead, err := chacha20poly1305.NewX(normalizeCryptoKey(key))
-	if err != nil {
-		return nil, fmt.Errorf("opaque-data cipher: %w", err)
-	}
 	nonce := make([]byte, cryptoNonceLen)
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("opaque-data nonce: %w", err)
+	}
+	return sealBytesWithNonce(payload, key, aad, version, nonce)
+}
+
+// sealBytesWithNonce is sealBytes with a caller-chosen 24-byte nonce. Only the
+// cross-SDK vectors pin a nonce; every production seal draws a fresh one.
+func sealBytesWithNonce(payload, key, aad []byte, version byte, nonce []byte) ([]byte, error) {
+	if len(nonce) != cryptoNonceLen {
+		return nil, fmt.Errorf("opaque-data nonce must be %d bytes", cryptoNonceLen)
+	}
+	aead, err := chacha20poly1305.NewX(normalizeCryptoKey(key))
+	if err != nil {
+		return nil, fmt.Errorf("opaque-data cipher: %w", err)
 	}
 	ciphertext := aead.Seal(nil, nonce, payload, aad)
 	out := make([]byte, 0, 1+cryptoNonceLen+len(ciphertext))

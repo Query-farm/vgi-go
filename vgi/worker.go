@@ -403,6 +403,11 @@ type Worker struct {
 	// too, bound to the anonymous identity. The OS-owned transports (stdio,
 	// unix, TCP launcher) leave it false.
 	sealOpaqueData bool
+	// signingKeyConfigured is true when httpSigningKey came from explicit
+	// configuration (WithHttpSigningKey or VGI_SIGNING_KEY), never from the
+	// per-process key the HTTP transport generates. Attach tickets need it: a
+	// generated key would make every ticket die on restart.
+	signingKeyConfigured bool
 
 	// copyFromFormats holds the custom COPY ... FROM formats advertised by this
 	// worker (one per RegisterCopyFrom). Surfaced via catalog_copy_from_formats
@@ -822,6 +827,7 @@ func WithLoggers(names ...string) WorkerOption {
 func WithHttpSigningKey(key []byte) WorkerOption {
 	return func(w *Worker) {
 		w.httpSigningKey = key
+		w.signingKeyConfigured = len(key) > 0
 	}
 }
 
@@ -1307,6 +1313,12 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 		})
 	}
 
+	// vgi_attach_ticket is reserved: a catalog declaring it would never see
+	// it, since catalog_attach reads it as a ticket first.
+	if err := w.checkReservedAttachOptions(); err != nil {
+		return nil, err
+	}
+
 	// Bring up the routed catalogs (sub-catalogs import their functions,
 	// homed in their own catalog) before the default catalog is built.
 	w.prepareRoutes()
@@ -1393,6 +1405,11 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 	// vgi_rpc.Identity.v1 only where callers are authenticated.
 	if transport == transportHTTP {
 		if err := w.hostIdentity(s, grantKeys); err != nil {
+			return nil, err
+		}
+		// vgi.attach_tickets.v1: an explicit signing key and the ability to
+		// issue grants, or not hosted at all.
+		if err := w.hostAttachTickets(s, grantKeys); err != nil {
 			return nil, err
 		}
 	}
@@ -1533,6 +1550,14 @@ func (w *Worker) RunHttp(addr string) error {
 // listener -- so an in-process test can serve exactly what a deployed worker
 // does.
 func (w *Worker) newHttpServer() (*vgirpc.HttpServer, error) {
+	// VGI_SIGNING_KEY configures the key explicitly when WithHttpSigningKey
+	// did not, exactly as that option would. Resolved before the server is
+	// built, because hosting vgi.attach_tickets.v1 depends on it.
+	if len(w.httpSigningKey) == 0 {
+		if env := os.Getenv(SigningKeyEnv); env != "" {
+			WithHttpSigningKey([]byte(env))(w)
+		}
+	}
 	s, err := w.buildServer(transportHTTP)
 	if err != nil {
 		return nil, err
@@ -1551,7 +1576,13 @@ func (w *Worker) newHttpServer() (*vgirpc.HttpServer, error) {
 	// HTTP seals every attach and transaction value with that key, configured
 	// or generated.
 	w.sealOpaqueData = true
-	hs, err := vgirpc.NewHttpServerWithKey(s, w.httpSigningKey)
+	// The state-token machinery wants at least 16 bytes; a shorter configured
+	// key is stretched exactly as the envelope sealer stretches it.
+	tokenKey := w.httpSigningKey
+	if len(tokenKey) < 16 {
+		tokenKey = normalizeCryptoKey(tokenKey)
+	}
+	hs, err := vgirpc.NewHttpServerWithKey(s, tokenKey)
 	if err != nil {
 		return nil, fmt.Errorf("http signing key: %w", err)
 	}

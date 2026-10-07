@@ -166,6 +166,9 @@ ATTACH 'sales' (TYPE vgi, LOCATION 'https://worker.example.com',
 `Secret` combines with `Required`. A secret option may declare a default, but
 normally has none, since the default is published to every client.
 
+`vgi_attach_ticket` is reserved for [attach tickets](#attach-tickets-vgiattach_ticketsv1):
+a worker declaring an option of that name (any case) refuses to start.
+
 ## Function shapes
 
 | Shape                   | Interface                                        | Use case                              |
@@ -309,6 +312,51 @@ worker at startup.
   outage is a 503 with your `RetryAfter`.
 - Your authenticator must return a `ValueError` `*vgirpc.RpcError` for a bearer
   it does not recognise, or the grant verifier is never reached.
+
+## Attach tickets (`vgi.attach_tickets.v1`)
+
+A grant says *who* attaches; an attach ticket says *what*. While a user is
+attached and logged in, a client calls `seal_attach` and the worker seals the
+options the user attached with -- secret ones included -- into a `vgia1.`
+ticket only this worker can open. Later a runner holding the user's grant
+reattaches with that single option, and never sees an option:
+
+```sql
+ATTACH 'sales' AS s (TYPE vgi, LOCATION 'https://worker.example.com',
+    vgi_attach_ticket '<ticket>');   -- authenticated by Bearer <grant>
+```
+
+- **Hosting.** HTTP only, and only when the signing key is configured
+  explicitly (`VGI_SIGNING_KEY`, or `vgi.WithHttpSigningKey`) *and* the worker
+  can issue grants (grant keys, or a `MintGrant` hook). Otherwise the protocol
+  is absent, which a client sees through reflection. A per-process generated
+  key never enables it: every ticket would die on restart.
+- **Format.** `"vgia1." + base64url(0x01 || nonce || XChaCha20-Poly1305)`, keyed
+  by `VGI_SIGNING_KEY`, AAD `"vgi.attach_ticket.v1\0" + principal`. The
+  principal only, not the login domain, so a ticket sealed under a JWT login
+  opens under that user's grant. A ticket carries no authority: it opens only
+  for the same principal.
+- **Redemption.** `catalog_attach` replaces a request whose options contain
+  `vgi_attach_ticket` (any case) with the sealed catalog name, options and
+  version specs before any catalog code runs, and before routing to a
+  sub-catalog. Any other option beside it is `invalid_request`; a ticket that
+  does not open is `attach_ticket_invalid`; one outside its lifetime is
+  `attach_ticket_expired`.
+- **Lifetime.** The grant maximum (`VGI_RPC_GRANT_MAX_TTL_SECONDS` / the grant
+  keys' max TTL); `ttl_seconds` 0 asks for all of it. No maximum means no
+  expiry (`expires_at` is `+Inf`).
+- **Reserved name.** Declaring an attach option named `vgi_attach_ticket` (any
+  case) stops the worker at startup.
+- Rotating `VGI_SIGNING_KEY` invalidates every ticket.
+
+`vgi.MintAttachTicket` and `vgi.OpenAttachTicket` expose the format. The spec
+is vgi-python's `docs/protocol/vgi-attach-tickets.md`;
+`vgi/testdata/attach_ticket_vectors.json` pins it byte for byte. The example
+worker serves the cross-SDK `ticket_probe` fixture catalog
+(`examples/ticket_probe`), and hosts the protocol over HTTP when both
+`VGI_SIGNING_KEY` and `VGI_RPC_GRANT_KEYS` are set. Its test bearers
+`vgi-test-alice` / `vgi-test-bob` count as fresh logins, so they can call
+`issue_grant`.
 
 ## Examples
 

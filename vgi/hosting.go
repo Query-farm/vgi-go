@@ -17,7 +17,9 @@ import (
 //     hook returns them -- on EVERY transport.
 //  3. vgi_rpc.Reflection.v1 -- on every transport.
 //  4. vgi_rpc.Identity.v1 -- HTTP only, and only when WithIdentity supplies a
-//     resolve and/or mint hook.
+//     resolve and/or mint hook, or grant keys are configured.
+//  5. vgi.attach_tickets.v1 -- HTTP only, and only when the signing key is
+//     configured explicitly and the worker can issue grants (attach_ticket.go).
 //
 // Extra protocols cannot change vgi.v2's behaviour: vgi-rpc routes every
 // request on its vgi_rpc.protocol key with no fallback to the primary, so a

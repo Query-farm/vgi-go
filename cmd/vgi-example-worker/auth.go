@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Query-farm/vgi-rpc-go/conformance"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
@@ -69,11 +70,19 @@ func optionalTestBearerAuthenticate() vgirpc.AuthenticateFunc {
 			// appends answer it (WithGrantKeys / VGI_RPC_GRANT_KEYS).
 			return nil, &vgirpc.RpcError{Type: "ValueError", Message: "sealed grant"}
 		}
-		ctx, err := validate(r)
+		known, err := validate(r)
 		if err != nil {
 			return vgirpc.Anonymous(), nil
 		}
-		return ctx, nil
+		// A test bearer is a fresh login: stamping auth_time lets the
+		// attach-ticket tests call issue_grant (its freshness rule) with
+		// nothing but a bearer DuckDB can send. Mirrors vgi-python's fixture.
+		return &vgirpc.AuthContext{
+			Principal:     known.Principal,
+			Authenticated: true,
+			Domain:        known.Domain,
+			Claims:        map[string]any{"auth_time": float64(time.Now().Unix())},
+		}, nil
 	}
 }
 
