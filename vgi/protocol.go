@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -1360,7 +1361,7 @@ func (w *Worker) initTableInOut(ctx context.Context, fn TableInOutFunction, init
 // handleTableFunctionStatistics processes a table_function_statistics RPC
 // request, returning serialized per-column statistics IPC bytes (or nil when
 // unknown).
-func (w *Worker) handleTableFunctionStatistics(ctx context.Context, callCtx *vgirpc.CallContext, req CardinalityRequestWire) (out []byte, err error) {
+func (w *Worker) handleTableFunctionStatistics(ctx context.Context, callCtx *vgirpc.CallContext, req CardinalityRequestWire) (out *[]byte, err error) {
 	defer RecoverPanic("statistics", req.BindCall.FunctionName, &err)
 	bindReq := &req.BindCall
 	bindParams, err := w.parseBindRequest(*bindReq, callCtx)
@@ -1384,7 +1385,16 @@ func (w *Worker) handleTableFunctionStatistics(ctx context.Context, callCtx *vgi
 	if len(stats) == 0 {
 		return nil, nil
 	}
-	return SerializeColumnStatistics(stats, nil)
+	return optionalBytes(SerializeColumnStatistics(stats, nil))
+}
+
+// optionalBytes adapts a (bytes, error) pair to a nullable binary result: nil
+// bytes are a null, which is how the statistics methods say "none".
+func optionalBytes(b []byte, err error) (*[]byte, error) {
+	if err != nil || b == nil {
+		return nil, err
+	}
+	return &b, nil
 }
 
 // handleCardinality processes a table_function_cardinality RPC request.
@@ -1681,19 +1691,12 @@ func (w *Worker) getArgSpecs(fn interface{}) []ArgSpec {
 // ArrowSerializable implementation for GlobalInitResponseWire
 // ---------------------------------------------------------------------------
 
-// globalInitResponseWireSchema is the init stream's header schema. It has no
-// codegen counterpart (the generated InitParamsSchema covers only the request
-// envelope), so it is the one init-side wire shape spelled out by hand — which
-// is exactly why it must be spelled out ONCE. It used to be written twice, here
-// and again at the vgirpc.DynamicStreamWithHeader registration in worker.go, and
-// two copies of a wire schema is how the TypeScript SDK ended up rejecting a
-// correct client at its very first catalog call: the copies disagreed about a
-// field's nullability and neither side was wrong on its own terms.
-var globalInitResponseWireSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "execution_id", Type: arrow.BinaryTypes.Binary},
-	{Name: "max_workers", Type: arrow.PrimitiveTypes.Int64},
-	{Name: "opaque_data", Type: arrow.BinaryTypes.Binary, Nullable: true},
-}, nil)
+// globalInitResponseWireSchema is the init stream's header schema: the
+// generated GlobalInitResponseSchema, used both to advertise the header and to
+// serialize it, so the two cannot drift apart. It was once spelled out by hand
+// with max_workers before opaque_data, which put the advertised header out of
+// the generated order and so changed vgi.v2's protocol hash.
+var globalInitResponseWireSchema = generated.GlobalInitResponseSchema
 
 // ArrowSchema returns the Arrow schema used to serialize a GlobalInitResponseWire.
 func (r *GlobalInitResponseWire) ArrowSchema() *arrow.Schema {

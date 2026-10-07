@@ -1758,8 +1758,9 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 	// wrapper) avoids vgi-rpc-go's struct-to-IPC double-wrap, so the C++
 	// extension's DeserializeFromIpcBytesWithMetadata parses the stats
 	// batch directly instead of a nested {result: binary} envelope.
-	unaryCatalog[TableColumnStatisticsGetRequestWire, []byte](w, s, "catalog_table_column_statistics_get",
-		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableColumnStatisticsGetRequestWire) ([]byte, error) {
+	// The result is nullable, as the reference declares it; null is "none".
+	unaryCatalog[TableColumnStatisticsGetRequestWire, *[]byte](w, s, "catalog_table_column_statistics_get",
+		func(ctx context.Context, callCtx *vgirpc.CallContext, req TableColumnStatisticsGetRequestWire) (*[]byte, error) {
 			ct := w.findCatalogTable(req.SchemaPath, req.Name)
 			if ct == nil || len(ct.Statistics) == 0 {
 				return nil, nil
@@ -1782,7 +1783,7 @@ func (w *Worker) registerCatalogMethods(s *vgirpc.Server) {
 				}
 				ordered = append(ordered, *s)
 			}
-			return SerializeColumnStatistics(ordered, ct.StatisticsCacheMaxAgeSeconds)
+			return optionalBytes(SerializeColumnStatistics(ordered, ct.StatisticsCacheMaxAgeSeconds))
 		})
 }
 

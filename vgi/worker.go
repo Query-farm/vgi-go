@@ -1368,7 +1368,9 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 	// Register table_function_statistics (unary). Uses []byte result to avoid
 	// vgi-rpc-go's struct-to-IPC double-wrap — the C++ extension parses the
 	// IPC payload directly (see catalog_table_column_statistics_get).
-	vgirpc.Unary[CardinalityRequestWire, []byte](s, "table_function_statistics", w.handleTableFunctionStatistics)
+	// The result is nullable, as the reference declares it: null means "no
+	// statistics", which is what a nil *[]byte sends.
+	vgirpc.Unary[CardinalityRequestWire, *[]byte](s, "table_function_statistics", w.handleTableFunctionStatistics)
 
 	// Register all catalog methods
 	w.registerCatalogMethods(s)
@@ -1382,6 +1384,9 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 
 	// Table-buffering sink RPCs (process/combine/destructor).
 	w.registerTableBufferingRPCs(s)
+
+	// The rest of vgi.v2: hosted, but refused with UNIMPLEMENTED.
+	registerUnimplementedMethods(s)
 
 	// The worker's additional protocols, after vgi.v2 and on every transport.
 	if err := w.hostProtocols(s); err != nil {
@@ -1743,6 +1748,11 @@ func (BindRequestWire) VgiRpcParamsSchema() *arrow.Schema { return generated.Bin
 
 // VgiRpcParamsSchema advertises the wrapped protocol shape for init.
 func (InitRequestWire) VgiRpcParamsSchema() *arrow.Schema { return generated.InitParamsSchema }
+
+// VgiRpcParamsSchema advertises the wrapped protocol shape for table_function_plan.
+func (PlanRequestWire) VgiRpcParamsSchema() *arrow.Schema {
+	return generated.TableFunctionPlanParamsSchema
+}
 
 // VgiRpcParamsSchema advertises the wrapped protocol shape for table_function_cardinality.
 func (CardinalityRequestWire) VgiRpcParamsSchema() *arrow.Schema {
