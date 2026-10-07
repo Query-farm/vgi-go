@@ -1,0 +1,5 @@
+{
+  "description": "vgi-go `make test-http`: the extension's test/configs/no_error_skip.json (never skip a test on its error message), plus httpfs loaded into every database. The HTTP transport needs httpfs, and the suite's tests outside test/sql/integration/ (which the reference HTTP runner never runs) do not `require` it themselves. Only those tests use this config; the integration tests require httpfs themselves and run with no_error_skip.json alone. base_config is resolved against the extension checkout, which the lane runs from. core_functions is listed because naming any extension here replaces the runner's default list, which is just core_functions.",
+  "base_config": "test/configs/no_error_skip.json",
+  "statically_loaded_extensions": ["core_functions", "httpfs"]
+}

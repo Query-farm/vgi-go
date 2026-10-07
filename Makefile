@@ -67,6 +67,24 @@ DEBUG_BIN    := $(VGI_DIR)/build/debug/test/unittest
 UNITTEST_REL := ./build/$(BUILD_TYPE)/test/unittest
 DEBUG_BIN_REL := ./build/debug/test/unittest
 
+# sqllogictest config passed to every unittest run (--test-config), relative
+# to $(VGI_DIR), which every lane cds into. Without one, DuckDB's runner turns
+# any error whose text contains "HTTP" or "Unable to connect" into a SKIP and
+# exits 0 -- and over the HTTP transport every worker error contains "HTTP",
+# so real failures were reported as skips. The extension ships this file
+# (test/configs/no_error_skip.json); its one skip string matches no error. An
+# empty "skip_error_messages" list is not an option: the runner crashes on it.
+TEST_CONFIG  ?= test/configs/no_error_skip.json
+
+# The HTTP lane's config for the tests outside test/sql/integration/:
+# TEST_CONFIG (as its base_config) plus httpfs loaded into every database,
+# which the HTTP transport requires and those tests do not `require`
+# themselves. The integration tests do, and run with TEST_CONFIG alone, as in
+# the extension's own HTTP runner: preloading httpfs there is not neutral
+# (location_policy/external_access then aborts the runner at teardown, when
+# httpfs touches the secret directory after external access was disabled).
+HTTP_TEST_CONFIG ?= $(CURDIR)/ci/http-lane-test-config.json
+
 # Absolute path to the worker binaries, passed to the test runner.
 WORKER_PATH                  := $(CURDIR)/$(BINARY)
 VERSIONED_WORKER_PATH        := $(CURDIR)/$(VERSIONED_BINARY)
@@ -84,12 +102,13 @@ HTTP_TEST_TARGETS := $(patsubst $(TEST_DIR)/%.test,test-http/%,$(TEST_FILES))
 
 # Tests expected to fail over HTTP.
 #
-# vgi_worker_pool asserts on the error a *bad worker location* produces, which
-# over HTTP is whatever DuckDB's httpfs says about the URL rather than the
-# worker's own "Unknown function" / spawn failure. The reference runner
-# ($(VGI_DIR)/test/run_http_integration.sh) only covers test/sql/integration/*, so
-# it never runs these; the Python worker fails them over HTTP exactly as this
-# one does.
+# vgi_worker_pool asserts on the subprocess worker pool: vgi_worker_pool() rows
+# and PID reuse across connections. An http:// LOCATION never populates that
+# pool (the first assertion that fails is `COUNT(*) >= 1 FROM
+# vgi_worker_pool()`), so the test needs a subprocess transport the HTTP lane
+# structurally cannot provide. The reference runner
+# ($(VGI_DIR)/test/run_http_integration.sh) only covers test/sql/integration/*,
+# so it never runs it; the launcher lane excludes it for the same reason.
 HTTP_XFAIL_TESTS := vgi_worker_pool
 
 # The HTTP worker is started with its working directory set to $(VGI_DIR),
@@ -236,7 +255,7 @@ test: build
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
-	    python3 scripts/run_tests.py -j 6 $(COVERAGE_GATE) \
+	    python3 scripts/run_tests.py -j 6 --test-config $(TEST_CONFIG) $(COVERAGE_GATE) \
 	        "test/*" "~test/sql/integration/writable/*"
 
 # Run a single integration test file.
@@ -250,7 +269,7 @@ test-single: build
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
-	    $(UNITTEST_REL) "$(TEST)"
+	    $(UNITTEST_REL) --test-config $(TEST_CONFIG) "$(TEST)"
 
 # Run the full integration test suite with the shared-memory side-channel
 # enabled. Identical to `make test` plus VGI_RPC_SHM_SIZE_BYTES, which makes
@@ -269,7 +288,7 @@ test-shm: build
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
-	    $(UNITTEST_REL) "test/*" "~test/sql/integration/writable/*"
+	    $(UNITTEST_REL) --test-config $(TEST_CONFIG) "test/*" "~test/sql/integration/writable/*"
 
 # Run the full integration test suite over HTTP transport.
 # Each test starts a fresh HTTP worker, discovers the port, runs the test,
@@ -305,12 +324,15 @@ test-launcher: build
 	    VGI_VERSIONED_TABLES_WORKER="launch:$(VERSIONED_TABLES_WORKER_PATH)" \
 	    VGI_ATTACH_OPTIONS_WORKER="launch:$(ATTACH_OPTIONS_WORKER_PATH)" \
 	    VGI_SIMPLE_WRITABLE_WORKER="launch:$(SIMPLE_WRITABLE_WORKER_PATH)" \
-	    $(UNITTEST_REL) "test/*" "~test/sql/integration/writable/*" "~test/sql/vgi_worker_pool.test"
+	    $(UNITTEST_REL) --test-config $(TEST_CONFIG) "test/*" "~test/sql/integration/writable/*" "~test/sql/vgi_worker_pool.test"
 
 # Run stdio, stdio+shm, HTTP, and launcher tests.
 test-all: test test-shm test-http test-launcher
 
-# Pattern rule: HTTP transport — starts server per test, discovers port, cleans up
+# Pattern rule: HTTP transport — starts server per test, discovers port, cleans up.
+# database_worker/package.test packages an executable worker, and an HTTP URL
+# cannot be packaged, so VGI_DATABASE_PACKAGE_WORKER hands it the subprocess
+# binary -- as ci/run-integration.sh and the extension's own HTTP runner do.
 test-http/%: build
 	@test_file="$(TEST_DIR)/$*.test"; \
 	if [ ! -f "$$test_file" ]; then \
@@ -332,11 +354,13 @@ test-http/%: build
 	rm -f "$$port_fifo"; \
 	port=$${port_line#PORT:}; \
 	export VGI_TEST_WORKER="http://127.0.0.1:$$port"; \
+	export VGI_DATABASE_PACKAGE_WORKER="$(WORKER_PATH)"; \
 	is_xfail=false; \
 	for xf in $(HTTP_XFAIL_TESTS); do \
 		if [ "$$xf" = "$*" ]; then is_xfail=true; break; fi; \
 	done; \
-	out=$$(cd $(VGI_DIR) && timeout $(TEST_TIMEOUT) $(UNITTEST_REL) "test/sql/$*.test" 2>&1); \
+	case "$*" in integration/*) test_config="$(TEST_CONFIG)" ;; *) test_config="$(HTTP_TEST_CONFIG)" ;; esac; \
+	out=$$(cd $(VGI_DIR) && timeout $(TEST_TIMEOUT) $(UNITTEST_REL) --test-config "$$test_config" "test/sql/$*.test" 2>&1); \
 	rc=$$?; \
 	if [ $$rc -eq 0 ] && printf '%s' "$$out" | grep -q "All tests were skipped"; then \
 		echo "SKIP  $* [http]"; \
@@ -353,7 +377,7 @@ test-http/%: build
 		else \
 			echo "FAIL  $* [http] (release, rc=$$rc) — rerunning with debug binary..."; \
 			printf '%s\n' "$$out" | tail -40; \
-			(cd $(VGI_DIR) && timeout $(TEST_TIMEOUT) $(DEBUG_BIN_REL) -s "test/sql/$*.test" 2>&1) || true; \
+			(cd $(VGI_DIR) && timeout $(TEST_TIMEOUT) $(DEBUG_BIN_REL) --test-config "$$test_config" -s "test/sql/$*.test" 2>&1) || true; \
 			kill $$http_pid 2>/dev/null; wait $$http_pid 2>/dev/null; \
 			exit 1; \
 		fi; \

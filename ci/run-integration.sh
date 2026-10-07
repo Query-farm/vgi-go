@@ -38,6 +38,15 @@ TRANSPORT="${TRANSPORT:-stdio}"
 INTEGRATION="$VGI_SRC/test/sql/integration"
 [ -d "$INTEGRATION" ] || { echo "::error::no test/sql/integration under VGI_SRC=$VGI_SRC"; exit 1; }
 
+# sqllogictest config for every suite run. Without --test-config, DuckDB's
+# runner turns any error whose text contains "HTTP" or "Unable to connect" into
+# a SKIP and exits 0 -- over the HTTP transport, every worker error -- so the
+# http lane reported real failures as skips. The file comes from the same vgi
+# checkout the suite does (test/configs/no_error_skip.json); its one skip string
+# matches no error. (An empty skip list is not an option: the runner crashes.)
+TEST_CONFIG="$VGI_SRC/test/configs/no_error_skip.json"
+[ -f "$TEST_CONFIG" ] || { echo "::error::pinned VGI suite is missing $TEST_CONFIG"; exit 1; }
+
 # The five dedicated worker binaries (make build).
 WORKER="$BIN_DIR/vgi-example-worker-go"
 VERSIONED="$BIN_DIR/vgi-example-versioned-worker-go"
@@ -504,7 +513,7 @@ run_unittest() {
   # tripping errexit and without a trailing `|| true` (which, as a new simple
   # command, would overwrite PIPESTATUS with 0 — the accounting must still run
   # when the suite itself failed).
-  "$HAYBARN_UNITTEST" "$@" 2>&1 | tee "$log" && rc=0 || rc="${PIPESTATUS[0]}"
+  "$HAYBARN_UNITTEST" --test-config "$TEST_CONFIG" "$@" 2>&1 | tee "$log" && rc=0 || rc="${PIPESTATUS[0]}"
   if grep -q 'due to a fatal error condition' "$log"; then
     echo "::error::a forked child ran the test harness's signal handler (see the" \
          "'fatal error condition' block above). The parent exited $rc and would" \
