@@ -104,7 +104,7 @@ func (w *Worker) handleTableFunctionDynamicToString(ctx context.Context, callCtx
 func (w *Worker) lookupTable(name string) (TableFunction, error) {
 	fns, ok := w.tables[name]
 	if !ok || len(fns) == 0 {
-		return nil, fmt.Errorf("table function %q not registered", name)
+		return nil, &UnknownFunctionError{Name: name, FunctionType: "table"}
 	}
 	return fns[0], nil
 }

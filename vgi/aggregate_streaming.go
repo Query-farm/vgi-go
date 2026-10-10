@@ -149,6 +149,7 @@ func (w *Worker) handleAggregateStreamingOpen(ctx context.Context, callCtx *vgir
 	if !ok {
 		return AggregateStreamingOpenResponseWire{}, &vgirpc.RpcError{
 			Type:    "TypeError",
+			Code:    string(vgirpc.CodeUnimplemented),
 			Message: fmt.Sprintf("aggregate '%s' does not implement StreamingAggregateFunction", req.FunctionName),
 		}
 	}
@@ -216,6 +217,7 @@ func (w *Worker) handleAggregateStreamingChunk(ctx context.Context, callCtx *vgi
 	if sess == nil {
 		return AggregateStreamingChunkResponseWire{}, &vgirpc.RpcError{
 			Type:    "OSError",
+			Code:    string(vgirpc.CodeNotFound),
 			Message: "aggregate_streaming_chunk: unknown execution_id (streaming_open never ran or close already fired)",
 		}
 	}

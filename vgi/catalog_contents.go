@@ -45,7 +45,7 @@ const (
 func (w *Worker) catalogVersionOf(attachOpaqueData []byte, callCtx *vgirpc.CallContext) (int64, error) {
 	if w.catalogVersionHook != nil {
 		if err := w.catalogVersionHook(attachOpaqueData, callCtx); err != nil {
-			return 0, &vgirpc.RpcError{Type: "ValueError", Message: err.Error()}
+			return 0, rewrapError("ValueError", err)
 		}
 	}
 	if w.catalog != nil {

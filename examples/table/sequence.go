@@ -46,28 +46,28 @@ var sequenceOutputSchema = arrow.NewSchema([]arrow.Field{
 
 func (f *SequenceFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
 	// Validate at bind time so bad arguments surface as a clean
-	// ArgumentValidationError rather than a stream-truncation IO error.
+	// ArgumentError (INVALID_ARGUMENT) rather than a stream-truncation IO error.
 	if params.Args != nil {
 		// count: required, non-null
 		if len(params.Args.Positional) > 0 {
 			if a := params.Args.Positional[0]; a != nil && a.Len() > 0 && a.IsNull(0) {
-				return nil, fmt.Errorf("count cannot be NULL")
+				return nil, &vgi.ArgumentError{ArgName: "count", Position: 0, Detail: "cannot be NULL"}
 			}
 		}
 		if c, err := params.Args.GetColumn("batch_size"); err == nil && c.Len() > 0 {
 			if c.IsNull(0) {
-				return nil, fmt.Errorf("batch_size cannot be NULL")
+				return nil, &vgi.ArgumentError{ArgName: "batch_size", Position: -1, Detail: "cannot be NULL"}
 			}
 			if bs, err := params.Args.GetScalarInt64("batch_size"); err == nil && bs < 1 {
-				return nil, fmt.Errorf("batch_size must be >= 1 (got %d)", bs)
+				return nil, &vgi.ArgumentError{ArgName: "batch_size", Position: -1, Detail: fmt.Sprintf("must be >= 1 (got %d)", bs)}
 			}
 		}
 		if c, err := params.Args.GetColumn("increment"); err == nil && c.Len() > 0 {
 			if c.IsNull(0) {
-				return nil, fmt.Errorf("increment cannot be NULL")
+				return nil, &vgi.ArgumentError{ArgName: "increment", Position: -1, Detail: "cannot be NULL"}
 			}
 			if inc, err := params.Args.GetScalarInt64("increment"); err == nil && inc < 1 {
-				return nil, fmt.Errorf("increment must be >= 1 (got %d)", inc)
+				return nil, &vgi.ArgumentError{ArgName: "increment", Position: -1, Detail: fmt.Sprintf("must be >= 1 (got %d)", inc)}
 			}
 		}
 	}

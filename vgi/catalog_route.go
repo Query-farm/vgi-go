@@ -184,7 +184,7 @@ func (w *Worker) dispatchRouted(ctx context.Context, cc *vgirpc.CallContext, met
 	}
 	m, ok := b.method(method)
 	if !ok {
-		return nil, true, &vgirpc.RpcError{Type: "NotImplementedError",
+		return nil, true, &vgirpc.RpcError{Type: "NotImplementedError", Code: string(vgirpc.CodeUnimplemented),
 			Message: fmt.Sprintf("catalog '%s' does not support %s", name, method)}
 	}
 	// The routed catalog never sees a sealed value: open the transaction here,

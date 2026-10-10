@@ -21,6 +21,10 @@ func (e *CatalogReadOnlyError) Error() string {
 	return fmt.Sprintf("Catalog is read-only: %s not supported", e.Operation)
 }
 
+// ErrorCode is FAILED_PRECONDITION: the request is well-formed, but the
+// catalog it names does not accept writes.
+func (e *CatalogReadOnlyError) ErrorCode() vgirpc.Code { return vgirpc.CodeFailedPrecondition }
+
 // UnknownFunctionError is returned when a function name cannot be resolved.
 type UnknownFunctionError struct {
 	Name         string
@@ -31,6 +35,9 @@ type UnknownFunctionError struct {
 func (e *UnknownFunctionError) Error() string {
 	return fmt.Sprintf("Unknown function: '%s' (type: %s)", e.Name, e.FunctionType)
 }
+
+// ErrorCode is NOT_FOUND.
+func (e *UnknownFunctionError) ErrorCode() vgirpc.Code { return vgirpc.CodeNotFound }
 
 // TypeBoundError is returned when an input schema field type does not satisfy
 // the type bound predicates declared for an argument.
@@ -56,6 +63,10 @@ func (e *TypeBoundError) Error() string {
 	return fmt.Sprintf("argument '%s': column type %v does not match type bound constraints", name, e.FieldType)
 }
 
+// ErrorCode is INVALID_ARGUMENT: the caller passed a column of a type the
+// argument does not accept.
+func (e *TypeBoundError) ErrorCode() vgirpc.Code { return vgirpc.CodeInvalidArgument }
+
 // ArgumentError is returned when a function argument is missing, of the
 // wrong shape, or fails inline validation at bind/init time. Use it from
 // inside OnBind/OnBindTyped to surface a clean error to the caller rather
@@ -80,10 +91,16 @@ func (e *ArgumentError) Error() string {
 	}
 }
 
+// ErrorCode is INVALID_ARGUMENT.
+func (e *ArgumentError) ErrorCode() vgirpc.Code { return vgirpc.CodeInvalidArgument }
+
 // SchemaValidationError describes one or more field-level type mismatches
 // between an expected schema and an actual schema. The message lists each
 // mismatched field with expected vs. actual types — analogous to
 // vgi-python's SchemaValidationError.
+//
+// It carries no error code (it is sent as UNKNOWN): it reports a worker whose
+// output disagrees with its own declared schema -- a bug, not bad input.
 type SchemaValidationError struct {
 	Context    string // e.g. "table function output schema"
 	Mismatches []SchemaFieldMismatch
@@ -129,6 +146,8 @@ func (e *SchemaValidationError) Error() string {
 // bind/init/process/finalize. The dispatcher (see RecoverPanic) catches the
 // panic, captures the stack, and returns this error to the caller so the
 // worker process stays alive and the RPC client sees a clean message.
+//
+// It carries no error code (it is sent as UNKNOWN): a panic is a bug.
 type WorkerPanicError struct {
 	FunctionName string
 	Phase        string // bind, init, process, finalize, etc.
@@ -172,11 +191,36 @@ func RecoverPanic(phase, fnName string, errOut *error) {
 
 // AsRpcError converts an error to an RpcError for wire transmission. Maps
 // known custom error types to clearer Type strings so DuckDB-side error
-// surfacing matches vgi-python's behaviour.
+// surfacing matches vgi-python's behaviour. The error's code and kind
+// (vgi_rpc.error_code / error_kind) are carried over.
 func AsRpcError(err error) *vgirpc.RpcError {
 	if rpcErr, ok := err.(*vgirpc.RpcError); ok {
 		return rpcErr
 	}
+	out := asRpcErrorType(err)
+	out.Code = codeName(err)
+	out.Kind = vgirpc.ErrorKindOf(err)
+	return out
+}
+
+// codeName is the vgi_rpc.error_code err declares anywhere in its chain, or ""
+// when it declares none (sent as UNKNOWN).
+func codeName(err error) string {
+	if code := vgirpc.ErrorCodeOf(err); code != vgirpc.CodeUnknown {
+		return string(code)
+	}
+	return ""
+}
+
+// rewrapError turns an error a worker-supplied hook returned into the RpcError
+// of the given Type the SDK answers with, keeping the code and kind the hook's
+// error declared -- an ArgumentError from an attach validator still reaches the
+// client as INVALID_ARGUMENT.
+func rewrapError(typ string, err error) *vgirpc.RpcError {
+	return &vgirpc.RpcError{Type: typ, Message: err.Error(), Code: codeName(err), Kind: vgirpc.ErrorKindOf(err)}
+}
+
+func asRpcErrorType(err error) *vgirpc.RpcError {
 	switch err.(type) {
 	case *ArgumentError:
 		return &vgirpc.RpcError{Type: "ArgumentError", Message: err.Error()}
@@ -233,6 +277,10 @@ type FunctionShapeMismatchError struct {
 func (e *FunctionShapeMismatchError) Error() string {
 	return fmt.Sprintf("%s: %s", e.FunctionName, e.Detail)
 }
+
+// ErrorCode is INVALID_ARGUMENT: the caller drove the function through the
+// RPC shape of a different kind of function.
+func (e *FunctionShapeMismatchError) ErrorCode() vgirpc.Code { return vgirpc.CodeInvalidArgument }
 
 // errTableInOutMissingInputSchema builds the FunctionShapeMismatchError for a
 // table-in-out function dispatched with no input schema -- the signature of a
