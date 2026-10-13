@@ -148,3 +148,17 @@ func TestCatalogContractPythonCorpus(t *testing.T) {
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.RequiredFilterPaths](t, name) })
 	}
 }
+
+func TestViewAliasesMatchPythonCorpus(t *testing.T) {
+	encoded, err := vgi.SerializeViewInfo(&vgi.ViewInfo{
+		Name: "view.with.dot", SchemaPath: []string{"one.two", "nested"},
+		Definition: "SELECT 1 AS original, 2 AS second", Aliases: []string{"a.b", "with\"quote"},
+		ColumnComments: map[string]string{"a.b": "kept"}, Comment: "view comment", Tags: map[string]string{"team": "one"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !array.RecordEqual(catalogBatch(t, encoded), catalogBatch(t, catalogFixture(t, "view_info"))) {
+		t.Fatal("view metadata changed across the Go writer")
+	}
+}

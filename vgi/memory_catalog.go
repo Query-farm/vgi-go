@@ -592,7 +592,11 @@ func (m *MemoryCatalog) tableDrop(req *CatalogTableDropParams) error {
 }
 
 func (m *MemoryCatalog) viewCreate(req *CatalogViewCreateParams) error {
-	item, err := SerializeViewInfo(&ViewInfo{Name: req.Name, SchemaPath: slices.Clone(req.SchemaPath), Definition: req.Definition})
+	var aliases []string
+	if req.Aliases != nil {
+		aliases = slices.Clone(*req.Aliases)
+	}
+	item, err := SerializeViewInfo(&ViewInfo{Name: req.Name, SchemaPath: slices.Clone(req.SchemaPath), Definition: req.Definition, Aliases: aliases})
 	if err != nil {
 		return err
 	}

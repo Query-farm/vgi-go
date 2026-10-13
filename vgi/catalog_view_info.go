@@ -21,6 +21,8 @@ type CatalogView struct {
 	Name string
 	// Definition is the SQL query backing the view.
 	Definition string
+	// Aliases are ordered raw output identifiers; empty uses query names.
+	Aliases []string
 	// Comment is a human-readable description.
 	Comment string
 	// Tags are arbitrary key/value annotations attached to this view;
@@ -39,6 +41,7 @@ type ViewInfo struct {
 	Comment        string
 	Tags           map[string]string
 	Definition     string
+	Aliases        []string
 	ColumnComments map[string]string
 }
 
@@ -102,6 +105,11 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 		}
 	}
 
+	aliasesBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer aliasesBuilder.Release()
+	aliasesBuilder.Append(true)
+	aliasesBuilder.ValueBuilder().(*array.StringBuilder).AppendValues(info.Aliases, nil)
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
@@ -109,6 +117,7 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 		schemaPathBuilder.NewArray(),
 		defBuilder.NewArray(),
 		colCommentsBuilder.NewArray(),
+		aliasesBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

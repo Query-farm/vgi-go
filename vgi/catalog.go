@@ -1234,11 +1234,13 @@ func (w workerService) CatalogViewGet(ctx context.Context, callCtx *vgirpc.CallC
 	for _, cv := range si.views {
 		if cv.Name == req.Name {
 			info := &ViewInfo{
-				Name:       cv.Name,
-				SchemaPath: req.SchemaPath,
-				Comment:    cv.Comment,
-				Tags:       cv.Tags,
-				Definition: cv.Definition,
+				Name:           cv.Name,
+				SchemaPath:     req.SchemaPath,
+				Comment:        cv.Comment,
+				Tags:           cv.Tags,
+				Definition:     cv.Definition,
+				Aliases:        slices.Clone(cv.Aliases),
+				ColumnComments: cv.ColumnComments,
 			}
 			data, err := SerializeViewInfo(info)
 			if err != nil {

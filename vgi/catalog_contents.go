@@ -140,6 +140,7 @@ func (w *Worker) listViewItems(_ []byte, path SchemaPath) ([][]byte, error) {
 			Comment:        cv.Comment,
 			Tags:           cv.Tags,
 			Definition:     cv.Definition,
+			Aliases:        cv.Aliases,
 			ColumnComments: cv.ColumnComments,
 		})
 		if err != nil {
