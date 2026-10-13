@@ -22,6 +22,9 @@ func TestGeneratedTypesDeriveGeneratedSchemas(t *testing.T) {
 		value  any
 		schema *arrow.Schema
 	}{
+		{"OptionChanges", generated.OptionChanges{}, generated.OptionChangesSchema},
+		{"OptionState", generated.OptionState{}, generated.OptionStateSchema},
+		{"RequiredFilterPaths", generated.RequiredFilterPaths{}, generated.RequiredFilterPathsSchema},
 		{"CatalogAttachResult", generated.CatalogAttachResult{}, generated.CatalogAttachResultSchema},
 		{"CatalogContentsResponse", generated.CatalogContentsResponse{}, generated.CatalogContentsResultSchema},
 		{"SchemaContents", generated.SchemaContents{}, generated.SchemaContentsSchema},
