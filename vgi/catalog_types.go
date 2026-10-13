@@ -584,7 +584,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 // SchemaInfo describes a schema in the catalog.
 type SchemaInfo struct {
 	Path             SchemaPath
-	Comment          string
+	Comment          *string
 	Tags             map[string]string
 	AttachOpaqueData []byte
 	// EstimatedObjectCount, when non-nil, advertises the approximate per-kind
@@ -604,8 +604,8 @@ func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error) {
 
 	commentBuilder := array.NewStringBuilder(mem)
 	defer commentBuilder.Release()
-	if info.Comment != "" {
-		commentBuilder.Append(info.Comment)
+	if info.Comment != nil {
+		commentBuilder.Append(*info.Comment)
 	} else {
 		commentBuilder.AppendNull()
 	}

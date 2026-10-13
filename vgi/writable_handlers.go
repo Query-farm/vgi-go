@@ -318,7 +318,7 @@ func (w *Worker) writableSchemaInfos(c *WritableCatalog) ([]*SchemaInfo, error) 
 	}
 	out := make([]*SchemaInfo, 0, len(list))
 	for _, s := range list {
-		out = append(out, &SchemaInfo{Path: strings.Split(s.Name, "\x00"), Comment: s.Comment, AttachOpaqueData: c.attachOpaqueData})
+		out = append(out, &SchemaInfo{Path: strings.Split(s.Name, "\x00"), Comment: descriptorComment(s.Comment), AttachOpaqueData: c.attachOpaqueData})
 	}
 	return out, nil
 }

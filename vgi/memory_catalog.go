@@ -54,7 +54,8 @@ type memoryState struct {
 
 type memorySchema struct {
 	path    SchemaPath
-	comment string
+	comment *string
+	tags    map[string]string
 	// Serialized TableInfo / ViewInfo items, keyed by lower-cased name.
 	tables map[string]memoryObject
 	views  map[string]memoryObject
@@ -196,7 +197,7 @@ func (m *MemoryCatalog) attach(_ *vgirpc.CallContext, req *CatalogAttachRequestW
 	}
 	attach := []byte(m.name + "\x00" + hex.EncodeToString(token[:]))
 	st := &memoryState{version: 1, schemas: map[string]*memorySchema{}}
-	st.schemas["main"] = newMemorySchema(SchemaPath{"main"}, "")
+	st.schemas["main"] = newMemorySchema(SchemaPath{"main"}, nil, nil)
 	m.mu.Lock()
 	m.attaches[string(attach)] = st
 	version := m.reportedVersion(st)
@@ -220,8 +221,8 @@ func (m *MemoryCatalog) attach(_ *vgirpc.CallContext, req *CatalogAttachRequestW
 	return res, nil
 }
 
-func newMemorySchema(path SchemaPath, comment string) *memorySchema {
-	return &memorySchema{path: slices.Clone(path), comment: comment,
+func newMemorySchema(path SchemaPath, comment *string, tags map[string]string) *memorySchema {
+	return &memorySchema{path: slices.Clone(path), comment: comment, tags: maps.Clone(tags),
 		tables: map[string]memoryObject{}, views: map[string]memoryObject{}}
 }
 
@@ -324,7 +325,7 @@ func objectItems(objs map[string]memoryObject) [][]byte {
 }
 
 func (m *MemoryCatalog) schemaItem(attach []byte, s *memorySchema) ([]byte, error) {
-	return SerializeSchemaInfo(&SchemaInfo{Path: s.path, Comment: s.comment, Tags: map[string]string{}, AttachOpaqueData: attach})
+	return SerializeSchemaInfo(&SchemaInfo{Path: s.path, Comment: s.comment, Tags: s.tags, AttachOpaqueData: attach})
 }
 
 // schema looks up one schema of an attach; m.mu must be held.
@@ -391,11 +392,7 @@ func (m *MemoryCatalog) schemaCreate(req *CatalogSchemaCreateParams) error {
 			return memoryErr("Schema %s does not exist", schemaPathDisplay(req.Path[:len(req.Path)-1]))
 		}
 	}
-	comment := ""
-	if req.Comment != nil {
-		comment = *req.Comment
-	}
-	st.schemas[schemaPathKey(req.Path)] = newMemorySchema(req.Path, comment)
+	st.schemas[schemaPathKey(req.Path)] = newMemorySchema(req.Path, req.Comment, optionalMetadataMap(req.Tags))
 	st.version++
 	return nil
 }
@@ -610,7 +607,7 @@ func (m *MemoryCatalog) viewCreate(req *CatalogViewCreateParams) error {
 	if req.Aliases != nil {
 		aliases = slices.Clone(*req.Aliases)
 	}
-	item, err := SerializeViewInfo(&ViewInfo{Name: req.Name, SchemaPath: slices.Clone(req.SchemaPath), Definition: req.Definition, Aliases: aliases, Comment: req.Comment, Tags: optionalViewMap(req.Tags), ColumnComments: optionalViewMap(req.ColumnComments)})
+	item, err := SerializeViewInfo(&ViewInfo{Name: req.Name, SchemaPath: slices.Clone(req.SchemaPath), Definition: req.Definition, Aliases: aliases, Comment: req.Comment, Tags: optionalMetadataMap(req.Tags), ColumnComments: optionalMetadataMap(req.ColumnComments)})
 	if err != nil {
 		return err
 	}
@@ -621,7 +618,7 @@ func (m *MemoryCatalog) viewDrop(req *CatalogViewDropParams) error {
 	return m.dropObject(req.AttachOpaqueData, req.SchemaPath, req.Name, "View", req.IgnoreNotFound, true)
 }
 
-func optionalViewMap(values *map[string]string) map[string]string {
+func optionalMetadataMap(values *map[string]string) map[string]string {
 	if values == nil {
 		return nil
 	}

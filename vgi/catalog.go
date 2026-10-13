@@ -257,7 +257,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		si := &catalogSchemaInfo{
 			info: &SchemaInfo{
 				Path:    strings.Split(name, "\x00"),
-				Comment: comment,
+				Comment: descriptorComment(comment),
 			},
 		}
 		cat.schemas[name] = si
@@ -440,7 +440,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			continue
 		}
 		cat.schemas[name] = &catalogSchemaInfo{
-			info: &SchemaInfo{Path: strings.Split(name, "\x00"), Comment: comment},
+			info: &SchemaInfo{Path: strings.Split(name, "\x00"), Comment: descriptorComment(comment)},
 		}
 	}
 
@@ -980,6 +980,9 @@ func (w workerService) CatalogSchemaCreate(ctx context.Context, callCtx *vgirpc.
 		return methodNotImplemented("catalog_schema_create options require negotiated vgi.schema.options.create.v1")
 	}
 	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
+		if (req.Tags != nil && len(*req.Tags) != 0) || req.Comment != nil && *req.Comment == "" {
+			return methodNotImplemented("writable schema tags and empty comments are not supported")
+		}
 		return w.writableSchemaCreate(wc, req.Path, parseOnConflict(req.OnConflict), req.Comment)
 	}
 	return readOnlyErr("catalog_schema_create")

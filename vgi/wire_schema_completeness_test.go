@@ -109,7 +109,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 			build: func() ([]byte, error) {
 				return SerializeSchemaInfo(&SchemaInfo{
 					Path:                 SchemaPath{"analytics", "main"},
-					Comment:              "the main schema",
+					Comment:              descriptorComment("the main schema"),
 					Tags:                 map[string]string{"owner": "data-eng"},
 					AttachOpaqueData:     []byte("attach"),
 					EstimatedObjectCount: map[string]int64{"table": 7},
