@@ -54,7 +54,7 @@ func (c *contentsClient) createView(attach []byte, name string) error {
 	c.t.Helper()
 	return c.exec("catalog_view_create", generated.CatalogViewCreateParamsSchema, map[string]any{
 		"attach_opaque_data": attach, "schema_path": []string{"main"}, "name": name,
-		"definition": "SELECT 1 AS x", "on_conflict": "ERROR",
+		"definition": "SELECT 1 AS x", "on_conflict": "ERROR", "security": "regular",
 	})
 }
 
@@ -373,5 +373,30 @@ func TestMemoryCatalogRejectsUnnegotiatedSchemaOptionsBeforeMutation(t *testing.
 	}
 	if got := c.version(attached.AttachOpaqueData); got != 1 {
 		t.Fatalf("version changed to %d", got)
+	}
+}
+
+func TestMemoryCatalogRejectsUnsupportedViewSecurityBeforeMutation(t *testing.T) {
+	worker := vgi.NewWorker(vgi.WithCatalogName("parent"))
+	worker.RegisterMemoryCatalog(vgi.NewMemoryCatalog("mem"))
+	c := newContentsClient(t, worker)
+	a := c.attach("mem")
+	if err := c.createView(a.AttachOpaqueData, "v"); err != nil {
+		t.Fatal(err)
+	}
+	before := c.version(a.AttachOpaqueData)
+	for _, mode := range []string{"barrier", "unknown", ""} {
+		for _, conflict := range []string{"ERROR", "IGNORE", "REPLACE"} {
+			err := c.exec("catalog_view_create", generated.CatalogViewCreateParamsSchema, map[string]any{
+				"attach_opaque_data": a.AttachOpaqueData, "schema_path": []string{"main"}, "name": "v",
+				"definition": "SELECT 2 AS x", "on_conflict": conflict, "security": mode,
+			})
+			if err == nil || !strings.Contains(err.Error(), "security") {
+				t.Fatalf("mode %q: %v", mode, err)
+			}
+		}
+	}
+	if c.version(a.AttachOpaqueData) != before || len(c.views(a.AttachOpaqueData)) != 1 {
+		t.Fatal("unsupported view request changed the catalog")
 	}
 }

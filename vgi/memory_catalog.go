@@ -592,6 +592,9 @@ func (m *MemoryCatalog) tableDrop(req *CatalogTableDropParams) error {
 }
 
 func (m *MemoryCatalog) viewCreate(req *CatalogViewCreateParams) error {
+	if req.Security != "regular" {
+		return fmt.Errorf("view security mode %q is unsupported", req.Security)
+	}
 	var aliases []string
 	if req.Aliases != nil {
 		aliases = slices.Clone(*req.Aliases)

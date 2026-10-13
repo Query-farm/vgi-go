@@ -4,6 +4,7 @@ package vgi
 
 import (
 	"bytes"
+	"fmt"
 	"maps"
 	"slices"
 
@@ -23,6 +24,8 @@ type CatalogView struct {
 	Definition string
 	// Aliases are ordered raw output identifiers; empty uses query names.
 	Aliases []string
+	// Security is regular (the zero value) or barrier.
+	Security string
 	// Comment is a human-readable description.
 	Comment string
 	// Tags are arbitrary key/value annotations attached to this view;
@@ -42,6 +45,7 @@ type ViewInfo struct {
 	Tags           map[string]string
 	Definition     string
 	Aliases        []string
+	Security       string
 	ColumnComments map[string]string
 }
 
@@ -49,6 +53,15 @@ var viewInfoSchema = generated.ViewInfoSchema
 
 // SerializeViewInfo serializes a ViewInfo to IPC bytes.
 func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
+	// The public Go DTO's zero value means regular. The wire always carries
+	// an explicit non-null mode; consumers must never default absent metadata.
+	security := info.Security
+	if security == "" {
+		security = "regular"
+	}
+	if security != "regular" && security != "barrier" {
+		return nil, fmt.Errorf("unknown view security: %q", security)
+	}
 	mem := memory.NewGoAllocator()
 
 	// comment
@@ -110,6 +123,10 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 	aliasesBuilder.Append(true)
 	aliasesBuilder.ValueBuilder().(*array.StringBuilder).AppendValues(info.Aliases, nil)
 
+	securityBuilder := array.NewStringBuilder(mem)
+	defer securityBuilder.Release()
+	securityBuilder.Append(security)
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
@@ -118,6 +135,7 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 		defBuilder.NewArray(),
 		colCommentsBuilder.NewArray(),
 		aliasesBuilder.NewArray(),
+		securityBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

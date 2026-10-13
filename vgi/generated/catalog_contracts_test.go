@@ -162,3 +162,18 @@ func TestViewAliasesMatchPythonCorpus(t *testing.T) {
 		t.Fatal("view metadata changed across the Go writer")
 	}
 }
+
+func TestViewSecurityMatchesPythonCorpus(t *testing.T) {
+	encoded, err := vgi.SerializeViewInfo(&vgi.ViewInfo{
+		Name: "barrier", SchemaPath: []string{"main"}, Definition: "SELECT 1 AS original", Security: "barrier",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !array.RecordEqual(catalogBatch(t, encoded), catalogBatch(t, catalogFixture(t, "view_info_barrier"))) {
+		t.Fatal("barrier mode changed across the Go writer")
+	}
+	if _, err := vgi.SerializeViewInfo(&vgi.ViewInfo{Security: "unknown"}); err == nil {
+		t.Fatal("unknown security mode accepted")
+	}
+}

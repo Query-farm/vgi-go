@@ -1240,6 +1240,7 @@ func (w workerService) CatalogViewGet(ctx context.Context, callCtx *vgirpc.CallC
 				Tags:           cv.Tags,
 				Definition:     cv.Definition,
 				Aliases:        slices.Clone(cv.Aliases),
+				Security:       cv.Security,
 				ColumnComments: cv.ColumnComments,
 			}
 			data, err := SerializeViewInfo(info)
