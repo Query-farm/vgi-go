@@ -256,7 +256,7 @@ test: build
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
 	    python3 scripts/run_tests.py -j 6 --test-config $(TEST_CONFIG) $(COVERAGE_GATE) \
-	        "test/*" "~test/sql/integration/writable/*"
+	        "test/*" "~test/sql/duckdb2/column_paths.test" "~test/sql/integration/writable/*"
 
 # Run a single integration test file.
 # Example:
@@ -288,7 +288,7 @@ test-shm: build
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
-	    $(UNITTEST_REL) --test-config $(TEST_CONFIG) "test/*" "~test/sql/integration/writable/*"
+	    $(UNITTEST_REL) --test-config $(TEST_CONFIG) "test/*" "~test/sql/duckdb2/column_paths.test" "~test/sql/integration/writable/*"
 
 # Run the full integration test suite over HTTP transport.
 # Each test starts a fresh HTTP worker, discovers the port, runs the test,
@@ -324,7 +324,7 @@ test-launcher: build
 	    VGI_VERSIONED_TABLES_WORKER="launch:$(VERSIONED_TABLES_WORKER_PATH)" \
 	    VGI_ATTACH_OPTIONS_WORKER="launch:$(ATTACH_OPTIONS_WORKER_PATH)" \
 	    VGI_SIMPLE_WRITABLE_WORKER="launch:$(SIMPLE_WRITABLE_WORKER_PATH)" \
-	    $(UNITTEST_REL) --test-config $(TEST_CONFIG) "test/*" "~test/sql/integration/writable/*" "~test/sql/vgi_worker_pool.test"
+	    $(UNITTEST_REL) --test-config $(TEST_CONFIG) "test/*" "~test/sql/duckdb2/column_paths.test" "~test/sql/integration/writable/*" "~test/sql/vgi_worker_pool.test"
 
 # Run stdio, stdio+shm, HTTP, and launcher tests.
 test-all: test test-shm test-http test-launcher

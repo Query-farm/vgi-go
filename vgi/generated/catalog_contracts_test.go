@@ -87,6 +87,42 @@ func echoCatalogRecord[T any](t *testing.T, name string) {
 }
 
 func TestCatalogContractPythonCorpus(t *testing.T) {
+	for _, variant := range []string{"literal", "nested"} {
+		name := "column_add_" + variant
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.CatalogTableColumnAddParams](t, name) })
+	}
+	for _, variant := range []string{"literal", "nested"} {
+		name := "column_drop_" + variant
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.CatalogTableColumnDropParams](t, name) })
+	}
+	for _, variant := range []string{"literal", "nested"} {
+		name := "column_rename_" + variant
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.CatalogTableColumnRenameParams](t, name) })
+	}
+	for _, variant := range []string{"literal", "nested"} {
+		name := "column_type_change_" + variant
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.CatalogTableColumnTypeChangeParams](t, name) })
+	}
+	for _, variant := range []string{"literal", "nested"} {
+		name := "column_default_set_" + variant
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.CatalogTableColumnDefaultSetParams](t, name) })
+	}
+	for _, variant := range []string{"literal", "nested"} {
+		name := "column_default_drop_" + variant
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.CatalogTableColumnDefaultDropParams](t, name) })
+	}
+	for _, variant := range []string{"literal", "nested"} {
+		name := "column_comment_set_" + variant
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.CatalogTableColumnCommentSetParams](t, name) })
+	}
+	for _, variant := range []string{"literal", "nested"} {
+		name := "not_null_set_" + variant
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.CatalogTableNotNullSetParams](t, name) })
+	}
+	for _, variant := range []string{"literal", "nested"} {
+		name := "not_null_drop_" + variant
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.CatalogTableNotNullDropParams](t, name) })
+	}
 	t.Run("expression", func(t *testing.T) { echoCatalogRecord[generated.SqlExpression](t, "expression") })
 	t.Run("sort_key", func(t *testing.T) { echoCatalogRecord[generated.SortKey](t, "sort_key") })
 	for _, name := range []string{"layout", "empty_layout"} {
