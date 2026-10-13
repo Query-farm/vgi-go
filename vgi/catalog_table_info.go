@@ -57,20 +57,11 @@ type TableInfo struct {
 	// bind_data and skips the per-scan bind RPC.
 	BindResult []byte
 
-	// RequiredFilters is the required WHERE-filter set in conjunctive normal
-	// form (CNF): an AND (outer list) of OR-groups (inner lists) of dotted-path
-	// column references that MUST appear in a WHERE expression for any scan of
-	// this table. A group is satisfied when any one of its member paths has a
-	// filter; every group must be satisfied. So [["accession_number"],
-	// ["ticker","cik"]] means "accession_number AND one of (ticker, cik)".
-	// Paths are top-level names ("country") or struct subfields ("bbox.xmin").
-	// Empty (default) means no enforcement. The C++ extension's optimizer pass
-	// consults this at bind time and throws BinderException listing any
-	// unsatisfied groups. Satisfaction is prefix-based — a filter on a parent
-	// path satisfies every required child path.
-	//
-	// This retains its original wire position before the optional metadata fields.
-	RequiredFilters [][]string
+	// RequiredFilters is an AND of OR-groups of raw component paths.
+	// Example: {{{"bbox", "xmin"}}, {{"ticker"}, {"cik"}}}.
+	// Dots and quotes are literal. Prefix satisfaction operates on components.
+	// Empty disables enforcement; the wire value is always an explicit list.
+	RequiredFilters [][][]string
 	Options         []byte
 	Layout          []byte
 }
@@ -249,18 +240,19 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		cardMaxBuilder.AppendNull()
 	}
 
-	// required_filters (non-null list of list of string) — CNF: outer list is
-	// an AND of OR-groups, each inner list an OR of dotted-path references.
-	rfBuilder := array.NewListBuilder(mem, arrow.ListOf(arrow.BinaryTypes.String))
+	// required_filters: non-null AND-of-OR groups of raw component paths.
+	rfBuilder := array.NewListBuilder(mem, arrow.ListOf(arrow.ListOf(arrow.BinaryTypes.String)))
 	defer rfBuilder.Release()
 	rfBuilder.Append(true)
 	if len(info.RequiredFilters) > 0 {
 		innerListBuilder := rfBuilder.ValueBuilder().(*array.ListBuilder)
 		for _, group := range info.RequiredFilters {
 			innerListBuilder.Append(true)
-			innerVB := innerListBuilder.ValueBuilder().(*array.StringBuilder)
+			pathBuilder := innerListBuilder.ValueBuilder().(*array.ListBuilder)
+			innerVB := pathBuilder.ValueBuilder().(*array.StringBuilder)
 			for _, p := range group {
-				innerVB.Append(p)
+				pathBuilder.Append(true)
+				innerVB.AppendValues(p, nil)
 			}
 		}
 	}

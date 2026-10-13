@@ -676,25 +676,25 @@ func main() {
 		Name:            "rff_simple",
 		Comment:         "rff_simple — requires a filter referencing column 'a'.",
 		Columns:         table.RffSimpleSchema,
-		RequiredFilters: [][]string{{"a"}},
+		RequiredFilters: [][][]string{{{"a"}}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:            "rff_struct",
 		Comment:         "rff_struct — requires filters on both struct subfields s.a and s.b.",
 		Columns:         table.RffStructSchema,
-		RequiredFilters: [][]string{{"s.a"}, {"s.b"}},
+		RequiredFilters: [][][]string{{{"s", "a"}}, {{"s", "b"}}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:            "rff_nested",
 		Comment:         "rff_nested — requires a filter on the 3-deep nested path wrapper.mid.leaf.",
 		Columns:         table.RffNestedSchema,
-		RequiredFilters: [][]string{{"wrapper.mid.leaf"}},
+		RequiredFilters: [][][]string{{{"wrapper", "mid", "leaf"}}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:            "rff_multi",
 		Comment:         "rff_multi — mixed top-level + struct subfield requirements (top AND s.a).",
 		Columns:         table.RffMultiSchema,
-		RequiredFilters: [][]string{{"top"}, {"s.a"}},
+		RequiredFilters: [][][]string{{{"top"}}, {{"s", "a"}}},
 	})
 	// rff_or — genuine OR-group: a single CNF group satisfied by a filter on
 	// EITHER a or b (i.e. [["a","b"]] means "one of (a, b)").
@@ -702,7 +702,7 @@ func main() {
 		Name:            "rff_or",
 		Comment:         "rff_or — requires a filter on either column a OR column b (single OR-group).",
 		Columns:         table.RffNoneSchema,
-		RequiredFilters: [][]string{{"a", "b"}},
+		RequiredFilters: [][][]string{{{"a"}, {"b"}}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:    "rff_none",
@@ -716,7 +716,7 @@ func main() {
 		Name:            "rff_rowid",
 		Comment:         "rff_rowid — row_id virtual column + required bbox.* filters.",
 		Columns:         table.RffRowidSchema,
-		RequiredFilters: [][]string{{"bbox.xmin"}, {"bbox.xmax"}, {"bbox.ymin"}, {"bbox.ymax"}},
+		RequiredFilters: [][][]string{{{"bbox", "xmin"}}, {{"bbox", "xmax"}}, {{"bbox", "ymin"}}, {{"bbox", "ymax"}}},
 	})
 	// rff_parquet / rff_hive / rff_hive_mixed — native read_parquet delegation
 	// with bbox.* required filters (mirrors Overture transportation.segment).
@@ -734,7 +734,7 @@ func main() {
 			{Name: "bbox", Type: rffBboxType},
 			{Name: "other", Type: arrow.PrimitiveTypes.Int64},
 		}, nil),
-		RequiredFilters: [][]string{{"bbox.xmin"}, {"bbox.xmax"}, {"bbox.ymin"}, {"bbox.ymax"}},
+		RequiredFilters: [][][]string{{{"bbox", "xmin"}}, {{"bbox", "xmax"}}, {{"bbox", "ymin"}}, {{"bbox", "ymax"}}},
 	})
 	rffHiveColumns := arrow.NewSchema([]arrow.Field{
 		{Name: "id", Type: arrow.BinaryTypes.String},
@@ -748,13 +748,13 @@ func main() {
 		Name:            "rff_hive",
 		Comment:         "rff_hive — native read_parquet over Hive glob with bbox.* required filters.",
 		Columns:         rffHiveColumns,
-		RequiredFilters: [][]string{{"bbox.xmin"}, {"bbox.xmax"}, {"bbox.ymin"}, {"bbox.ymax"}},
+		RequiredFilters: [][][]string{{{"bbox", "xmin"}}, {{"bbox", "xmax"}}, {{"bbox", "ymin"}}, {{"bbox", "ymax"}}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:            "rff_hive_mixed",
 		Comment:         "rff_hive_mixed — native read_parquet, top-level 'id' + bbox.* required filters.",
 		Columns:         rffHiveColumns,
-		RequiredFilters: [][]string{{"id"}, {"bbox.xmin"}, {"bbox.xmax"}, {"bbox.ymin"}, {"bbox.ymax"}},
+		RequiredFilters: [][][]string{{{"id"}}, {{"bbox", "xmin"}}, {{"bbox", "xmax"}}, {{"bbox", "ymin"}}, {{"bbox", "ymax"}}},
 	})
 	// filter_echo_table — catalog table echoing pushed-down filters, backs
 	// filter_pushdown_through_view.test.

@@ -142,7 +142,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					CardinalityMax:           i64Ptr(200),
 					ColumnStatistics:         []byte{0x07},
 					BindResult:               []byte{0x08},
-					RequiredFilters:          [][]string{{"id"}},
+					RequiredFilters:          [][][]string{{{"id"}}},
 					Options:                  []byte{0x09},
 					Layout:                   []byte{0x0a},
 				})

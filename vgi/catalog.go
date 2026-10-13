@@ -1478,38 +1478,54 @@ func resolveColumnGroupIndices(columns *arrow.Schema, groups [][]string) [][]int
 	return result
 }
 
-// validateRequiredFilters checks a table's CNF required-filter groups. Each
-// OR-group must be non-empty and contain no empty strings, and the leading
-// dotted segment of every path must name a real column on the table. Returns
-// nil when groups is empty (the no-enforcement fast path) or columns is nil.
-func validateRequiredFilters(tableName string, columns *arrow.Schema, groups [][]string) error {
-	if len(groups) == 0 {
-		return nil
-	}
-	columnNames := map[string]struct{}{}
-	if columns != nil {
-		for i := 0; i < columns.NumFields(); i++ {
-			columnNames[columns.Field(i).Name] = struct{}{}
-		}
-	}
+// validateRequiredFilters validates raw paths without splitting or folding names.
+func validateRequiredFilters(tableName string, columns *arrow.Schema, groups [][][]string) error {
 	for _, group := range groups {
 		if len(group) == 0 {
 			return fmt.Errorf("table %q: required_filters must not contain empty groups", tableName)
 		}
+		seen := map[string]bool{}
 		for _, path := range group {
-			if path == "" {
-				return fmt.Errorf("table %q: required_filters must not contain empty strings", tableName)
+			if len(path) == 0 {
+				return fmt.Errorf("table %q: required_filters must not contain empty paths", tableName)
 			}
-			if columns == nil {
-				continue
+			var fields []arrow.Field
+			if columns != nil {
+				fields = columns.Fields()
 			}
-			head := path
-			if idx := strings.IndexByte(path, '.'); idx >= 0 {
-				head = path[:idx]
+			key := ""
+			for i, part := range path {
+				if part == "" || strings.ContainsRune(part, 0) {
+					return fmt.Errorf("invalid required_filters component")
+				}
+				key += fmt.Sprintf("%d:%s", len(part), part)
+				if columns == nil {
+					continue
+				}
+				var found *arrow.Field
+				for j := range fields {
+					if fields[j].Name == part {
+						if found != nil {
+							return fmt.Errorf("ambiguous required_filters component %q", part)
+						}
+						found = &fields[j]
+					}
+				}
+				if found == nil {
+					return fmt.Errorf("unknown required_filters component %q", part)
+				}
+				if i+1 < len(path) {
+					st, ok := found.Type.(*arrow.StructType)
+					if !ok {
+						return fmt.Errorf("non-struct required_filters parent %q", part)
+					}
+					fields = st.Fields()
+				}
 			}
-			if _, ok := columnNames[head]; !ok {
-				return fmt.Errorf("table %q: required_filters path %q references unknown column %q", tableName, path, head)
+			if seen[key] {
+				return fmt.Errorf("duplicate required_filters path")
 			}
+			seen[key] = true
 		}
 	}
 	return nil
@@ -1564,10 +1580,7 @@ func (w *Worker) serializeCatalogTable(schemaPath SchemaPath, ct *CatalogTable) 
 	unique := resolveColumnGroupIndices(columns, ct.Unique)
 	primaryKey := resolveColumnGroupIndices(columns, ct.PrimaryKey)
 
-	// Validate required_filters (CNF): each OR-group must be non-empty and
-	// contain no empty strings, and the leading dotted segment of each path
-	// must be a real column on this table. Mirrors vgi-python's descriptor
-	// validation; struct-subfield validity is left to DuckDB's binder.
+	// Validate every raw path against the complete schema.
 	if err := validateRequiredFilters(ct.Name, columns, ct.RequiredFilters); err != nil {
 		return nil, err
 	}
