@@ -53,6 +53,12 @@ type derivedRecordCase struct {
 // derives from a Go struct rather than assembling by hand.
 func derivedRecordCases() []derivedRecordCase {
 	return []derivedRecordCase{
+		{"CatalogCapabilities", reflect.TypeOf(generated.CatalogCapabilities{}), generated.CatalogCapabilitiesSchema},
+		{"OptionDefinitions", reflect.TypeOf(generated.OptionDefinitions{}), generated.OptionDefinitionsSchema},
+		{"OptionChanges", reflect.TypeOf(generated.OptionChanges{}), generated.OptionChangesSchema},
+		{"OptionState", reflect.TypeOf(generated.OptionState{}), generated.OptionStateSchema},
+		{"RequiredFilterPaths", reflect.TypeOf(generated.RequiredFilterPaths{}), generated.RequiredFilterPathsSchema},
+
 		{"BindRequest", reflect.TypeOf(BindRequestWire{}), generated.BindRequestSchema},
 		{"CopyFromContext", reflect.TypeOf(CopyFromContextWire{}), generated.CopyFromContextSchema},
 		{"CopyToContext", reflect.TypeOf(CopyToContextWire{}), generated.CopyToContextSchema},

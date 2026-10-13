@@ -365,6 +365,9 @@ func (m *MemoryCatalog) schemaGet(_ *vgirpc.CallContext, req *CatalogSchemaGetPa
 }
 
 func (m *MemoryCatalog) schemaCreate(req *CatalogSchemaCreateParams) error {
+	if req.Options != nil {
+		return methodNotImplemented("catalog_schema_create options require negotiated vgi.schema.options.create.v1")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	existing, st, err := m.schema(req.AttachOpaqueData, req.Path)

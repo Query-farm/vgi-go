@@ -592,6 +592,8 @@ type SchemaInfo struct {
 	// guarantee — the C++ client skips the corresponding bulk RPC and any
 	// per-name lookup for that kind. Nil disables the optimisation entirely.
 	EstimatedObjectCount map[string]int64
+	// Options is serialized OptionState IPC; nil means unavailable.
+	Options []byte
 }
 
 var schemaInfoSchema = generated.SchemaInfoSchema
@@ -651,12 +653,21 @@ func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error) {
 		}
 	}
 
+	optionsBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	defer optionsBuilder.Release()
+	if info.Options == nil {
+		optionsBuilder.AppendNull()
+	} else {
+		optionsBuilder.Append(info.Options)
+	}
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
 		attachOpaqueDataBuilder.NewArray(),
 		pathBuilder.NewArray(),
 		eocBuilder.NewArray(),
+		optionsBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

@@ -355,3 +355,23 @@ func TestMemoryCatalogContentHashEtag(t *testing.T) {
 		t.Fatalf("after DDL: not_modified=%v etag unchanged=%v", after.NotModified, *after.Etag == *full.Etag)
 	}
 }
+
+func TestMemoryCatalogRejectsUnnegotiatedSchemaOptionsBeforeMutation(t *testing.T) {
+	parent := vgi.NewWorker(vgi.WithCatalogName("parent"))
+	parent.RegisterMemoryCatalog(vgi.NewMemoryCatalog("mem"))
+	c := newContentsClient(t, parent)
+	attached := c.attach("mem")
+	err := c.exec("catalog_schema_create", generated.CatalogSchemaCreateParamsSchema, map[string]any{
+		"attach_opaque_data": attached.AttachOpaqueData, "path": []string{"unsupported"},
+		"on_conflict": "ERROR", "options": []byte("unsupported option payload"),
+	})
+	if err == nil {
+		t.Fatal("unsupported schema options were silently accepted")
+	}
+	if got := c.schemaNames(attached.AttachOpaqueData); !slices.Equal(got, []string{"main"}) {
+		t.Fatalf("unsupported operation mutated schemas: %v", got)
+	}
+	if got := c.version(attached.AttachOpaqueData); got != 1 {
+		t.Fatalf("version changed to %d", got)
+	}
+}

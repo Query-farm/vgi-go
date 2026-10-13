@@ -972,6 +972,9 @@ func (w workerService) CatalogSchemaGet(ctx context.Context, callCtx *vgirpc.Cal
 
 // CatalogSchemaCreate serves vgi.v2 catalog_schema_create.
 func (w workerService) CatalogSchemaCreate(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogSchemaCreateParams) error {
+	if req.Options != nil {
+		return methodNotImplemented("catalog_schema_create options require negotiated vgi.schema.options.create.v1")
+	}
 	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 		return w.writableSchemaCreate(wc, req.Path, parseOnConflict(req.OnConflict), req.Comment)
 	}

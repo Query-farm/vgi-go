@@ -113,6 +113,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					Tags:                 map[string]string{"owner": "data-eng"},
 					AttachOpaqueData:     []byte("attach"),
 					EstimatedObjectCount: map[string]int64{"table": 7},
+					Options:              []byte("option-state-ipc"),
 				})
 			},
 		},

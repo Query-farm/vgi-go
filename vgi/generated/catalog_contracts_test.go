@@ -86,6 +86,10 @@ func echoCatalogRecord[T any](t *testing.T, name string) {
 }
 
 func TestCatalogContractPythonCorpus(t *testing.T) {
+	for _, name := range []string{"capabilities", "empty_capabilities"} {
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.CatalogCapabilities](t, name) })
+	}
+	t.Run("definitions", func(t *testing.T) { echoCatalogRecord[generated.OptionDefinitions](t, "definitions") })
 	for _, name := range []string{"changes", "reset_only"} {
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.OptionChanges](t, name) })
 	}
