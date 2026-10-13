@@ -177,17 +177,21 @@ type MacroCreateRequestWire struct {
 
 // TableCreateRequestWire is for catalog_table_create.
 type TableCreateRequestWire struct {
-	AttachOpaqueData      []byte    `vgirpc:"attach_opaque_data"`
-	SchemaPath            []string  `vgirpc:"schema_path"`
-	Name                  string    `vgirpc:"name"`
-	Columns               []byte    `vgirpc:"columns"`
-	OnConflict            string    `vgirpc:"on_conflict,enum"`
-	NotNullConstraints    []int32   `vgirpc:"not_null_constraints"`
-	UniqueConstraints     [][]int32 `vgirpc:"unique_constraints"`
-	CheckConstraints      []string  `vgirpc:"check_constraints"`
-	PrimaryKeyConstraints [][]int32 `vgirpc:"primary_key_constraints"`
-	ForeignKeyConstraints [][]byte  `vgirpc:"foreign_key_constraints"`
-	TransactionOpaqueData *[]byte   `vgirpc:"transaction_opaque_data"`
+	AttachOpaqueData      []byte             `vgirpc:"attach_opaque_data"`
+	SchemaPath            []string           `vgirpc:"schema_path"`
+	Name                  string             `vgirpc:"name"`
+	Columns               []byte             `vgirpc:"columns"`
+	OnConflict            string             `vgirpc:"on_conflict,enum"`
+	NotNullConstraints    []int32            `vgirpc:"not_null_constraints"`
+	UniqueConstraints     [][]int32          `vgirpc:"unique_constraints"`
+	CheckConstraints      []string           `vgirpc:"check_constraints"`
+	PrimaryKeyConstraints [][]int32          `vgirpc:"primary_key_constraints"`
+	ForeignKeyConstraints [][]byte           `vgirpc:"foreign_key_constraints"`
+	TransactionOpaqueData *[]byte            `vgirpc:"transaction_opaque_data"`
+	Comment               *string            `vgirpc:"comment"`
+	Tags                  *map[string]string `vgirpc:"tags"`
+	Options               *[]byte            `vgirpc:"options"`
+	Layout                *[]byte            `vgirpc:"layout"`
 }
 
 // ---------------------------------------------------------------------------
@@ -1098,6 +1102,9 @@ func (w workerService) CatalogTableGet(ctx context.Context, callCtx *vgirpc.Call
 
 // CatalogTableCreate serves vgi.v2 catalog_table_create.
 func (w workerService) CatalogTableCreate(ctx context.Context, callCtx *vgirpc.CallContext, req TableCreateRequestWire) error {
+	if req.Comment != nil || req.Tags != nil || req.Options != nil || req.Layout != nil {
+		return methodNotImplemented("catalog_table_create")
+	}
 	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 		return w.writableTableCreate(wc, req)
 	}

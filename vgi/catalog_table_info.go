@@ -69,8 +69,10 @@ type TableInfo struct {
 	// unsatisfied groups. Satisfaction is prefix-based — a filter on a parent
 	// path satisfies every required child path.
 	//
-	// This is the trailing field of the TableInfo wire schema.
+	// This retains its original wire position before the optional metadata fields.
 	RequiredFilters [][]string
+	Options         []byte
+	Layout          []byte
 }
 
 var tableInfoSchema = generated.TableInfoSchema
@@ -285,6 +287,8 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		columnStatsArr,
 		bindResultArr,
 		rfBuilder.NewArray(),
+		appendOptBinary(info.Options),
+		appendOptBinary(info.Layout),
 	}
 	defer func() {
 		for _, c := range cols {

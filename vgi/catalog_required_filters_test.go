@@ -12,7 +12,7 @@ import (
 )
 
 // readRequiredFilters round-trips the serialized TableInfo IPC bytes and
-// extracts the trailing required_filters column (list<list<utf8>>) as [][]string.
+// extracts the required_filters column (list<list<utf8>>) as [][]string.
 func readRequiredFilters(t *testing.T, info *TableInfo) [][]string {
 	t.Helper()
 	data, err := SerializeTableInfo(info)
@@ -29,15 +29,15 @@ func readRequiredFilters(t *testing.T, info *TableInfo) [][]string {
 	}
 	rec := reader.RecordBatch()
 
-	field := rec.Schema().Field(rec.Schema().NumFields() - 1)
+	field := rec.Schema().Field(20)
 	if field.Name != "required_filters" {
-		t.Fatalf("trailing field = %q, want required_filters", field.Name)
+		t.Fatalf("field 20 = %q, want required_filters", field.Name)
 	}
 	if !arrow.TypeEqual(field.Type, arrow.ListOf(arrow.ListOf(arrow.BinaryTypes.String))) {
 		t.Fatalf("required_filters type = %s, want list<list<utf8>>", field.Type)
 	}
 
-	outer := rec.Column(rec.Schema().NumFields() - 1).(*array.List)
+	outer := rec.Column(20).(*array.List)
 	if outer.IsNull(0) {
 		return nil
 	}

@@ -11,6 +11,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -86,6 +87,17 @@ func echoCatalogRecord[T any](t *testing.T, name string) {
 }
 
 func TestCatalogContractPythonCorpus(t *testing.T) {
+	t.Run("expression", func(t *testing.T) { echoCatalogRecord[generated.SqlExpression](t, "expression") })
+	t.Run("sort_key", func(t *testing.T) { echoCatalogRecord[generated.SortKey](t, "sort_key") })
+	for _, name := range []string{"layout", "empty_layout"} {
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.TableLayout](t, name) })
+	}
+	for _, name := range []string{"layout_change", "layout_clear"} {
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.TableLayoutChange](t, name) })
+	}
+	for _, name := range []string{"table_create", "table_create_legacy"} {
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.TableCreateRequestWire](t, name) })
+	}
 	for _, name := range []string{"capabilities", "empty_capabilities"} {
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.CatalogCapabilities](t, name) })
 	}

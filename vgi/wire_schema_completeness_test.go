@@ -143,6 +143,8 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					ColumnStatistics:         []byte{0x07},
 					BindResult:               []byte{0x08},
 					RequiredFilters:          [][]string{{"id"}},
+					Options:                  []byte{0x09},
+					Layout:                   []byte{0x0a},
 				})
 			},
 		},

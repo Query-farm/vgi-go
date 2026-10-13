@@ -21,7 +21,10 @@ var vgiV2Unimplemented = []string{
 	"CatalogSchemaAlterOptions",
 	"CatalogSchemaContentsIndexes",
 	"CatalogSchemaOptionDefinitions",
+	"CatalogTableAlterLayout",
+	"CatalogTableAlterOptions",
 	"CatalogTableColumnCommentSet",
+	"CatalogTableOptionDefinitions",
 }
 
 // workerService embeds unimplementedVgiService, so a method it fails to

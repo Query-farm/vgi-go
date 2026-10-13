@@ -53,6 +53,11 @@ type derivedRecordCase struct {
 // derives from a Go struct rather than assembling by hand.
 func derivedRecordCases() []derivedRecordCase {
 	return []derivedRecordCase{
+		{"SqlExpression", reflect.TypeOf(generated.SqlExpression{}), generated.SqlExpressionSchema},
+		{"SortKey", reflect.TypeOf(generated.SortKey{}), generated.SortKeySchema},
+		{"TableLayout", reflect.TypeOf(generated.TableLayout{}), generated.TableLayoutSchema},
+		{"TableLayoutChange", reflect.TypeOf(generated.TableLayoutChange{}), generated.TableLayoutChangeSchema},
+
 		{"CatalogCapabilities", reflect.TypeOf(generated.CatalogCapabilities{}), generated.CatalogCapabilitiesSchema},
 		{"OptionDefinitions", reflect.TypeOf(generated.OptionDefinitions{}), generated.OptionDefinitionsSchema},
 		{"OptionChanges", reflect.TypeOf(generated.OptionChanges{}), generated.OptionChangesSchema},

@@ -59,7 +59,7 @@ func TestWorkerReflectionDiscovery(t *testing.T) {
 // Every SDK hosts the whole of vgi.v2 with exactly the reference's schemas, so
 // every SDK reports this hash. It changes only with vgi.v2's protocol version
 // (2.1.0): a mismatch here is schema drift, not a constant to update.
-const vgiV2ReferenceProtocolHash = "98309fc84d6bdb9c01c70986a3ddc53596a9dfaba4325297be22f601e3a4e6a2"
+const vgiV2ReferenceProtocolHash = "880e67e755301062698475d23ae8922a6b868d8d0b70ddb195edd96f6be385a4"
 
 // describeVgiV2 starts an HTTP worker and returns vgi.v2's Reflection.v1
 // description.

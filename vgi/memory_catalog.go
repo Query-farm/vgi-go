@@ -561,6 +561,9 @@ func (m *MemoryCatalog) dropObject(attach []byte, path SchemaPath, name, kind st
 }
 
 func (m *MemoryCatalog) tableCreate(req *TableCreateRequestWire) error {
+	if req.Comment != nil || req.Tags != nil || req.Options != nil || req.Layout != nil {
+		return methodNotImplemented("catalog_table_create")
+	}
 	if len(req.Columns) == 0 {
 		return memoryErr("catalog_table_create: missing columns schema")
 	}
