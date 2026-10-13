@@ -14,6 +14,8 @@ import (
 
 	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 )
 
 // MemoryCatalog is an in-memory catalog that accepts DDL — CREATE / DROP
@@ -128,6 +130,8 @@ func NewMemoryCatalog(name string, opts ...MemoryCatalogOption) *MemoryCatalog {
 		"catalog_view_get":                  memoryMethod(m.viewGet),
 		"catalog_view_create":               memoryVoid(m.viewCreate),
 		"catalog_view_drop":                 memoryVoid(m.viewDrop),
+		"catalog_view_comment_set":          memoryVoid(m.viewCommentSet),
+		"catalog_view_column_comment_set":   memoryVoid(m.viewColumnCommentSet),
 		"catalog_macro_get":                 memoryMethod(m.macroGet),
 	}
 	return m
@@ -595,11 +599,18 @@ func (m *MemoryCatalog) viewCreate(req *CatalogViewCreateParams) error {
 	if req.Security != "regular" {
 		return fmt.Errorf("view security mode %q is unsupported", req.Security)
 	}
+	if req.ColumnComments != nil {
+		for name := range *req.ColumnComments {
+			if name == "" || strings.ContainsRune(name, 0) {
+				return memoryErr("view column comments require raw output identifiers")
+			}
+		}
+	}
 	var aliases []string
 	if req.Aliases != nil {
 		aliases = slices.Clone(*req.Aliases)
 	}
-	item, err := SerializeViewInfo(&ViewInfo{Name: req.Name, SchemaPath: slices.Clone(req.SchemaPath), Definition: req.Definition, Aliases: aliases})
+	item, err := SerializeViewInfo(&ViewInfo{Name: req.Name, SchemaPath: slices.Clone(req.SchemaPath), Definition: req.Definition, Aliases: aliases, Comment: req.Comment, Tags: optionalViewMap(req.Tags), ColumnComments: optionalViewMap(req.ColumnComments)})
 	if err != nil {
 		return err
 	}
@@ -608,4 +619,86 @@ func (m *MemoryCatalog) viewCreate(req *CatalogViewCreateParams) error {
 
 func (m *MemoryCatalog) viewDrop(req *CatalogViewDropParams) error {
 	return m.dropObject(req.AttachOpaqueData, req.SchemaPath, req.Name, "View", req.IgnoreNotFound, true)
+}
+
+func optionalViewMap(values *map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	return maps.Clone(*values)
+}
+
+func (m *MemoryCatalog) viewCommentSet(req *CatalogViewCommentSetParams) error {
+	return m.changeViewComment(req.AttachOpaqueData, req.SchemaPath, req.Name, nil, req.Comment, req.IgnoreNotFound)
+}
+
+func (m *MemoryCatalog) viewColumnCommentSet(req *CatalogViewColumnCommentSetParams) error {
+	if len(req.ColumnPath) != 1 || req.ColumnPath[0] == "" || strings.ContainsRune(req.ColumnPath[0], 0) {
+		return memoryErr("view column comments require one raw output identifier")
+	}
+	return m.changeViewComment(req.AttachOpaqueData, req.SchemaPath, req.Name, req.ColumnPath, req.Comment, req.IgnoreNotFound)
+}
+
+func (m *MemoryCatalog) changeViewComment(attach []byte, path []string, name string, columnPath []string, comment *string, ignore bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	schema, state, err := m.schema(attach, path)
+	if err != nil {
+		return err
+	}
+	key := strings.ToLower(name)
+	var view memoryObject
+	var found bool
+	if schema != nil {
+		view, found = schema.views[key]
+	}
+	if !found {
+		if ignore {
+			return nil
+		}
+		return memoryErr("View with name %s does not exist", name)
+	}
+	batch, err := DeserializeRecordBatch(view.item)
+	if err != nil {
+		return err
+	}
+	defer batch.Release()
+	field := "comment"
+	info := &ViewInfo{Comment: comment}
+	if columnPath != nil {
+		field = "column_comments"
+		values := batch.Column(batch.Schema().FieldIndices(field)[0]).(*array.Map)
+		keys, items := values.Keys().(*array.String), values.Items().(*array.String)
+		begin, end := values.ValueOffsets(0)
+		info.ColumnComments = map[string]string{}
+		for i := begin; i < end; i++ {
+			info.ColumnComments[keys.Value(int(i))] = items.Value(int(i))
+		}
+		if comment == nil {
+			delete(info.ColumnComments, columnPath[0])
+		} else {
+			info.ColumnComments[columnPath[0]] = *comment
+		}
+	}
+	encoded, err := SerializeViewInfo(info)
+	if err != nil {
+		return err
+	}
+	replacement, err := DeserializeRecordBatch(encoded)
+	if err != nil {
+		return err
+	}
+	defer replacement.Release()
+	columns := append([]arrow.Array(nil), batch.Columns()...)
+	index := batch.Schema().FieldIndices(field)[0]
+	columns[index] = replacement.Column(replacement.Schema().FieldIndices(field)[0])
+	updated := array.NewRecordBatch(batch.Schema(), columns, batch.NumRows())
+	defer updated.Release()
+	view.item, err = SerializeRecordBatch(updated)
+	if err != nil {
+		return err
+	}
+	schema.views[key] = view
+	state.version++
+	return nil
 }

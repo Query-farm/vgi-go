@@ -150,10 +150,11 @@ func TestCatalogContractPythonCorpus(t *testing.T) {
 }
 
 func TestViewAliasesMatchPythonCorpus(t *testing.T) {
+	comment := "view comment"
 	encoded, err := vgi.SerializeViewInfo(&vgi.ViewInfo{
 		Name: "view.with.dot", SchemaPath: []string{"one.two", "nested"},
 		Definition: "SELECT 1 AS original, 2 AS second", Aliases: []string{"a.b", "with\"quote"},
-		ColumnComments: map[string]string{"a.b": "kept"}, Comment: "view comment", Tags: map[string]string{"team": "one"},
+		ColumnComments: map[string]string{"a.b": "kept"}, Comment: &comment, Tags: map[string]string{"team": "one"},
 	})
 	if err != nil {
 		t.Fatal(err)

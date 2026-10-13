@@ -1236,7 +1236,7 @@ func (w workerService) CatalogViewGet(ctx context.Context, callCtx *vgirpc.CallC
 			info := &ViewInfo{
 				Name:           cv.Name,
 				SchemaPath:     req.SchemaPath,
-				Comment:        cv.Comment,
+				Comment:        descriptorComment(cv.Comment),
 				Tags:           cv.Tags,
 				Definition:     cv.Definition,
 				Aliases:        slices.Clone(cv.Aliases),
@@ -1266,6 +1266,11 @@ func (w workerService) CatalogViewDrop(ctx context.Context, callCtx *vgirpc.Call
 // CatalogViewRename serves vgi.v2 catalog_view_rename (read-only).
 func (w workerService) CatalogViewRename(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogViewRenameParams) error {
 	return readOnlyErr("catalog_view_rename")
+}
+
+// CatalogViewColumnCommentSet serves the read-only descriptor catalog.
+func (w workerService) CatalogViewColumnCommentSet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogViewColumnCommentSetParams) error {
+	return readOnlyErr("catalog_view_column_comment_set")
 }
 
 // CatalogViewCommentSet serves vgi.v2 catalog_view_comment_set (read-only).

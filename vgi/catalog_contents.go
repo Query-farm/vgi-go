@@ -137,7 +137,7 @@ func (w *Worker) listViewItems(_ []byte, path SchemaPath) ([][]byte, error) {
 		data, err := SerializeViewInfo(&ViewInfo{
 			Name:           cv.Name,
 			SchemaPath:     path,
-			Comment:        cv.Comment,
+			Comment:        descriptorComment(cv.Comment),
 			Tags:           cv.Tags,
 			Definition:     cv.Definition,
 			Aliases:        cv.Aliases,

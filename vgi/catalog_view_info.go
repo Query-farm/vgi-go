@@ -39,9 +39,10 @@ type CatalogView struct {
 
 // ViewInfo describes a view in the catalog for wire serialization.
 type ViewInfo struct {
-	Name           string
-	SchemaPath     []string
-	Comment        string
+	Name       string
+	SchemaPath []string
+	// Comment distinguishes no comment (nil) from a present empty comment.
+	Comment        *string
 	Tags           map[string]string
 	Definition     string
 	Aliases        []string
@@ -67,8 +68,8 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 	// comment
 	commentBuilder := array.NewStringBuilder(mem)
 	defer commentBuilder.Release()
-	if info.Comment != "" {
-		commentBuilder.Append(info.Comment)
+	if info.Comment != nil {
+		commentBuilder.Append(*info.Comment)
 	} else {
 		commentBuilder.AppendNull()
 	}
@@ -155,4 +156,12 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// descriptorComment retains the static descriptor's historical zero-value default.
+func descriptorComment(comment string) *string {
+	if comment == "" {
+		return nil
+	}
+	return &comment
 }

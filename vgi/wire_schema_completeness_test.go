@@ -155,7 +155,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 				return SerializeViewInfo(&ViewInfo{
 					Name:           "recent_events",
 					SchemaPath:     []string{"main"},
-					Comment:        "last 7 days",
+					Comment:        descriptorComment("last 7 days"),
 					Tags:           map[string]string{"tier": "hot"},
 					Definition:     "SELECT * FROM events",
 					ColumnComments: map[string]string{"id": "primary key"},
