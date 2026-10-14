@@ -60,6 +60,7 @@ func derivedRecordCases() []derivedRecordCase {
 
 		{"CatalogCapabilities", reflect.TypeOf(generated.CatalogCapabilities{}), generated.CatalogCapabilitiesSchema},
 		{"OptionDefinitions", reflect.TypeOf(generated.OptionDefinitions{}), generated.OptionDefinitionsSchema},
+		{"CatalogMetadataChanges", reflect.TypeOf(generated.CatalogMetadataChanges{}), generated.CatalogMetadataChangesSchema},
 		{"OptionChanges", reflect.TypeOf(generated.OptionChanges{}), generated.OptionChangesSchema},
 		{"OptionState", reflect.TypeOf(generated.OptionState{}), generated.OptionStateSchema},
 		{"RequiredFilterPaths", reflect.TypeOf(generated.RequiredFilterPaths{}), generated.RequiredFilterPathsSchema},

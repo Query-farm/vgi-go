@@ -18,6 +18,7 @@ var vgiV2Unimplemented = []string{
 	"CatalogIndexCreate",
 	"CatalogIndexDrop",
 	"CatalogIndexGet",
+	"CatalogSchemaAlterMetadata",
 	"CatalogSchemaAlterOptions",
 	"CatalogSchemaContentsIndexes",
 	"CatalogSchemaOptionDefinitions",

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -81,12 +82,45 @@ func echoCatalogRecord[T any](t *testing.T, name string) {
 	}
 	defer response.Release()
 	got := catalogBatch(t, response.Batch.Column(0).(*array.Binary).Value(0))
+	// Arrow maps are unordered. Go emits canonical key order; preserve all
+	// keys/values while comparing the other patch columns exactly.
+	if name == "metadata_patch" {
+		if !want.Schema().Equal(got.Schema()) {
+			t.Fatal("metadata schema changed")
+		}
+		for i := range want.NumCols() {
+			if want.ColumnName(int(i)) == "set_tags" {
+				continue
+			}
+			if !array.Equal(want.Column(int(i)), got.Column(int(i))) {
+				t.Fatalf("patch field %s changed", want.ColumnName(int(i)))
+			}
+		}
+		tags := got.Column(2).(*array.Map)
+		begin, end := tags.ValueOffsets(0)
+		if end-begin != 3 {
+			t.Fatal("tag keys lost or duplicated")
+		}
+		keys := tags.Keys().(*array.String)
+		values := tags.Items().(*array.String)
+		decoded := map[string]string{}
+		for i := begin; i < end; i++ {
+			decoded[keys.Value(int(i))] = values.Value(int(i))
+		}
+		if !maps.Equal(decoded, map[string]string{"a.b": "", "__proto__": "literal", "": "empty-key"}) {
+			t.Fatalf("tag metadata changed: %v", decoded)
+		}
+		return
+	}
 	if !array.RecordEqual(want, got) {
 		t.Fatalf("%s changed across the typed codec:\nwant %s\ngot %s", name, want, got)
 	}
 }
 
 func TestCatalogContractPythonCorpus(t *testing.T) {
+	for _, name := range []string{"metadata_patch", "metadata_clear_comment", "metadata_noop"} {
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.CatalogMetadataChanges](t, name) })
+	}
 	for _, variant := range []string{"literal", "nested"} {
 		name := "column_add_" + variant
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.CatalogTableColumnAddParams](t, name) })
