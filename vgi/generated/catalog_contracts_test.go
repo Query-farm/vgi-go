@@ -118,6 +118,13 @@ func echoCatalogRecord[T any](t *testing.T, name string) {
 }
 
 func TestCatalogContractPythonCorpus(t *testing.T) {
+	t.Run("query_offer", func(t *testing.T) { echoCatalogRecord[generated.ClientQueryCapabilities](t, "query_offer") })
+	t.Run("query_capabilities", func(t *testing.T) { echoCatalogRecord[generated.QueryCapabilities](t, "query_capabilities") })
+	t.Run("query_context", func(t *testing.T) { echoCatalogRecord[generated.QueryEvaluationContext](t, "query_context") })
+	t.Run("query_object_reference", func(t *testing.T) { echoCatalogRecord[generated.QueryObjectReference](t, "query_object_reference") })
+	t.Run("query_prepare", func(t *testing.T) { echoCatalogRecord[generated.CatalogQueryPrepareRequest](t, "query_prepare") })
+	t.Run("query_accepted", func(t *testing.T) { echoCatalogRecord[generated.CatalogQueryPrepareResult](t, "query_accepted") })
+	t.Run("query_declined", func(t *testing.T) { echoCatalogRecord[generated.CatalogQueryPrepareResult](t, "query_declined") })
 	for _, name := range []string{"object_ref", "trigger_ref"} {
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.CatalogObjectRef](t, name) })
 	}
@@ -187,6 +194,46 @@ func TestCatalogContractPythonCorpus(t *testing.T) {
 	}
 	for _, name := range []string{"paths", "empty_paths"} {
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.RequiredFilterPaths](t, name) })
+	}
+}
+
+func TestQueryParameterBatchPreservesMappingAndMetadata(t *testing.T) {
+	for _, name := range []string{"query_parameters", "query_empty_parameters"} {
+		t.Run(name, func(t *testing.T) {
+			source := catalogBatch(t, catalogFixture(t, name))
+			var encoded bytes.Buffer
+			writer := ipc.NewWriter(&encoded, ipc.WithSchema(source.Schema()))
+			if err := writer.Write(source); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			restored := catalogBatch(t, encoded.Bytes())
+			if !array.RecordEqual(source, restored) || !source.Schema().Metadata().Equal(restored.Schema().Metadata()) || restored.NumRows() != 1 {
+				t.Fatal("parameter batch changed across Arrow IPC")
+			}
+			wantMode := "named"
+			if name == "query_empty_parameters" {
+				wantMode = "positional"
+			}
+			if mode, ok := restored.Schema().Metadata().GetValue("vgi.query.parameters.v1"); !ok || mode != wantMode {
+				t.Fatal("parameter mapping metadata lost")
+			}
+			if name == "query_empty_parameters" {
+				if restored.NumCols() != 0 {
+					t.Fatal("empty parameter set gained columns")
+				}
+			} else {
+				if !restored.Column(0).IsNull(0) {
+					t.Fatal("typed NULL lost")
+				}
+				field := restored.Schema().Field(1).Type.(*arrow.StructType).Field(0)
+				if value, ok := field.Metadata.GetValue("nested"); !ok || value != "retained" {
+					t.Fatal("nested metadata lost")
+				}
+			}
+		})
 	}
 }
 

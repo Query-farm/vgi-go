@@ -19,6 +19,8 @@ var vgiV2Unimplemented = []string{
 	"CatalogIndexCreate",
 	"CatalogIndexDrop",
 	"CatalogIndexGet",
+	"CatalogQueryPrepare",
+	"CatalogQueryRelease",
 	"CatalogSchemaAlterMetadata",
 	"CatalogSchemaAlterOptions",
 	"CatalogSchemaContentsIndexes",
