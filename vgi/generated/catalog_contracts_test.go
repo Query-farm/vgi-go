@@ -118,6 +118,13 @@ func echoCatalogRecord[T any](t *testing.T, name string) {
 }
 
 func TestCatalogContractPythonCorpus(t *testing.T) {
+	for _, name := range []string{"object_ref", "trigger_ref"} {
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.CatalogObjectRef](t, name) })
+	}
+	t.Run("object_dependency", func(t *testing.T) { echoCatalogRecord[generated.ObjectDependency](t, "object_dependency") })
+	for _, name := range []string{"dependency_snapshot", "empty_dependency_snapshot"} {
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.DependencySnapshot](t, name) })
+	}
 	for _, name := range []string{"metadata_patch", "metadata_clear_comment", "metadata_noop"} {
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.CatalogMetadataChanges](t, name) })
 	}

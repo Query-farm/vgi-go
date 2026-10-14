@@ -15,6 +15,7 @@ import (
 
 // vgiV2Unimplemented is every vgi.v2 method this SDK hosts only to refuse.
 var vgiV2Unimplemented = []string{
+	"CatalogDependencies",
 	"CatalogIndexCreate",
 	"CatalogIndexDrop",
 	"CatalogIndexGet",
