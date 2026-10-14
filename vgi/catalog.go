@@ -171,8 +171,9 @@ type MacroCreateRequestWire struct {
 	// bytes): one nullable field per parameter, in Parameters order, each
 	// carrying its description via the vgi_doc field-metadata key. nil when no
 	// per-parameter docs are supplied. Decode with MacroParameterDocsFromSchema.
-	ArgumentsSchema       *[]byte `vgirpc:"arguments_schema"`
-	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
+	ArgumentsSchema       *[]byte                    `vgirpc:"arguments_schema"`
+	TransactionOpaqueData *[]byte                    `vgirpc:"transaction_opaque_data"`
+	Overloads             *[]generated.MacroOverload `vgirpc:"overloads"`
 }
 
 // TableCreateRequestWire is for catalog_table_create.

@@ -118,6 +118,13 @@ func echoCatalogRecord[T any](t *testing.T, name string) {
 }
 
 func TestCatalogContractPythonCorpus(t *testing.T) {
+	for _, name := range []string{"macro_parameter", "macro_parameter_expression", "macro_parameter_untyped"} {
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.MacroParameter](t, name) })
+	}
+	t.Run("macro_overload", func(t *testing.T) { echoCatalogRecord[generated.MacroOverload](t, "macro_overload") })
+	for _, name := range []string{"macro_create", "macro_create_legacy"} {
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.MacroCreateRequestWire](t, name) })
+	}
 	t.Run("query_offer", func(t *testing.T) { echoCatalogRecord[generated.ClientQueryCapabilities](t, "query_offer") })
 	t.Run("query_capabilities", func(t *testing.T) { echoCatalogRecord[generated.QueryCapabilities](t, "query_capabilities") })
 	t.Run("query_context", func(t *testing.T) { echoCatalogRecord[generated.QueryEvaluationContext](t, "query_context") })
@@ -264,5 +271,58 @@ func TestViewSecurityMatchesPythonCorpus(t *testing.T) {
 	}
 	if _, err := vgi.SerializeViewInfo(&vgi.ViewInfo{Security: "unknown"}); err == nil {
 		t.Fatal("unknown security mode accepted")
+	}
+}
+
+func TestLogicalTypeAndOpaqueMacroCorpus(t *testing.T) {
+	for _, name := range []string{"logical_tuple", "logical_struct", "logical_variant_sql_null", "logical_variant_null", "logical_variant_absent", "logical_variant_null_member", "macro_info", "macro_info_legacy"} {
+		t.Run(name, func(t *testing.T) {
+			original := catalogBatch(t, catalogFixture(t, name))
+			var encoded bytes.Buffer
+			writer := ipc.NewWriter(&encoded, ipc.WithSchema(original.Schema()))
+			if err := writer.Write(original); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			restored := catalogBatch(t, encoded.Bytes())
+			if !array.RecordEqual(original, restored) {
+				t.Fatal("logical storage changed across IPC")
+			}
+			kind, annotated := restored.Schema().Field(0).Metadata.GetValue("vgi.logical_type.v1")
+			if name == "logical_tuple" && (!annotated || kind != "tuple") {
+				t.Fatal("tuple identity lost")
+			}
+			if name == "logical_struct" && annotated {
+				t.Fatal("plain struct became a tuple")
+			}
+			if name == "logical_variant_sql_null" && !restored.Column(0).IsNull(0) {
+				t.Fatal("SQL NULL lost")
+			}
+			if name == "logical_variant_null" || name == "logical_variant_absent" || name == "logical_variant_null_member" {
+				if !annotated || kind != "variant" || restored.Column(0).IsNull(0) {
+					t.Fatal("present variant lost")
+				}
+				before := original.Column(0).(*array.Binary).Value(0)
+				after := restored.Column(0).(*array.Binary).Value(0)
+				if !bytes.Equal(before, after) {
+					t.Fatal("variant scalar envelope changed")
+				}
+				inner := catalogBatch(t, after)
+				if name == "logical_variant_null" && inner.Schema().Field(0).Type.ID() != arrow.NULL {
+					t.Fatal("variant null identity lost")
+				}
+				if name != "logical_variant_null" {
+					expected := 0
+					if name == "logical_variant_null_member" {
+						expected = 1
+					}
+					if inner.Schema().Field(0).Type.(*arrow.StructType).NumFields() != expected {
+						t.Fatal("missing object member confused with NULL")
+					}
+				}
+			}
+		})
 	}
 }

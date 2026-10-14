@@ -53,6 +53,8 @@ type wireRecordCase struct {
 	// build returns the IPC bytes for a single record with every field of the
 	// generated schema populated with a non-null value.
 	build func() ([]byte, error)
+	// Fields this legacy builder cannot express, with a concrete reason.
+	expectedNull map[string]string
 }
 
 func strPtr(s string) *string             { return &s }
@@ -209,8 +211,9 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 			},
 		},
 		{
-			origin: "MacroInfo",
-			schema: generated.MacroInfoSchema,
+			origin:       "MacroInfo",
+			schema:       generated.MacroInfoSchema,
+			expectedNull: map[string]string{"overloads": "The Go catalog adapter exposes legacy single definitions only and does not advertise overload-family support; generated MacroParameter/MacroOverload and opaque family preservation are covered by catalog_contracts_test.go."},
 			build: func() ([]byte, error) {
 				return SerializeMacroInfo(&MacroInfo{
 					Name:                   "add_one",
@@ -361,6 +364,12 @@ func TestWireRecordSchemasMatchGenerated(t *testing.T) {
 				t.Fatalf("%s: expected a single-row record, got %d rows", tc.origin, batch.NumRows())
 			}
 			for i, col := range batch.Columns() {
+				if reason, expected := tc.expectedNull[tc.schema.Field(i).Name]; expected {
+					if reason == "" || !col.IsNull(0) {
+						t.Errorf("%s: legacy-only field %q must be explicitly NULL: %s", tc.origin, tc.schema.Field(i).Name, reason)
+					}
+					continue
+				}
 				if col.IsNull(0) {
 					// The builder has a column for this field but never wrote
 					// the value into it. On the wire that is indistinguishable

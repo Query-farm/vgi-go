@@ -161,6 +161,11 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 	} else {
 		argsBuilder.Append([]byte{})
 	}
+	// This catalog adapter supplies legacy definitions only. Preserve the new
+	// nullable family column without claiming overload semantics.
+	overloadsBuilder := array.NewBuilder(mem, macroInfoSchema.Field(9).Type)
+	defer overloadsBuilder.Release()
+	overloadsBuilder.AppendNull()
 
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
@@ -172,6 +177,7 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 		pdvBuilder.NewArray(),
 		defBuilder.NewArray(),
 		argsBuilder.NewArray(),
+		overloadsBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {
