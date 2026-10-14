@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/Query-farm/vgi-go/vgi"
@@ -297,29 +298,31 @@ func TestLogicalTypeAndOpaqueMacroCorpus(t *testing.T) {
 			if name == "logical_struct" && annotated {
 				t.Fatal("plain struct became a tuple")
 			}
-			if name == "logical_variant_sql_null" && !restored.Column(0).IsNull(0) {
-				t.Fatal("SQL NULL lost")
-			}
-			if name == "logical_variant_null" || name == "logical_variant_absent" || name == "logical_variant_null_member" {
-				if !annotated || kind != "variant" || restored.Column(0).IsNull(0) {
-					t.Fatal("present variant lost")
+			if strings.HasPrefix(name, "logical_variant_") {
+				field := restored.Schema().Field(0)
+				extension, present := field.Metadata.GetValue("ARROW:extension:name")
+				metadata, metadataPresent := field.Metadata.GetValue("ARROW:extension:metadata")
+				if !present || extension != "arrow.parquet.variant" || !metadataPresent || metadata != "" || annotated {
+					t.Fatal("canonical variant extension metadata changed")
 				}
-				before := original.Column(0).(*array.Binary).Value(0)
-				after := restored.Column(0).(*array.Binary).Value(0)
-				if !bytes.Equal(before, after) {
-					t.Fatal("variant scalar envelope changed")
+				fields := field.Type.(*arrow.StructType).Fields()
+				if len(fields) != 2 || fields[0].Name != "metadata" || fields[0].Nullable || fields[1].Name != "value" || !fields[1].Nullable {
+					t.Fatal("canonical variant storage shape changed")
 				}
-				inner := catalogBatch(t, after)
-				if name == "logical_variant_null" && inner.Schema().Field(0).Type.ID() != arrow.NULL {
-					t.Fatal("variant null identity lost")
+				if restored.Column(0).IsNull(0) != (name == "logical_variant_sql_null") {
+					t.Fatal("SQL NULL confused with encoded variant null")
 				}
-				if name != "logical_variant_null" {
-					expected := 0
-					if name == "logical_variant_null_member" {
-						expected = 1
+				if name != "logical_variant_sql_null" {
+					column := restored.Column(0).(*array.Struct)
+					expectedMetadata, expectedValue := []byte{1, 0, 0}, []byte{0}
+					if name == "logical_variant_absent" {
+						expectedValue = []byte{2, 0, 0}
+					} else if name == "logical_variant_null_member" {
+						expectedMetadata = []byte{1, 1, 0, 7, 'p', 'r', 'e', 's', 'e', 'n', 't'}
+						expectedValue = []byte{2, 1, 0, 0, 1, 0}
 					}
-					if inner.Schema().Field(0).Type.(*arrow.StructType).NumFields() != expected {
-						t.Fatal("missing object member confused with NULL")
+					if !bytes.Equal(column.Field(0).(*array.Binary).Value(0), expectedMetadata) || !bytes.Equal(column.Field(1).(*array.Binary).Value(0), expectedValue) {
+						t.Fatal("opaque canonical variant metadata/value bytes changed")
 					}
 				}
 			}
