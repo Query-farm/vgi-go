@@ -63,6 +63,13 @@ func derivedRecordCases() []derivedRecordCase {
 		{"CatalogQueryPrepareResult", reflect.TypeOf(generated.CatalogQueryPrepareResult{}), generated.CatalogQueryPrepareResultSchema},
 
 		{"SqlExpression", reflect.TypeOf(generated.SqlExpression{}), generated.SqlExpressionSchema},
+		{"SqlStatement", reflect.TypeOf(generated.SqlStatement{}), generated.SqlStatementSchema},
+		{"ForeignKeyDefinition", reflect.TypeOf(generated.ForeignKeyDefinition{}), generated.ForeignKeyDefinitionSchema},
+		{"ConstraintDefinition", reflect.TypeOf(generated.ConstraintDefinition{}), generated.ConstraintDefinitionSchema},
+		{"ConstraintInfo", reflect.TypeOf(generated.ConstraintInfo{}), generated.ConstraintInfoSchema},
+		{"ConstraintChange", reflect.TypeOf(generated.ConstraintChange{}), generated.ConstraintChangeSchema},
+		{"ConstraintSnapshot", reflect.TypeOf(generated.ConstraintSnapshot{}), generated.ConstraintSnapshotSchema},
+		{"ConstraintsApplyRequest", reflect.TypeOf(generated.ConstraintsApplyRequest{}), generated.ConstraintsApplyRequestSchema},
 		{"SortKey", reflect.TypeOf(generated.SortKey{}), generated.SortKeySchema},
 		{"TableLayout", reflect.TypeOf(generated.TableLayout{}), generated.TableLayoutSchema},
 		{"TableLayoutChange", reflect.TypeOf(generated.TableLayoutChange{}), generated.TableLayoutChangeSchema},

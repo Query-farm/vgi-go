@@ -118,6 +118,73 @@ func echoCatalogRecord[T any](t *testing.T, name string) {
 	}
 }
 
+func TestColumnExpressionMetadataRetainsIPCBytes(t *testing.T) {
+	source := catalogBatch(t, catalogFixture(t, "column_expression_metadata"))
+	var encoded bytes.Buffer
+	writer := ipc.NewWriter(&encoded, ipc.WithSchema(source.Schema()))
+	if err := writer.Write(source); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restored := catalogBatch(t, encoded.Bytes())
+	for index, entry := range []struct{ key, name string }{
+		{"vgi.column.default.v1", "column_default_expression"},
+		{"vgi.column.generated.v1", "column_generated_expression"},
+	} {
+		value, ok := restored.Schema().Field(index).Metadata.GetValue(entry.key)
+		if !ok {
+			t.Fatal("expression metadata missing")
+		}
+		payload, err := base64.StdEncoding.Strict().DecodeString(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(payload, catalogFixture(t, entry.name)) {
+			t.Fatal("expression IPC changed")
+		}
+	}
+	generation, _ := restored.Schema().Field(1).Metadata.GetValue("vgi.column.generation.v1")
+	if generation != "virtual" {
+		t.Fatal("generation category changed")
+	}
+}
+
+func TestCanonicalConstraintPythonCorpus(t *testing.T) {
+	t.Run("sql_statement", func(t *testing.T) { echoCatalogRecord[generated.SqlStatement](t, "sql_statement") })
+	t.Run("constraint_ref", func(t *testing.T) { echoCatalogRecord[generated.CatalogObjectRef](t, "constraint_ref") })
+	t.Run("foreign_key_definition", func(t *testing.T) { echoCatalogRecord[generated.ForeignKeyDefinition](t, "foreign_key_definition") })
+	t.Run("constraint_definition_not_null", func(t *testing.T) {
+		echoCatalogRecord[generated.ConstraintDefinition](t, "constraint_definition_not_null")
+	})
+	t.Run("constraint_definition_unique", func(t *testing.T) {
+		echoCatalogRecord[generated.ConstraintDefinition](t, "constraint_definition_unique")
+	})
+	t.Run("constraint_definition_primary", func(t *testing.T) {
+		echoCatalogRecord[generated.ConstraintDefinition](t, "constraint_definition_primary")
+	})
+	t.Run("constraint_definition_check", func(t *testing.T) {
+		echoCatalogRecord[generated.ConstraintDefinition](t, "constraint_definition_check")
+	})
+	t.Run("constraint_definition_foreign", func(t *testing.T) {
+		echoCatalogRecord[generated.ConstraintDefinition](t, "constraint_definition_foreign")
+	})
+	t.Run("constraint_info", func(t *testing.T) { echoCatalogRecord[generated.ConstraintInfo](t, "constraint_info") })
+	t.Run("constraint_info_untrusted", func(t *testing.T) { echoCatalogRecord[generated.ConstraintInfo](t, "constraint_info_untrusted") })
+	t.Run("constraint_change_add", func(t *testing.T) { echoCatalogRecord[generated.ConstraintChange](t, "constraint_change_add") })
+	t.Run("constraint_change_drop", func(t *testing.T) { echoCatalogRecord[generated.ConstraintChange](t, "constraint_change_drop") })
+	t.Run("constraint_change_rename", func(t *testing.T) { echoCatalogRecord[generated.ConstraintChange](t, "constraint_change_rename") })
+	t.Run("constraint_change_unname", func(t *testing.T) { echoCatalogRecord[generated.ConstraintChange](t, "constraint_change_unname") })
+	t.Run("constraint_change_replace", func(t *testing.T) { echoCatalogRecord[generated.ConstraintChange](t, "constraint_change_replace") })
+	t.Run("constraint_snapshot", func(t *testing.T) { echoCatalogRecord[generated.ConstraintSnapshot](t, "constraint_snapshot") })
+	t.Run("constraint_snapshot_empty", func(t *testing.T) { echoCatalogRecord[generated.ConstraintSnapshot](t, "constraint_snapshot_empty") })
+	t.Run("constraints_apply", func(t *testing.T) { echoCatalogRecord[generated.ConstraintsApplyRequest](t, "constraints_apply") })
+	t.Run("constraints_apply_autocommit", func(t *testing.T) {
+		echoCatalogRecord[generated.ConstraintsApplyRequest](t, "constraints_apply_autocommit")
+	})
+}
+
 func TestCatalogContractPythonCorpus(t *testing.T) {
 	for _, name := range []string{"macro_parameter", "macro_parameter_expression", "macro_parameter_untyped"} {
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.MacroParameter](t, name) })
