@@ -122,12 +122,18 @@ func (w *Worker) writableSchemaDrop(c *WritableCatalog, path SchemaPath, ignoreN
 }
 
 func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestWire) error {
+	if len(req.ConstraintDefinitions) > 0 {
+		return methodNotImplemented("catalog_table_create: canonical constraint enforcement")
+	}
 	if len(req.Columns) == 0 {
 		return fmt.Errorf("catalog_table_create: missing columns schema")
 	}
 	schema, err := DeserializeSchema(req.Columns)
 	if err != nil {
 		return fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
+	}
+	if err := requireUnconstrainedCreateSchema(schema); err != nil {
+		return err
 	}
 
 	schemaKey := schemaPathKey(req.SchemaPath)
@@ -158,10 +164,6 @@ func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestW
 	t := &writableTable{
 		name:          req.Name,
 		schema:        schema,
-		notNull:       columnsByIndex(schema, req.NotNullConstraints),
-		primaryKey:    columnGroupsByIndex(schema, req.PrimaryKeyConstraints),
-		unique:        columnGroupsByIndex(schema, req.UniqueConstraints),
-		check:         req.CheckConstraints,
 		defaults:      defaultsFromSchemaMetadata(schema),
 		columnComment: map[string]string{},
 	}

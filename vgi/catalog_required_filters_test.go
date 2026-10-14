@@ -30,15 +30,16 @@ func readRequiredFilters(t *testing.T, info *TableInfo) [][][]string {
 	}
 	rec := reader.RecordBatch()
 
-	field := rec.Schema().Field(20)
-	if field.Name != "required_filters" {
-		t.Fatalf("field 20 = %q, want required_filters", field.Name)
+	indices := rec.Schema().FieldIndices("required_filters")
+	if len(indices) != 1 {
+		t.Fatalf("expected exactly one required_filters field, got %v", indices)
 	}
+	field := rec.Schema().Field(indices[0])
 	if !arrow.TypeEqual(field.Type, arrow.ListOf(arrow.ListOf(arrow.ListOf(arrow.BinaryTypes.String)))) {
 		t.Fatalf("required_filters type = %s, want list<list<list<utf8>>>", field.Type)
 	}
 
-	outer := rec.Column(20).(*array.List)
+	outer := rec.Column(indices[0]).(*array.List)
 	if outer.IsNull(0) {
 		return nil
 	}

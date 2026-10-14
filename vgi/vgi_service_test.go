@@ -28,6 +28,7 @@ var vgiV2Unimplemented = []string{
 	"CatalogTableAlterLayout",
 	"CatalogTableAlterOptions",
 	"CatalogTableColumnCommentSet",
+	"CatalogTableConstraintsApply",
 	"CatalogTableOptionDefinitions",
 }
 

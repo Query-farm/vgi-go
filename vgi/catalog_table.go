@@ -22,6 +22,9 @@ type Sql string
 
 // CatalogTable describes a table to register in the catalog.
 type CatalogTable struct {
+	// Constraints are explicit canonical ConstraintInfo IPC records, owned by the provider.
+	Constraints        [][]byte
+	DefinitionRevision []byte
 	// Name is the table name visible in SQL.
 	Name string
 	// Comment is a human-readable description.

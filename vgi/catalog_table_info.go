@@ -18,6 +18,8 @@ import (
 
 // TableInfo describes a table in the catalog for wire serialization.
 type TableInfo struct {
+	Constraints              [][]byte // canonical ConstraintInfo IPC, never synthesized from legacy fields
+	DefinitionRevision       []byte
 	Name                     string
 	SchemaPath               []string
 	Comment                  string
@@ -70,6 +72,9 @@ var tableInfoSchema = generated.TableInfoSchema
 
 // SerializeTableInfo serializes a TableInfo to IPC bytes.
 func SerializeTableInfo(info *TableInfo) ([]byte, error) {
+	if len(info.NotNullConstraints)+len(info.UniqueConstraints)+len(info.CheckConstraints)+len(info.PrimaryKeyConstraints)+len(info.ForeignKeyConstraints) > 0 {
+		return nil, methodNotImplemented("legacy constraint metadata requires explicit canonical records")
+	}
 	mem := memory.NewGoAllocator()
 
 	// comment
@@ -119,67 +124,11 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		columnsBuilder.Append([]byte{})
 	}
 
-	// not_null_constraints
-	notNullBuilder := array.NewListBuilder(mem, arrow.PrimitiveTypes.Int32)
-	defer notNullBuilder.Release()
-	notNullBuilder.Append(true)
-	if len(info.NotNullConstraints) > 0 {
-		vb := notNullBuilder.ValueBuilder().(*array.Int32Builder)
-		for _, idx := range info.NotNullConstraints {
-			vb.Append(idx)
-		}
-	}
-
-	// unique_constraints (list of list of int32)
-	uniqueBuilder := array.NewListBuilder(mem, arrow.ListOf(arrow.PrimitiveTypes.Int32))
-	defer uniqueBuilder.Release()
-	uniqueBuilder.Append(true)
-	if len(info.UniqueConstraints) > 0 {
-		innerListBuilder := uniqueBuilder.ValueBuilder().(*array.ListBuilder)
-		for _, group := range info.UniqueConstraints {
-			innerListBuilder.Append(true)
-			innerVB := innerListBuilder.ValueBuilder().(*array.Int32Builder)
-			for _, idx := range group {
-				innerVB.Append(idx)
-			}
-		}
-	}
-
-	// check_constraints
-	checkBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
-	defer checkBuilder.Release()
-	checkBuilder.Append(true)
-	if len(info.CheckConstraints) > 0 {
-		vb := checkBuilder.ValueBuilder().(*array.StringBuilder)
-		for _, expr := range info.CheckConstraints {
-			vb.Append(expr)
-		}
-	}
-
-	// primary_key_constraints (list of list of int32)
-	pkBuilder := array.NewListBuilder(mem, arrow.ListOf(arrow.PrimitiveTypes.Int32))
-	defer pkBuilder.Release()
-	pkBuilder.Append(true)
-	if len(info.PrimaryKeyConstraints) > 0 {
-		innerListBuilder := pkBuilder.ValueBuilder().(*array.ListBuilder)
-		for _, group := range info.PrimaryKeyConstraints {
-			innerListBuilder.Append(true)
-			innerVB := innerListBuilder.ValueBuilder().(*array.Int32Builder)
-			for _, idx := range group {
-				innerVB.Append(idx)
-			}
-		}
-	}
-
-	// foreign_key_constraints (list of binary)
-	fkBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.Binary)
-	defer fkBuilder.Release()
-	fkBuilder.Append(true)
-	if len(info.ForeignKeyConstraints) > 0 {
-		vb := fkBuilder.ValueBuilder().(*array.BinaryBuilder)
-		for _, fkBytes := range info.ForeignKeyConstraints {
-			vb.Append(fkBytes)
-		}
+	constraintsBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.Binary)
+	defer constraintsBuilder.Release()
+	constraintsBuilder.Append(true)
+	for _, value := range info.Constraints {
+		constraintsBuilder.ValueBuilder().(*array.BinaryBuilder).Append(value)
 	}
 
 	writeModesBuilder := array.NewMapBuilder(mem, arrow.BinaryTypes.String, arrow.BinaryTypes.String, false)
@@ -263,11 +212,8 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		nameBuilder.NewArray(),
 		schemaPathBuilder.NewArray(),
 		columnsBuilder.NewArray(),
-		notNullBuilder.NewArray(),
-		uniqueBuilder.NewArray(),
-		checkBuilder.NewArray(),
-		pkBuilder.NewArray(),
-		fkBuilder.NewArray(),
+		constraintsBuilder.NewArray(),
+		appendOptBinary(info.DefinitionRevision),
 		writeModesBuilder.NewArray(),
 		scsBuilder.NewArray(),
 		scanFunctionArr,

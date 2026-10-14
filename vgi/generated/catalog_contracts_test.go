@@ -185,6 +185,66 @@ func TestCanonicalConstraintPythonCorpus(t *testing.T) {
 	})
 }
 
+func TestTableConstraintParentFields(t *testing.T) {
+	column := func(batch arrow.RecordBatch, name string) arrow.Array {
+		indices := batch.Schema().FieldIndices(name)
+		if len(indices) != 1 {
+			t.Fatalf("missing or duplicate %s", name)
+		}
+		return batch.Column(indices[0])
+	}
+	binaryList := func(batch arrow.RecordBatch, name string) [][]byte {
+		list := column(batch, name).(*array.List)
+		if list.IsNull(0) {
+			t.Fatalf("%s must be present", name)
+		}
+		start, end := list.ValueOffsets(0)
+		values := list.ListValues().(*array.Binary)
+		out := make([][]byte, 0, end-start)
+		for i := start; i < end; i++ {
+			out = append(out, append([]byte(nil), values.Value(int(i))...))
+		}
+		return out
+	}
+	create := catalogBatch(t, catalogFixture(t, "table_create"))
+	info := catalogBatch(t, catalogFixture(t, "table_info"))
+	definitions := binaryList(create, "constraint_definitions")
+	constraints := binaryList(info, "constraints")
+	if len(definitions) != 1 || len(constraints) != 1 {
+		t.Fatal("canonical constraints missing")
+	}
+	if len(binaryList(catalogBatch(t, catalogFixture(t, "table_create_legacy")), "constraint_definitions")) != 0 {
+		t.Fatal("empty create gained constraints")
+	}
+	revision := column(info, "definition_revision").(*array.Binary).Value(0)
+	if !bytes.Equal(revision, []byte("revision\x00\xff")) {
+		t.Fatal("revision bytes changed")
+	}
+	constraint := catalogBatch(t, constraints[0])
+	if !bytes.Equal(column(constraint, "definition").(*array.Binary).Value(0), definitions[0]) {
+		t.Fatal("parent definition differs")
+	}
+	reference := catalogBatch(t, column(constraint, "ref").(*array.Binary).Value(0))
+	if column(reference, "name").(*array.String).Value(0) != "fixture-stable-key" {
+		t.Fatal("stable key changed")
+	}
+	definition := catalogBatch(t, definitions[0])
+	paths := column(definition, "column_paths").(*array.List)
+	path := paths.ListValues().(*array.List)
+	components := path.ListValues().(*array.String)
+	if paths.Len() != 1 || path.Len() != 1 || components.Len() != 2 || components.Value(0) != "record" || components.Value(1) != "a.b" {
+		t.Fatal("nested column path changed")
+	}
+	encoded, err := vgi.SerializeTableInfo(&vgi.TableInfo{Name: "t", SchemaPath: []string{"main"}, Constraints: constraints, DefinitionRevision: revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := catalogBatch(t, encoded)
+	if !array.Equal(column(info, "constraints"), column(restored, "constraints")) || !array.Equal(column(info, "definition_revision"), column(restored, "definition_revision")) {
+		t.Fatal("handwritten TableInfo serializer changed canonical fields")
+	}
+}
+
 func TestCatalogContractPythonCorpus(t *testing.T) {
 	for _, name := range []string{"macro_parameter", "macro_parameter_expression", "macro_parameter_untyped"} {
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.MacroParameter](t, name) })

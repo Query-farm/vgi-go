@@ -562,6 +562,9 @@ func (m *MemoryCatalog) dropObject(attach []byte, path SchemaPath, name, kind st
 }
 
 func (m *MemoryCatalog) tableCreate(req *TableCreateRequestWire) error {
+	if len(req.ConstraintDefinitions) > 0 {
+		return methodNotImplemented("catalog_table_create: canonical constraint enforcement")
+	}
 	if req.Comment != nil || req.Tags != nil || req.Options != nil || req.Layout != nil {
 		return methodNotImplemented("catalog_table_create")
 	}
@@ -572,15 +575,14 @@ func (m *MemoryCatalog) tableCreate(req *TableCreateRequestWire) error {
 	if err != nil {
 		return fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
 	}
+	if err := requireUnconstrainedCreateSchema(columns); err != nil {
+		return err
+	}
 	item, err := SerializeTableInfo(&TableInfo{
-		Name:                  req.Name,
-		SchemaPath:            slices.Clone(req.SchemaPath),
-		Columns:               columns,
-		NotNullConstraints:    req.NotNullConstraints,
-		UniqueConstraints:     req.UniqueConstraints,
-		CheckConstraints:      req.CheckConstraints,
-		PrimaryKeyConstraints: req.PrimaryKeyConstraints,
-		ForeignKeyConstraints: req.ForeignKeyConstraints,
+		Name:        req.Name,
+		SchemaPath:  slices.Clone(req.SchemaPath),
+		Columns:     columns,
+		Constraints: [][]byte{},
 	})
 	if err != nil {
 		return err

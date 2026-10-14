@@ -611,14 +611,11 @@ func main() {
 
 	// Constraint example tables
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:       "departments",
-		Comment:    "Department reference table",
-		Columns:    table.DepartmentsSchema,
-		NotNull:    []string{"id", "name"},
-		PrimaryKey: [][]string{{"id"}},
-		Unique:     [][]string{{"name"}},
-		Check:      []string{"budget >= 0"},
-		Defaults:   map[string]any{"budget": int64(0)},
+		Name:        "departments",
+		Comment:     "Department reference table",
+		Columns:     fixtureNullableSchema(table.DepartmentsSchema),
+		Constraints: fixtureConstraints("departments", 0),
+		Defaults:    map[string]any{"budget": int64(0)},
 		Statistics: map[string]*vgi.ColumnStatistics{
 			"id":     {ColumnName: "id", Type: arrow.PrimitiveTypes.Int64, Min: int64(1), Max: int64(10), HasNotNull: true, DistinctCount: 10},
 			"name":   {ColumnName: "name", Type: arrow.BinaryTypes.String, Min: "Accounting", Max: "Sales", HasNotNull: true, DistinctCount: 10, ContainsUnicode: boolPtr(false), MaxStringLength: int64Ptr(20)},
@@ -627,33 +624,23 @@ func main() {
 		StatisticsCacheMaxAgeSeconds: &statsTTL3600,
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:       "employees",
-		Comment:    "Employee table with FK to departments",
-		Columns:    table.EmployeesSchema,
-		NotNull:    []string{"id", "name", "email"},
-		PrimaryKey: [][]string{{"id"}},
-		Unique:     [][]string{{"email"}},
-		ForeignKey: []vgi.ForeignKeyConstraint{
-			{Columns: []string{"department_id"}, ReferencedTable: "departments", ReferencedColumns: []string{"id"}},
-		},
+		Name:        "employees",
+		Comment:     "Employee table with FK to departments",
+		Columns:     fixtureNullableSchema(table.EmployeesSchema),
+		Constraints: fixtureConstraints("employees", 0),
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:       "projects",
-		Comment:    "Projects with composite PK and FK to departments",
-		Columns:    table.ProjectsSchema,
-		NotNull:    []string{"department_id", "project_code", "title"},
-		PrimaryKey: [][]string{{"department_id", "project_code"}},
-		ForeignKey: []vgi.ForeignKeyConstraint{
-			{Columns: []string{"department_id"}, ReferencedTable: "departments", ReferencedColumns: []string{"id"}},
-		},
+		Name:        "projects",
+		Comment:     "Projects with composite PK and FK to departments",
+		Columns:     fixtureNullableSchema(table.ProjectsSchema),
+		Constraints: fixtureConstraints("projects", 0),
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:       "products",
-		Comment:    "Product table with column defaults",
-		Columns:    table.ProductsSchema,
-		NotNull:    []string{"id"},
-		PrimaryKey: [][]string{{"id"}},
-		Defaults:   map[string]any{"quantity": int64(0), "name": "unknown", "price": float64(9.99)},
+		Name:        "products",
+		Comment:     "Product table with column defaults",
+		Columns:     fixtureNullableSchema(table.ProductsSchema),
+		Constraints: fixtureConstraints("products", 0),
+		Defaults:    map[string]any{"quantity": int64(0), "name": "unknown", "price": float64(9.99)},
 		ColumnComments: map[string]string{
 			"id":    "Unique product identifier",
 			"name":  "Product display name",
@@ -786,15 +773,10 @@ func main() {
 
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:               "versioned_constraints",
-		Columns:            table.VersionedConstraintsSchemas[3],
+		Columns:            fixtureNullableSchema(table.VersionedConstraintsSchemas[3]),
 		Comment:            "Table with constraints that evolve across versions",
 		SupportsTimeTravel: true,
-		NotNull:            []string{"id", "name"},
-		PrimaryKey:         [][]string{{"id"}},
-		Unique:             [][]string{{"email"}},
-		ForeignKey: []vgi.ForeignKeyConstraint{
-			{Columns: []string{"department_id"}, ReferencedTable: "departments", ReferencedColumns: []string{"id"}},
-		},
+		Constraints:        fixtureConstraints("versioned_constraints", 3),
 	})
 
 	// Views
@@ -886,10 +868,11 @@ func main() {
 				return nil, err
 			}
 			info := &vgi.TableInfo{
-				Name:       tableName,
-				SchemaPath: schemaPath,
-				Comment:    "Table with constraints that evolve across versions",
-				Columns:    table.VersionedConstraintsSchema(version),
+				Name:        tableName,
+				SchemaPath:  schemaPath,
+				Comment:     "Table with constraints that evolve across versions",
+				Columns:     fixtureNullableSchema(table.VersionedConstraintsSchema(version)),
+				Constraints: fixtureConstraints("versioned_constraints", version),
 			}
 			return vgi.SerializeTableInfo(info)
 		}

@@ -183,11 +183,7 @@ type TableCreateRequestWire struct {
 	Name                  string             `vgirpc:"name"`
 	Columns               []byte             `vgirpc:"columns"`
 	OnConflict            string             `vgirpc:"on_conflict,enum"`
-	NotNullConstraints    []int32            `vgirpc:"not_null_constraints"`
-	UniqueConstraints     [][]int32          `vgirpc:"unique_constraints"`
-	CheckConstraints      []string           `vgirpc:"check_constraints"`
-	PrimaryKeyConstraints [][]int32          `vgirpc:"primary_key_constraints"`
-	ForeignKeyConstraints [][]byte           `vgirpc:"foreign_key_constraints"`
+	ConstraintDefinitions [][]byte           `vgirpc:"constraint_definitions"`
 	TransactionOpaqueData *[]byte            `vgirpc:"transaction_opaque_data"`
 	Comment               *string            `vgirpc:"comment"`
 	Tags                  *map[string]string `vgirpc:"tags"`
@@ -1106,6 +1102,9 @@ func (w workerService) CatalogTableGet(ctx context.Context, callCtx *vgirpc.Call
 
 // CatalogTableCreate serves vgi.v2 catalog_table_create.
 func (w workerService) CatalogTableCreate(ctx context.Context, callCtx *vgirpc.CallContext, req TableCreateRequestWire) error {
+	if len(req.ConstraintDefinitions) > 0 {
+		return methodNotImplemented("catalog_table_create: canonical constraint enforcement")
+	}
 	if req.Comment != nil || req.Tags != nil || req.Options != nil || req.Layout != nil {
 		return methodNotImplemented("catalog_table_create")
 	}
@@ -1545,6 +1544,9 @@ func validateRequiredFilters(tableName string, columns *arrow.Schema, groups [][
 
 // serializeCatalogTable converts a CatalogTable into serialized TableInfo bytes.
 func (w *Worker) serializeCatalogTable(schemaPath SchemaPath, ct *CatalogTable) ([]byte, error) {
+	if len(ct.NotNull)+len(ct.Unique)+len(ct.PrimaryKey)+len(ct.Check)+len(ct.ForeignKey) > 0 {
+		return nil, methodNotImplemented("legacy constraint metadata requires explicit canonical records")
+	}
 	// Resolve columns: if Function is set but Columns is nil, derive via OnBind
 	columns := ct.Columns
 	if columns == nil && ct.Function != nil {
@@ -1587,24 +1589,9 @@ func (w *Worker) serializeCatalogTable(schemaPath SchemaPath, ct *CatalogTable) 
 		}
 	}
 
-	// Resolve constraint column indices from names
-	notNull := resolveColumnIndices(columns, ct.NotNull)
-	unique := resolveColumnGroupIndices(columns, ct.Unique)
-	primaryKey := resolveColumnGroupIndices(columns, ct.PrimaryKey)
-
 	// Validate every raw path against the complete schema.
 	if err := validateRequiredFilters(ct.Name, columns, ct.RequiredFilters); err != nil {
 		return nil, err
-	}
-
-	// Serialize FOREIGN KEY constraints
-	var foreignKeys [][]byte
-	for _, fk := range ct.ForeignKey {
-		fkBytes, err := serializeForeignKey(schemaPath, &fk)
-		if err != nil {
-			return nil, fmt.Errorf("serializing foreign key for table %s: %w", ct.Name, err)
-		}
-		foreignKeys = append(foreignKeys, fkBytes)
 	}
 
 	info := &TableInfo{
@@ -1613,11 +1600,8 @@ func (w *Worker) serializeCatalogTable(schemaPath SchemaPath, ct *CatalogTable) 
 		Comment:                  ct.Comment,
 		Tags:                     ct.Tags,
 		Columns:                  columns,
-		NotNullConstraints:       notNull,
-		UniqueConstraints:        unique,
-		CheckConstraints:         ct.Check,
-		PrimaryKeyConstraints:    primaryKey,
-		ForeignKeyConstraints:    foreignKeys,
+		Constraints:              ct.Constraints,
+		DefinitionRevision:       ct.DefinitionRevision,
 		SupportsColumnStatistics: len(ct.Statistics) > 0,
 		CardinalityEstimate:      ct.CardinalityEstimate,
 		CardinalityMax:           ct.CardinalityMax,
