@@ -118,6 +118,9 @@ func TestUnimplementedVgiV2MethodsRefuse(t *testing.T) {
 			"definition": indexFixture(t, "index_definition"), "on_conflict": "REPLACE",
 		})
 		calls := map[string]arrow.RecordBatch{
+			"catalog_dependencies": jsonRow(t, generated.CatalogDependenciesParamsSchema, map[string]any{
+				"attach_opaque_data": attach,
+			}),
 			"catalog_index_create": wrapRequest(t, indexCreate),
 			"catalog_index_drop": jsonRow(t, generated.CatalogIndexDropParamsSchema, map[string]any{
 				"attach_opaque_data": attach, "schema_path": []string{"main"}, "name": "i",

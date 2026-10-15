@@ -263,8 +263,11 @@ func TestCatalogContractPythonCorpus(t *testing.T) {
 	for _, name := range []string{"object_ref", "trigger_ref"} {
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.CatalogObjectRef](t, name) })
 	}
-	t.Run("object_dependency", func(t *testing.T) { echoCatalogRecord[generated.ObjectDependency](t, "object_dependency") })
-	for _, name := range []string{"dependency_snapshot", "empty_dependency_snapshot"} {
+	for _, name := range []string{"object_dependency", "dependency_membership", "dependency_column_literal",
+		"dependency_column_nested", "dependency_generated", "dependency_generated_chain"} {
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.ObjectDependency](t, name) })
+	}
+	for _, name := range []string{"dependency_snapshot", "empty_dependency_snapshot", "dependency_column_snapshot"} {
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.DependencySnapshot](t, name) })
 	}
 	for _, name := range []string{"metadata_patch", "metadata_clear_comment", "metadata_noop"} {
@@ -522,6 +525,59 @@ func TestTypedIndexContractsPreserveParentPayloads(t *testing.T) {
 			if values.Value(i) != want {
 				t.Fatal("raw path changed")
 			}
+		}
+	}
+}
+
+func TestDependencyAlterSubjectsPreserveRawColumnPaths(t *testing.T) {
+	col := func(batch arrow.RecordBatch, name string) arrow.Array {
+		positions := batch.Schema().FieldIndices(name)
+		if len(positions) != 1 {
+			t.Fatalf("missing field %s", name)
+		}
+		return batch.Column(positions[0])
+	}
+	for _, entry := range []struct {
+		name   string
+		blocks bool
+	}{{"dependency_membership", false}, {"object_dependency", true}} {
+		edge := catalogBatch(t, catalogFixture(t, entry.name))
+		if col(edge, "blocks_alter").(*array.Boolean).Value(0) != entry.blocks {
+			t.Fatal("blocks_alter changed")
+		}
+		if !col(edge, "subject_column_paths").IsNull(0) || !col(edge, "dependent_column_path").IsNull(0) {
+			t.Fatal("whole-object edge lost NULL scope")
+		}
+	}
+	for _, entry := range []struct {
+		name string
+		want []string
+	}{
+		{"dependency_column_literal", []string{"a.b"}}, {"dependency_column_nested", []string{"record", "a.b"}},
+	} {
+		edge := catalogBatch(t, catalogFixture(t, entry.name))
+		paths := col(edge, "subject_column_paths").(*array.List)
+		path := paths.ListValues().(*array.List)
+		parts := path.ListValues().(*array.String)
+		if paths.IsNull(0) || path.Len() != 1 || parts.Len() != len(entry.want) {
+			t.Fatal("column scope changed")
+		}
+		for i, want := range entry.want {
+			if parts.Value(i) != want {
+				t.Fatal("raw column path changed")
+			}
+		}
+	}
+	generated := catalogBatch(t, catalogFixture(t, "dependency_generated"))
+	if !bytes.Equal(col(generated, "dependent").(*array.Binary).Value(0), col(generated, "subject").(*array.Binary).Value(0)) {
+		t.Fatal("same-table column dependency changed object identity")
+	}
+	for _, entry := range []struct{ name, target string }{{"dependency_generated", "generated"}, {"dependency_generated_chain", "second.generated"}} {
+		edge := catalogBatch(t, catalogFixture(t, entry.name))
+		path := col(edge, "dependent_column_path").(*array.List)
+		parts := path.ListValues().(*array.String)
+		if path.IsNull(0) || parts.Len() != 1 || parts.Value(0) != entry.target {
+			t.Fatal("dependent column target changed")
 		}
 	}
 }
