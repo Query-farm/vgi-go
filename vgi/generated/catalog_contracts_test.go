@@ -456,3 +456,72 @@ func TestLogicalTypeAndOpaqueMacroCorpus(t *testing.T) {
 		})
 	}
 }
+
+func TestTypedIndexContractsPreserveParentPayloads(t *testing.T) {
+	for _, name := range []string{"index_key_column", "index_key_nested", "index_key_expression"} {
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.IndexKey](t, name) })
+	}
+	for _, name := range []string{"index_definition", "index_definition_primary"} {
+		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.IndexDefinition](t, name) })
+	}
+	getBinary := func(batch arrow.RecordBatch, name string) []byte {
+		indices := batch.Schema().FieldIndices(name)
+		if len(indices) != 1 {
+			t.Fatalf("missing field %s", name)
+		}
+		return batch.Column(indices[0]).(*array.Binary).Value(0)
+	}
+	for _, entry := range []struct {
+		name   string
+		schema *arrow.Schema
+	}{
+		{"index_info", generated.IndexInfoSchema},
+		{"index_create", generated.IndexCreateRequestSchema},
+		{"index_create_cross_schema", generated.IndexCreateRequestSchema},
+	} {
+		source := catalogBatch(t, catalogFixture(t, entry.name))
+		if !source.Schema().Equal(entry.schema) {
+			t.Fatalf("%s schema drift", entry.name)
+		}
+		var encoded bytes.Buffer
+		writer := ipc.NewWriter(&encoded, ipc.WithSchema(source.Schema()))
+		if err := writer.Write(source); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		restored := catalogBatch(t, encoded.Bytes())
+		if !array.RecordEqual(source, restored) {
+			t.Fatalf("%s parent changed", entry.name)
+		}
+		if !bytes.Equal(getBinary(restored, "definition"), catalogFixture(t, "index_definition")) {
+			t.Fatal("definition changed")
+		}
+		if entry.name == "index_info" && !bytes.Equal(getBinary(restored, "options"), catalogFixture(t, "state")) {
+			t.Fatal("option state changed")
+		}
+	}
+	definition := catalogBatch(t, catalogFixture(t, "index_definition"))
+	if !bytes.Equal(getBinary(definition, "options"), catalogFixture(t, "values")) {
+		t.Fatal("typed options changed")
+	}
+	for _, entry := range []struct {
+		name string
+		want []string
+	}{
+		{"index_key_column", []string{"a.b"}}, {"index_key_nested", []string{"record", "a.b"}},
+	} {
+		key := catalogBatch(t, catalogFixture(t, entry.name))
+		path := key.Column(key.Schema().FieldIndices("column_path")[0]).(*array.List)
+		values := path.ListValues().(*array.String)
+		if values.Len() != len(entry.want) {
+			t.Fatal("raw path length changed")
+		}
+		for i, want := range entry.want {
+			if values.Value(i) != want {
+				t.Fatal("raw path changed")
+			}
+		}
+	}
+}

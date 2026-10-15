@@ -53,6 +53,9 @@ type derivedRecordCase struct {
 // derives from a Go struct rather than assembling by hand.
 func derivedRecordCases() []derivedRecordCase {
 	return []derivedRecordCase{
+		{"IndexKey", reflect.TypeOf(generated.IndexKey{}), generated.IndexKeySchema},
+		{"IndexDefinition", reflect.TypeOf(generated.IndexDefinition{}), generated.IndexDefinitionSchema},
+		{"IndexCreateRequest", reflect.TypeOf(IndexCreateRequestWire{}), generated.IndexCreateRequestSchema},
 		{"MacroParameter", reflect.TypeOf(generated.MacroParameter{}), generated.MacroParameterSchema},
 		{"MacroOverload", reflect.TypeOf(generated.MacroOverload{}), generated.MacroOverloadSchema},
 		{"ClientQueryCapabilities", reflect.TypeOf(generated.ClientQueryCapabilities{}), generated.ClientQueryCapabilitiesSchema},

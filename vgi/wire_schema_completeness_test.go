@@ -331,7 +331,6 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 // deliberate choice between covering it and writing down why not.
 var notBuiltByGo = map[string]string{
 	"IndexInfo":          "vgi-go exposes no index API; nothing constructs an IndexInfo record",
-	"IndexCreateRequest": "vgi-go exposes no index API; nothing constructs an IndexCreateRequest record",
 	"ClientCapabilities": "received as opaque catalog_attach ASD bytes; vgi-go does not construct this client record",
 	"ScanBranchesResult": "assembled by vgi-rpc-go's struct-tag reflection over " +
 		"TableScanBranchesGetResponseWire, not hand-built here",

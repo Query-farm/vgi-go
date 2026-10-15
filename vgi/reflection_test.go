@@ -4,8 +4,12 @@ package vgi_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -59,7 +63,7 @@ func TestWorkerReflectionDiscovery(t *testing.T) {
 // Every SDK hosts the whole of vgi.v2 with exactly the reference's schemas, so
 // every SDK reports this hash. It changes only with vgi.v2's protocol version
 // (2.1.0): a mismatch here is schema drift, not a constant to update.
-const vgiV2ReferenceProtocolHash = "a81e4c5fb450665c3e4991333ba8a404b6482a345269bc3df5b1c02680d71bea"
+const vgiV2ReferenceProtocolHash = "8003abf6447266f5bc59cca76bef09df661f35fbbf0b360f400d92fdd4b12aee"
 
 // describeVgiV2 starts an HTTP worker and returns vgi.v2's Reflection.v1
 // description.
@@ -111,14 +115,16 @@ func TestUnimplementedVgiV2MethodsRefuse(t *testing.T) {
 		attach := c.attach(catalog).AttachOpaqueData
 		indexCreate := jsonRow(t, generated.IndexCreateRequestSchema, map[string]any{
 			"attach_opaque_data": attach, "schema_path": []string{"main"}, "name": "i",
-			"table_name": "t", "index_type": "ART", "constraint_type": "none",
-			"expressions": []string{"x"}, "on_conflict": "error", "options": []any{},
+			"definition": indexFixture(t, "index_definition"), "on_conflict": "REPLACE",
 		})
 		calls := map[string]arrow.RecordBatch{
 			"catalog_index_create": wrapRequest(t, indexCreate),
 			"catalog_index_drop": jsonRow(t, generated.CatalogIndexDropParamsSchema, map[string]any{
 				"attach_opaque_data": attach, "schema_path": []string{"main"}, "name": "i",
 				"ignore_not_found": false, "cascade": false,
+			}),
+			"catalog_index_option_definitions": jsonRow(t, generated.CatalogIndexOptionDefinitionsParamsSchema, map[string]any{
+				"attach_opaque_data": attach, "table": indexFixture(t, "object_ref"), "algorithm": "ART",
 			}),
 			"catalog_index_get": jsonRow(t, generated.CatalogIndexGetParamsSchema, map[string]any{
 				"attach_opaque_data": attach, "schema_path": []string{"main"}, "name": "i",
@@ -159,4 +165,65 @@ func TestUnimplementedVgiV2MethodsRefuse(t *testing.T) {
 func wrapRequest(t *testing.T, inner arrow.RecordBatch) arrow.RecordBatch {
 	t.Helper()
 	return jsonRow(t, generated.CatalogIndexCreateParamsSchema, map[string]any{"request": mustIPC(t, inner)})
+}
+
+// Read canonical peer records rather than inventing a legacy expression string.
+func indexFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile("../conformance/catalog-contracts.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Records map[string]string `json:"records"`
+	}
+	if err := json.Unmarshal(data, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	encoded, ok := corpus.Records[name]
+	if !ok {
+		t.Fatalf("missing catalog fixture %s", name)
+	}
+	result, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func TestUnsupportedTypedIndexesPreserveHostedCatalog(t *testing.T) {
+	worker := vgi.NewWorker(vgi.WithCatalogName("example"))
+	worker.RegisterMemoryCatalog(vgi.NewMemoryCatalog("mem"))
+	c := newContentsClient(t, worker)
+	attach := c.attach("mem").AttachOpaqueData
+	if err := c.createView(attach, "i"); err != nil {
+		t.Fatal(err)
+	}
+	before := c.contents(attach, nil)
+	for _, conflict := range []string{"ERROR", "IGNORE", "REPLACE"} {
+		request := jsonRow(t, generated.IndexCreateRequestSchema, map[string]any{
+			"attach_opaque_data": attach, "schema_path": []string{"main"}, "name": "i",
+			"definition": indexFixture(t, "index_definition"), "on_conflict": conflict,
+		})
+		encoded := mustIPC(t, request)
+		request.Release()
+		if err := c.exec("catalog_index_create", generated.CatalogIndexCreateParamsSchema,
+			map[string]any{"request": encoded}); err == nil {
+			t.Fatalf("index %s succeeded", conflict)
+		}
+	}
+	if err := c.exec("catalog_index_drop", generated.CatalogIndexDropParamsSchema, map[string]any{
+		"attach_opaque_data": attach, "schema_path": []string{"main"}, "name": "i",
+		"ignore_not_found": true, "cascade": true,
+	}); err == nil {
+		t.Fatal("unsupported drop succeeded")
+	}
+	if err := c.exec("catalog_index_option_definitions", generated.CatalogIndexOptionDefinitionsParamsSchema,
+		map[string]any{"attach_opaque_data": attach, "table": indexFixture(t, "object_ref"), "algorithm": "ART"}); err == nil {
+		t.Fatal("unsupported options discovery succeeded")
+	}
+	after := c.contents(attach, nil)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("unsupported index operation changed catalog contents or version")
+	}
 }

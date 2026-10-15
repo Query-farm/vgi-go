@@ -136,16 +136,12 @@ func (w workerService) TableFunctionStatistics(ctx context.Context, cc *vgirpc.C
 // IndexCreateRequestWire is the inner request record for catalog_index_create
 // (generated.IndexCreateRequestSchema), carried wrapped in a `request` column.
 type IndexCreateRequestWire struct {
-	AttachOpaqueData      []byte            `vgirpc:"attach_opaque_data"`
-	SchemaPath            []string          `vgirpc:"schema_path"`
-	Name                  string            `vgirpc:"name"`
-	TableName             string            `vgirpc:"table_name"`
-	IndexType             string            `vgirpc:"index_type"`
-	ConstraintType        string            `vgirpc:"constraint_type,enum"`
-	Expressions           []string          `vgirpc:"expressions"`
-	OnConflict            string            `vgirpc:"on_conflict,enum"`
-	Options               map[string]string `vgirpc:"options"`
-	TransactionOpaqueData *[]byte           `vgirpc:"transaction_opaque_data"`
+	AttachOpaqueData      []byte   `vgirpc:"attach_opaque_data"`
+	SchemaPath            []string `vgirpc:"schema_path"`
+	Name                  string   `vgirpc:"name"`
+	Definition            []byte   `vgirpc:"definition"`
+	OnConflict            string   `vgirpc:"on_conflict,enum"`
+	TransactionOpaqueData *[]byte  `vgirpc:"transaction_opaque_data"`
 }
 
 // methodNotImplemented is the answer of every vgi.v2 method this SDK hosts but
