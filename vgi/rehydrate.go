@@ -224,7 +224,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 	// name comes off the same UUID-stripped plaintext OnBind saw.
 	fn, err := w.resolveFunction(functionLookup{
 		Name:        recipe.FunctionName,
-		Type:        recipe.FunctionType,
+		Type:        normalizeFunctionType(recipe.FunctionType),
 		Schema:      schemaPathKey(bindParams.SchemaPath),
 		Catalog:     w.catalogOfAttach(attachScope),
 		Args:        bindParams.Args,
@@ -251,7 +251,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 
 	params := &ProcessParams{
 		FunctionName:     recipe.FunctionName,
-		FunctionType:     recipe.FunctionType,
+		FunctionType:     normalizeFunctionType(recipe.FunctionType),
 		Args:             bindParams.Args,
 		OutputSchema:     processOutputSchema,
 		BindOutputSchema: outputSchema,

@@ -192,7 +192,7 @@ func (w *Worker) listMacroItems(_ []byte, path SchemaPath, macroType string) ([]
 		if macroType != "" {
 			switch want := macroKindFilter(macroType); want {
 			case MacroTypeScalar, MacroTypeTable:
-				if cm.MacroType != want {
+				if canonicalMacroType(cm.MacroType) != want {
 					continue
 				}
 			}

@@ -821,7 +821,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	// Build init params
 	initParams := &InitParams{
 		FunctionName: bindReq.FunctionName,
-		FunctionType: FunctionType(bindReq.FunctionType),
+		FunctionType: normalizeFunctionType(FunctionType(bindReq.FunctionType)),
 		Args:         bindParams.Args,
 		OutputSchema: outputSchema,
 		InputSchema:  bindParams.InputSchema,
@@ -932,7 +932,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	// Build process params
 	processParams := &ProcessParams{
 		FunctionName:     bindReq.FunctionName,
-		FunctionType:     FunctionType(bindReq.FunctionType),
+		FunctionType:     normalizeFunctionType(FunctionType(bindReq.FunctionType)),
 		Args:             bindParams.Args,
 		OutputSchema:     processOutputSchema,
 		BindOutputSchema: outputSchema,
@@ -960,7 +960,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		BindCall:        req.BindCall,
 		OutputSchemaIPC: req.OutputSchema,
 		FunctionName:    bindReq.FunctionName,
-		FunctionType:    FunctionType(bindReq.FunctionType),
+		FunctionType:    normalizeFunctionType(FunctionType(bindReq.FunctionType)),
 		ProjectionIDs:   initParams.ProjectionIDs,
 		ExecutionID:     initParams.ExecutionID,
 		BindOpaqueData:  initParams.BindOpaqueData,
@@ -1531,7 +1531,7 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 
 	params := &BindParams{
 		FunctionName: req.FunctionName,
-		FunctionType: FunctionType(req.FunctionType),
+		FunctionType: normalizeFunctionType(FunctionType(req.FunctionType)),
 		Args:         args,
 	}
 	if req.SchemaPath != nil {
@@ -1632,7 +1632,7 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 func (w *Worker) lookupFor(req *BindRequestWire, params *BindParams) functionLookup {
 	return functionLookup{
 		Name:        req.FunctionName,
-		Type:        FunctionType(req.FunctionType),
+		Type:        normalizeFunctionType(FunctionType(req.FunctionType)),
 		Schema:      schemaPathKey(params.SchemaPath),
 		Catalog:     w.catalogOfAttach(params.AttachOpaqueData),
 		Args:        params.Args,
@@ -1640,7 +1640,10 @@ func (w *Worker) lookupFor(req *BindRequestWire, params *BindParams) functionLoo
 	}
 }
 
-// normalizeFunctionType converts DuckDB function type strings to our canonical values.
+// normalizeFunctionType converts a function type string — the protocol member
+// name, DuckDB's *_FUNCTION catalog type, or a legacy lower-case spelling — to
+// the canonical FunctionType constant (the protocol member name). Unknown
+// values are returned unchanged.
 func normalizeFunctionType(ft FunctionType) FunctionType {
 	switch ft {
 	case "SCALAR", "SCALAR_FUNCTION", "scalar":

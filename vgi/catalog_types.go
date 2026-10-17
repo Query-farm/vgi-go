@@ -129,8 +129,16 @@ var functionInfoSchema = generated.FunctionInfoSchema
 
 // SerializeFunctionInfo serializes a FunctionInfo to IPC bytes.
 func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
+	// function_type is a dictionary-encoded enum column: it must carry the
+	// protocol member NAME (SCALAR, TABLE, AGGREGATE, TABLE_BUFFERING).
+	functionType := normalizeFunctionType(info.FunctionType)
+	switch functionType {
+	case FunctionTypeScalar, FunctionTypeTable, FunctionTypeAggregate, FunctionTypeTableBuffering:
+	default:
+		return nil, fmt.Errorf("function %q has unknown function_type %q", info.Name, info.FunctionType)
+	}
 	if info.ArgumentMonotonicity != nil {
-		if info.FunctionType != FunctionTypeScalar {
+		if functionType != FunctionTypeScalar {
 			return nil, fmt.Errorf("argument_monotonicity is only valid for scalar functions")
 		}
 		argumentCount := 0
@@ -198,7 +206,7 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	// function_type
 	ftBuilder := array.NewDictionaryBuilder(mem, dictType)
 	defer ftBuilder.Release()
-	ftBuilder.(*array.BinaryDictionaryBuilder).AppendString(string(info.FunctionType))
+	ftBuilder.(*array.BinaryDictionaryBuilder).AppendString(string(functionType))
 
 	// arguments
 	argBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
