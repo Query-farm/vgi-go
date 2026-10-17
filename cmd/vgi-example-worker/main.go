@@ -1117,7 +1117,7 @@ func main() {
 		if jwtCleanup != nil {
 			defer jwtCleanup()
 		}
-		// vgi_rpc.Identity.v1 under the IDENTITY_CONFORMANCE_FIXTURE policy
+		// vgi_rpc.Identity.v2 under the IDENTITY_CONFORMANCE_FIXTURE policy
 		// (vgi-rpc-test-hosted --identity), and the conformance caller-identity
 		// headers it is asserted through. Those headers are honoured only when
 		// present -- every other request authenticates exactly as before -- and

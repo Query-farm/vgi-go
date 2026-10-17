@@ -53,7 +53,7 @@ jobs:
 
   # vgi-rpc's hosted-protocols conformance group against the example worker:
   # conformance.Secondary.v1 hosted through vgi.WithHostedProtocols on stdio,
-  # unix and HTTP, and vgi_rpc.Identity.v1 (vgi.WithIdentity) over HTTP. The
+  # unix and HTTP, and vgi_rpc.Identity.v2 (vgi.WithIdentity) over HTTP. The
   # reference is unpinned main by design, as in the port CI: a reference change
   # that breaks this SDK turns it red the same day.
   hosted-protocols:

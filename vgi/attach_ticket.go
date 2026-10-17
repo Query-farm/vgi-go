@@ -6,7 +6,7 @@ package vgi
 // that user.
 //
 // A ticket is the *what* half of an unattended session; a sealed grant
-// (vgi_rpc.Identity.v1 issue_grant) is the *who*. While the user is attached
+// (vgi_rpc.Identity.v2 issue_grant) is the *who*. While the user is attached
 // and logged in, a client asks the worker (vgi.attach_tickets.v1 seal_attach)
 // to seal the options it attached with -- secret ones included -- into a ticket
 // only this worker can open. Later a runner holding the user's grant attaches
@@ -37,7 +37,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"os"
 	"regexp"
 	"strconv"
@@ -67,8 +66,9 @@ const (
 	AttachTicketsProtocolName = "vgi.attach_tickets.v1"
 
 	// AttachTicketsProtocolVersion is vgi.attach_tickets.v1's declared
-	// version.
-	AttachTicketsProtocolVersion = "1.0.0"
+	// version. 2.0.0 changed AttachTicket.expires_at from float64 unix
+	// seconds (+Inf = no expiry) to a nullable timestamp[us, tz="UTC"].
+	AttachTicketsProtocolVersion = "2.0.0"
 
 	// SigningKeyEnv names the environment variable holding the worker's
 	// signing key: the key that seals attach_opaque_data envelopes and attach
@@ -636,9 +636,10 @@ func (SealAttachRequestWire) VgiRpcParamsSchema() *arrow.Schema { return sealAtt
 type AttachTicketWire struct {
 	// Ticket is the vgia1. text. Not a credential, but never logged.
 	Ticket string `vgirpc:"ticket"`
-	// ExpiresAt is Unix seconds after which the worker refuses the ticket;
-	// +Inf when the worker sets no maximum lifetime.
-	ExpiresAt float64 `vgirpc:"expires_at"`
+	// ExpiresAt is the UTC instant after which the worker refuses the
+	// ticket, carried as a nullable timestamp[us, tz="UTC"]; nil (null on the
+	// wire) when the worker sets no maximum lifetime.
+	ExpiresAt *time.Time `vgirpc:"expires_at,timestamp_utc"`
 }
 
 // attachTickets implements vgi.attach_tickets.v1 over a worker.
@@ -839,9 +840,10 @@ func (a *attachTickets) sealAttach(_ context.Context, cc *vgirpc.CallContext, re
 	if err != nil {
 		return AttachTicketWire{}, ticketInvalidRequest("seal_attach request is invalid", [][2]string{{"request", err.Error()}})
 	}
-	out := AttachTicketWire{Ticket: token, ExpiresAt: math.Inf(1)}
+	out := AttachTicketWire{Ticket: token}
 	if expiresAt != 0 {
-		out.ExpiresAt = float64(expiresAt)
+		expiry := time.Unix(expiresAt, 0).UTC()
+		out.ExpiresAt = &expiry
 	}
 	return out, nil
 }

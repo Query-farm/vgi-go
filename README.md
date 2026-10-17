@@ -245,7 +245,7 @@ change `vgi.v2`: every request routes on its protocol name. A returned protocol
 named under the reserved `vgi_rpc.` prefix, named `vgi.v2`, or named twice
 stops the worker from starting, with an error naming the hook.
 
-## Identity (`vgi_rpc.Identity.v1`)
+## Identity (`vgi_rpc.Identity.v2`)
 
 A worker can resolve opaque bearer credentials to principals for a reverse
 proxy (`introspect_token`), and mint short-lived grants for the calling user
@@ -314,6 +314,12 @@ worker at startup.
   it does not recognise, or the grant verifier is never reached.
 
 ## Attach tickets (`vgi.attach_tickets.v1`)
+
+Protocol version `2.0.0`: `seal_attach` returns `ticket` (utf8) and
+`expires_at`, a nullable `timestamp[us, tz="UTC"]` (`*time.Time` in
+`vgi.AttachTicketWire`). Version `1.0.0` carried a float64 of unix seconds
+with `+Inf` for "no expiry"; the exact major.minor check rejects a `1.0.0`
+peer.
 
 A grant says *who* attaches; an attach ticket says *what*. While a user is
 attached and logged in, a client calls `seal_attach` and the worker seals the

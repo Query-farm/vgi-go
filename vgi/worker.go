@@ -369,7 +369,7 @@ type Worker struct {
 	attachWriteFunctionGetHandler AttachWriteFunctionGetHandler
 	catalogVersionHook            CatalogVersionHook
 	// hostedProtocols supplies the protocols hosted beside vgi.v2
-	// (WithHostedProtocols); identity opts into vgi_rpc.Identity.v1 over HTTP
+	// (WithHostedProtocols); identity opts into vgi_rpc.Identity.v2 over HTTP
 	// (WithIdentity). See hosting.go.
 	hostedProtocols HostedProtocolsFunc
 	identity        *vgirpc.IdentityConfig
@@ -1373,7 +1373,7 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 		return nil, err
 	}
 
-	// vgi_rpc.Identity.v1 only where callers are authenticated.
+	// vgi_rpc.Identity.v2 only where callers are authenticated.
 	if transport == transportHTTP {
 		if err := w.hostIdentity(s, grantKeys); err != nil {
 			return nil, err

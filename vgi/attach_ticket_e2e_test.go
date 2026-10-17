@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"math"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -191,7 +190,7 @@ var sealAttachRequestSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "ttl_seconds", Type: arrow.PrimitiveTypes.Int64},
 }, nil)
 
-func sealAttach(t *testing.T, c *vgirpc.HttpClient, catalog string, options []byte, ttl int64) (string, float64, error) {
+func sealAttach(t *testing.T, c *vgirpc.HttpClient, catalog string, options []byte, ttl int64) (string, *time.Time, error) {
 	t.Helper()
 	row := map[string]any{"catalog_name": catalog, "data_version_spec": "", "implementation_version": "", "ttl_seconds": ttl}
 	if options != nil {
@@ -201,12 +200,21 @@ func sealAttach(t *testing.T, c *vgirpc.HttpClient, catalog string, options []by
 	out, err := unaryStruct(t, c, "seal_attach", arrow.NewSchema([]arrow.Field{
 		{Name: "request", Type: arrow.BinaryTypes.Binary}}, nil), map[string]any{"request": request})
 	if err != nil {
-		return "", 0, err
+		return "", nil, err
 	}
 	defer out.Release()
 	ticket := out.Column(out.Schema().FieldIndices("ticket")[0]).(*array.String).Value(0)
-	expires := out.Column(out.Schema().FieldIndices("expires_at")[0]).(*array.Float64).Value(0)
-	return ticket, expires, nil
+	// expires_at is a nullable timestamp[us, tz="UTC"]; null means no expiry.
+	field := out.Schema().Field(out.Schema().FieldIndices("expires_at")[0])
+	if ts, ok := field.Type.(*arrow.TimestampType); !ok || ts.Unit != arrow.Microsecond || ts.TimeZone != "UTC" || !field.Nullable {
+		t.Fatalf("seal_attach expires_at is %v (nullable=%v); want nullable timestamp[us, tz=UTC]", field.Type, field.Nullable)
+	}
+	col := out.Column(out.Schema().FieldIndices("expires_at")[0]).(*array.Timestamp)
+	if col.IsNull(0) {
+		return ticket, nil, nil
+	}
+	expires := time.UnixMicro(int64(col.Value(0))).UTC()
+	return ticket, &expires, nil
 }
 
 func issueGrant(t *testing.T, e *ticketE2E, principal string) string {
@@ -250,11 +258,12 @@ func TestAttachTicketEndToEnd(t *testing.T) {
 
 	// 2. seal_attach and issue_grant, as alice.
 	tickets := e.client(vgi.AttachTicketsProtocolName, vgi.AttachTicketsProtocolVersion, grantE2EPrincipalHeader, "alice")
+	before := time.Now().Truncate(time.Second)
 	ticket, expiresAt, err := sealAttach(t, tickets, ticket_probe.CatalogName, options, 0)
 	if err != nil {
 		t.Fatalf("seal_attach: %v", err)
 	}
-	if !strings.HasPrefix(ticket, vgi.AttachTicketPrefix) || math.IsInf(expiresAt, 0) {
+	if !strings.HasPrefix(ticket, vgi.AttachTicketPrefix) || expiresAt == nil || !expiresAt.After(before) {
 		t.Fatalf("seal_attach = (%.12q..., %v); want a vgia1. ticket capped at the grant maximum", ticket, expiresAt)
 	}
 	grant := issueGrant(t, e, "alice")
@@ -342,8 +351,11 @@ func TestSealAttachValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if expires-short < 3600-60-5 || expires-short > 3600-60+5 {
-		t.Fatalf("lifetimes: capped %v, short %v", expires, short)
+	if expires == nil || short == nil {
+		t.Fatalf("lifetimes: capped %v, short %v; neither may be null under a grant maximum", expires, short)
+	}
+	if d := expires.Sub(*short); d < (3600-60-5)*time.Second || d > (3600-60+5)*time.Second {
+		t.Fatalf("lifetimes: capped %v, short %v", *expires, *short)
 	}
 }
 
