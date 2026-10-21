@@ -5,41 +5,39 @@ runs the canonical [Query-farm/vgi](https://github.com/Query-farm/vgi)
 integration sqllogictest suite against this repo's Go example worker on every
 push / PR. The same `.test` files run against the Python, Java, and Go ports, so
 a green run here is real wire-compatibility evidence — it exercises the worker
-through the *published* DuckDB extension, not a mock.
+through the native DuckDB extension built at the same pinned commit as the tests.
 
 (The separate [`ci.yml`](../.github/workflows/ci.yml) covers fmt / vet / lint /
 build / unit tests.)
 
 ## How it works (no C++ build)
 
-Rather than building the vgi DuckDB extension from source (which needs the
-Haybarn vcpkg pipeline), CI drives a **prebuilt** standalone `haybarn-unittest`
-(the DuckDB/Haybarn sqllogictest runner, published in Haybarn's releases) and
-installs the **signed** vgi extension from the Haybarn community channel:
+CI downloads a native runner built by `Query-farm/vgi` at the exact `VGI_REF`
+commit used for the test suite. This keeps development wire changes testable
+before the corresponding public extension release.
 
 1. **Build the workers once** — a producer job runs `make build COVER=1` and
-   publishes one executable-preserving archive for every transport lane. It
-   contains the five dedicated worker
-   binaries (`vgi-example-worker-go` plus the versioned / versioned-tables /
-   attach-options / simple-writable workers). All five accept `--unix`, so the
-   launcher lane can front every one of them with `launch:`. The RPC layer is
-   the published `github.com/Query-farm/vgi-rpc-go` module, so nothing else
-   builds from source.
-2. **Checkout the test suite** — `Query-farm/vgi` at `main`; its
-   `test/sql/integration/*.test` files are the suite.
-3. **Download the runner** — `haybarn_unittest-linux-amd64.zip` from the latest
-   Haybarn release.
-4. **Preprocess** — the standalone runner links none of the extensions the tests
-   gate on, so [`preprocess-require.awk`](preprocess-require.awk) rewrites each
-   `require <ext>` into an explicit signed `INSTALL <ext> FROM {community,core};
-   LOAD <ext>;`. `require-env` and everything else pass through.
-5. **Run** — [`run-integration.sh`](run-integration.sh) stages the preprocessed
-   tree, wires the `VGI_*_WORKER` env vars at the five binaries for the selected
-   transport, `FORCE INSTALL`s the vgi extension (so the run uses what users can
-   install today), then runs the suite in a single `haybarn-unittest`
-   invocation. The CI log streams the runner's native report (a `[i/N] (..%):`
-   line per file and the final `All tests passed (.. N assertions in M test
-   cases)`); any failed assertion exits non-zero and fails the job.
+   publishes an archive preserving executable permissions for the five worker
+   binaries. Each transport lane uses that archive.
+2. **Checkout the test suite** — `Query-farm/vgi` at the pinned `VGI_REF`.
+3. **Download matching binaries** — the native checkout's
+   `scripts/ci_fetch_native_runner.py` verifies the artifact's commit and exports
+   `HAYBARN_UNITTEST`, `HAYBARN_CLI`, and `RUNNER_LINKS_EXTENSIONS=1`.
+4. **Stage the suite** — [`run-integration.sh`](run-integration.sh) preserves
+   `require` gates for the statically linked runner, ensures HTTP lanes load
+   httpfs, and excludes only the existing out-of-scope files.
+5. **Run and account** — the runner uses `--test-dir` to execute the staged
+   tree. Failed assertions, unexpected skips, and counts below the existing
+   executed-case floors all fail the job.
+
+Local invocations retain the standalone release-runner behavior by default:
+`require` gates become signed installs from community/core and the extension
+cache is warmed. Set `RUNNER_LINKS_EXTENSIONS=1` when supplying a native runner
+that already links the extensions. Public release publication remains separate.
+The development engine currently omits spatial and has no matching published
+spatial binary, so linked mode explicitly accounts for that one unsupported
+`require spatial` case. Standalone mode still treats a missing spatial extension
+as an unexpected skip; all executed-case floors stay unchanged.
 
 Unlike the Java port, vgi-go needs **no catalog wrapper scripts** (it ships a
 dedicated binary per catalog) and **no RPC build from source** (vgi-rpc-go is a

@@ -2,8 +2,8 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 #
 # Run the canonical Query-farm/vgi integration sqllogictest suite against the Go
-# example worker, using a prebuilt standalone `haybarn-unittest` and the signed
-# community vgi extension — no C++ build from source. See ci/README.md.
+# example worker. CI uses the matching native runner; local standalone runs
+# default to the signed community extension. See ci/README.md.
 #
 # Ported from vgi-java's harness. Two simplifications for the Go port:
 #   * vgi-go builds FIVE dedicated worker binaries (one per catalog), so there
@@ -24,6 +24,7 @@
 #   BIN_DIR           dir holding the built worker binaries (default: repo root)
 #   TRANSPORT         stdio | shm | launch | http   (default: stdio)
 #   VGI_RPC_SHM_SIZE_BYTES  shm side-channel segment size (the shm lane)
+#   RUNNER_LINKS_EXTENSIONS  1 uses the native runner's linked extensions and disables installs
 #   STAGE             scratch dir for the preprocessed test tree (default: mktemp)
 set -euo pipefail
 
@@ -35,6 +36,10 @@ REPO="$(cd "$HERE/.." && pwd)"
 BIN_DIR="${BIN_DIR:-$REPO}"
 STAGE="${STAGE:-$(mktemp -d)}"
 TRANSPORT="${TRANSPORT:-stdio}"
+PREPROCESS=1
+if [ "${RUNNER_LINKS_EXTENSIONS:-0}" = "1" ]; then
+  PREPROCESS=0
+fi
 INTEGRATION="$VGI_SRC/test/sql/integration"
 [ -d "$INTEGRATION" ] || { echo "::error::no test/sql/integration under VGI_SRC=$VGI_SRC"; exit 1; }
 
@@ -58,10 +63,10 @@ for b in "$WORKER" "$VERSIONED" "$VERSIONED_TABLES" "$ATTACH_OPTIONS" "$SIMPLE_W
 done
 
 # ---------------------------------------------------------------------------
-# Stage a preprocessed copy of the suite. preprocess-require.awk rewrites each
-# `require <ext>` gate into a signed INSTALL+LOAD so the standalone runner
-# (which links none of these extensions) can run them. On the http lane it also
-# injects `LOAD httpfs` before each worker ATTACH.
+# Stage a copy of the suite. The standalone release runner needs each
+# `require <ext>` gate rewritten into signed INSTALL+LOAD; the matching native
+# runner keeps those gates and uses its linked extensions. On the HTTP lane
+# both modes ensure httpfs is available before each worker ATTACH.
 # ---------------------------------------------------------------------------
 AWK_HTTP=0
 EXTRA_SKIP=()
@@ -103,7 +108,7 @@ mkdir -p "$STAGE/test/sql/integration"
        -not -name 'nested_type_combinations.test' \
        ${EXTRA_SKIP[@]+"${EXTRA_SKIP[@]}"} | while read -r f; do
     mkdir -p "$STAGE/test/sql/integration/$(dirname "$f")"
-    awk -v http="$AWK_HTTP" -f "$HERE/preprocess-require.awk" "$f" > "$STAGE/test/sql/integration/$f"
+    awk -v http="$AWK_HTTP" -v install="$PREPROCESS" -f "$HERE/preprocess-require.awk" "$f" > "$STAGE/test/sql/integration/$f"
   done )
 
 # The database-worker tests package this executable through a path relative to
@@ -384,6 +389,11 @@ EXPECTED_SKIP_REASONS=(
   'require-env VGI_MALFORMED_BATCH_WORKER'       # hostile malformed-Arrow fixture (vgi test/support only)
   'require-env VGI_ROWID_CONSTRAINT_WORKER'      # hostile rowid-constraint fixture (vgi test/support only)
 )
+if [ "${RUNNER_LINKS_EXTENSIONS:-0}" = "1" ]; then
+  # The development runner omits spatial, and no signed spatial binary is
+  # published for its engine hash. Keep the standalone release lane strict.
+  EXPECTED_SKIP_REASONS+=('require spatial')
+fi
 # Lane-specific additions — a skip that is expected on one lane is a red flag on
 # another (e.g. VGI_TEST_DEDICATED_WORKER skipping on stdio would mean the crash
 # tests silently stopped running).
@@ -431,12 +441,13 @@ esac
 
 cd "$STAGE"
 
-echo "Warming the extension cache (vgi from community, deps from core) ..."
-mkdir -p "$STAGE/test"
-# FORCE INSTALL vgi re-downloads the currently-published community build,
-# overriding any older cached copy, so the suite runs against what users can
-# install today (and so a freshly-published extension is picked up immediately).
-cat > "$STAGE/test/_warm.test" <<'EOF'
+if [ "$PREPROCESS" = "1" ]; then
+  echo "Warming the extension cache (vgi from community, deps from core) ..."
+  mkdir -p "$STAGE/test"
+  # FORCE INSTALL vgi re-downloads the currently-published community build,
+  # overriding any older cached copy, so the suite runs against what users can
+  # install today (and so a freshly-published extension is picked up immediately).
+  cat > "$STAGE/test/_warm.test" <<'EOF'
 # name: test/_warm.test
 # group: [warm]
 statement ok
@@ -454,8 +465,9 @@ INSTALL parquet FROM core;
 statement ok
 INSTALL spatial FROM core;
 EOF
-"$HAYBARN_UNITTEST" "test/_warm.test" >/dev/null 2>&1 || echo "::warning::extension warm step did not fully succeed"
-rm -f "$STAGE/test/_warm.test"
+  "$HAYBARN_UNITTEST" --test-dir "$STAGE" "test/_warm.test" >/dev/null 2>&1 || echo "::warning::extension warm step did not fully succeed"
+  rm -f "$STAGE/test/_warm.test"
+fi
 
 # summarize_run <log> — parse the runner's console report and enforce the skip
 # contract + accumulate the executed-case count (checked against MIN_EXECUTED
@@ -513,7 +525,7 @@ run_unittest() {
   # tripping errexit and without a trailing `|| true` (which, as a new simple
   # command, would overwrite PIPESTATUS with 0 — the accounting must still run
   # when the suite itself failed).
-  "$HAYBARN_UNITTEST" --test-config "$TEST_CONFIG" "$@" 2>&1 | tee "$log" && rc=0 || rc="${PIPESTATUS[0]}"
+  "$HAYBARN_UNITTEST" --test-dir "$STAGE" --test-config "$TEST_CONFIG" "$@" 2>&1 | tee "$log" && rc=0 || rc="${PIPESTATUS[0]}"
   if grep -q 'due to a fatal error condition' "$log"; then
     echo "::error::a forked child ran the test harness's signal handler (see the" \
          "'fatal error condition' block above). The parent exited $rc and would" \
