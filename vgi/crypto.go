@@ -289,6 +289,14 @@ func (w *Worker) unwrapReqOpaque(reqPtr any, cc *vgirpc.CallContext) error {
 				return err
 			}
 			af.SetBytes(plain)
+			if cc != nil {
+				scope := sha256.Sum256(sealedAttach)
+				base := cc.Ctx
+				if base == nil {
+					base = context.Background()
+				}
+				cc.Ctx = context.WithValue(base, catalogAttachmentScopeKey{}, fmt.Sprintf("attachment:%x", scope))
+			}
 		}
 	}
 	if !w.sealOpaqueData {

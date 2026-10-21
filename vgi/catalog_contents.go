@@ -15,20 +15,11 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 )
 
-// catalog_contents (protocol 2.1.0) returns every schema and all of its
-// contents in one result, replacing catalog_schemas plus one
-// catalog_schema_contents_* call per schema and kind. It is composed from the
-// SAME listings those RPCs serve (listSchemaInfos, listTableItems, ...), so
-// every item is byte-for-byte what the per-schema RPC returns and a client
-// decodes it with the decoder it already has. It mirrors vgi-python's
-// CatalogInterface.catalog_contents default.
-//
-// The response (generated.CatalogContentsResponse) carries one inline
-// SchemaContents struct row per schema (its path, then the items), plus an
-// optional etag: a client that holds the etag sends it back as if_none_match
-// and gets not_modified (no schemas) while the catalog is unchanged. A catalog
-// returns an etag through WithCatalogContentsHandler, or opts in to the
-// framework content hash with WithCatalogContentsEtag.
+// catalog_contents (wire 2.2) returns six catalog-wide metadata streams. Each
+// category retains the per-schema RPC's metadata fields and contains all rows
+// across schema boundaries. Empty categories are null. The legacy author
+// callback still accepts grouped SchemaContents and is adapted to this wire.
+// A matching optional ETag returns inline not_modified with all six streams null.
 
 // Function and macro kinds catalog_contents lists, as the per-schema RPCs'
 // type filter spells them.
@@ -383,6 +374,9 @@ func (w *Worker) catalogContents(req CatalogContentsParams, callCtx *vgirpc.Call
 	if err != nil {
 		return generated.CatalogContentsResponse{}, err
 	}
+	if policy := w.catalogSnapshotPolicy; policy != nil && policy.Delivery == "published" {
+		return w.publishedCatalogContents(req, callCtx, version)
+	}
 	if !w.catalogContentsCacheable(req.AttachOpaqueData) {
 		return w.catalogContentsResponse(req.AttachOpaqueData, req.IfNoneMatch, version, callCtx)
 	}
@@ -409,7 +403,6 @@ func notModifiedResponse(version int64, etag string) generated.CatalogContentsRe
 		CatalogVersion: version,
 		Etag:           &etag,
 		NotModified:    true,
-		Schemas:        []generated.SchemaContents{},
 	}
 }
 
@@ -419,6 +412,9 @@ func notModifiedResponse(version int64, etag string) generated.CatalogContentsRe
 // schemas; a catalog with no etag never yields not_modified; schema paths are
 // unique, each nested schema's parent is present, and parents come first.
 func (w *Worker) catalogContentsResponse(attachOpaqueData []byte, ifNoneMatch *string, version int64, callCtx *vgirpc.CallContext) (generated.CatalogContentsResponse, error) {
+	if w.catalogContentsCacheable(attachOpaqueData) {
+		return w.directCatalogContents(attachOpaqueData, version, ifNoneMatch)
+	}
 	return answerCatalogContents(w.catalogContentsHandler, w.catalogContentsEtag, &CatalogContentsCall{
 		AttachOpaqueData: attachOpaqueData,
 		CatalogName:      w.catalogOfAttach(attachOpaqueData),
@@ -475,15 +471,18 @@ func answerCatalogContents(handler CatalogContentsHandler, etagMode CatalogConte
 	// Same parent-before-child order catalog_schemas guarantees.
 	slices.SortStableFunc(schemas, func(a, b generated.SchemaContents) int { return len(a.Path) - len(b.Path) })
 
-	etag := result.Etag
-	if etag == nil && etagMode == CatalogContentsEtagContentHash {
-		digest := CatalogContentsDigest(schemas)
-		etag = &digest
+	response, err := encodeCatalogStreams(version, result.Etag, schemas)
+	if err != nil {
+		return generated.CatalogContentsResponse{}, err
 	}
-	if etag != nil && ifNoneMatch != nil && *etag == *ifNoneMatch {
-		return notModifiedResponse(version, *etag), nil
+	if response.Etag == nil && etagMode == CatalogContentsEtagContentHash {
+		digest := CatalogStreamsDigest(response)
+		response.Etag = &digest
 	}
-	return generated.CatalogContentsResponse{CatalogVersion: version, Etag: etag, Schemas: schemas}, nil
+	if response.Etag != nil && ifNoneMatch != nil && *response.Etag == *ifNoneMatch {
+		return notModifiedResponse(version, *response.Etag), nil
+	}
+	return response, nil
 }
 
 // checkContentsPaths validates a snapshot's schema paths: non-empty, unique,
@@ -612,4 +611,99 @@ func (w *Worker) schemaContentsOf(attachOpaqueData []byte, info *SchemaInfo) (ge
 		Indexes: [][]byte{},
 	}
 	return contents, firstErr
+}
+
+// CatalogStreamsDigest versions and length-prefixes the six complete streams.
+func CatalogStreamsDigest(response generated.CatalogContentsResponse) string {
+	h := sha256.New()
+	var n [8]byte
+	count := func(value uint64) { binary.LittleEndian.PutUint64(n[:], value); h.Write(n[:]) }
+	chunk := func(value []byte) { count(uint64(len(value))); h.Write(value) }
+	chunk([]byte("vgi.catalog-contents.2.2"))
+	count(uint64(response.CatalogVersion))
+	for _, value := range []*[]byte{response.Schemas, response.Tables, response.Views, response.Functions, response.Macros, response.Indexes} {
+		if value == nil {
+			count(0)
+		} else {
+			count(1)
+			chunk(*value)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (w *Worker) publishedCatalogContents(req CatalogContentsParams, ctx *vgirpc.CallContext, version int64) (generated.CatalogContentsResponse, error) {
+	p := w.catalogSnapshotPolicy
+	if p.Identity == nil || ctx == nil {
+		return generated.CatalogContentsResponse{}, fmt.Errorf("published catalogs require identity hook and call context")
+	}
+	call := &CatalogContentsCall{AttachOpaqueData: req.AttachOpaqueData, CatalogName: w.catalogOfAttach(req.AttachOpaqueData), IfNoneMatch: req.IfNoneMatch, CatalogVersion: version, CallCtx: ctx}
+	if p.Etag != nil {
+		etag, err := p.Etag(call)
+		if err != nil {
+			return generated.CatalogContentsResponse{}, err
+		}
+		if etag != nil && req.IfNoneMatch != nil && *etag == *req.IfNoneMatch {
+			return notModifiedResponse(version, *etag), nil
+		}
+	}
+	id, err := p.Identity(call)
+	attachmentScope := ""
+	if ctx.Ctx != nil {
+		attachmentScope, _ = ctx.Ctx.Value(catalogAttachmentScopeKey{}).(string)
+	}
+	if id.VisibilityScope == "" {
+		id.VisibilityScope = attachmentScope
+	}
+	if err != nil {
+		return generated.CatalogContentsResponse{}, err
+	}
+	if id.CatalogVersion != version {
+		return generated.CatalogContentsResponse{}, fmt.Errorf("snapshot identity differs from catalog version")
+	}
+	manager := w.catalogSnapshotManager
+	checkIdentity := func() error {
+		afterVersion, err := w.catalogVersionOf(req.AttachOpaqueData, ctx)
+		if err != nil {
+			return err
+		}
+		afterCall := *call
+		afterCall.CatalogVersion = afterVersion
+		after, err := p.Identity(&afterCall)
+		if after.VisibilityScope == "" {
+			after.VisibilityScope = attachmentScope
+		}
+		if err != nil {
+			return err
+		}
+		if afterVersion != version || after != id {
+			return fmt.Errorf("catalog changed during publication")
+		}
+		return nil
+	}
+	build := func() (generated.CatalogContentsResponse, error) {
+		response, err := w.catalogContentsResponse(req.AttachOpaqueData, nil, version, ctx)
+		if err != nil {
+			return response, err
+		}
+		return response, checkIdentity()
+	}
+	manifest, err := manager.Warm(id, build)
+	if err != nil {
+		if p.OnPublicationFailure == "ordinary" {
+			return build()
+		}
+		return generated.CatalogContentsResponse{}, err
+	}
+	if err = checkIdentity(); err != nil {
+		return generated.CatalogContentsResponse{}, err
+	}
+	if req.IfNoneMatch != nil && *req.IfNoneMatch == manifest.Etag {
+		return notModifiedResponse(version, manifest.Etag), nil
+	}
+	ref, err := vgirpc.NewExternalRef(manifest.URL, manifest.SHA256)
+	if err != nil {
+		return generated.CatalogContentsResponse{}, err
+	}
+	return generated.CatalogContentsResponse{}, ctx.RespondWithExternalRef(ref)
 }

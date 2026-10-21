@@ -1507,6 +1507,14 @@ func validateRequiredFilters(tableName string, columns *arrow.Schema, groups [][
 
 // serializeCatalogTable converts a CatalogTable into serialized TableInfo bytes.
 func (w *Worker) serializeCatalogTable(schemaPath SchemaPath, ct *CatalogTable) ([]byte, error) {
+	info, err := w.catalogTableInfo(schemaPath, ct)
+	if err != nil {
+		return nil, err
+	}
+	return SerializeTableInfo(info)
+}
+
+func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*TableInfo, error) {
 	// Resolve columns: if Function is set but Columns is nil, derive via OnBind
 	columns := ct.Columns
 	if columns == nil && ct.Function != nil {
@@ -1611,7 +1619,7 @@ func (w *Worker) serializeCatalogTable(schemaPath SchemaPath, ct *CatalogTable) 
 		info.BindResult = brBytes
 	}
 
-	return SerializeTableInfo(info)
+	return info, nil
 }
 
 // fkSchema is the generated wire format for a single foreign key constraint.

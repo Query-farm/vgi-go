@@ -3,13 +3,11 @@
 package vgi
 
 import (
-	"bytes"
 	"maps"
 	"slices"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 
 	"github.com/Query-farm/vgi-go/vgi/generated"
@@ -46,6 +44,15 @@ var viewInfoSchema = generated.ViewInfoSchema
 
 // SerializeViewInfo serializes a ViewInfo to IPC bytes.
 func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
+	record, err := buildViewInfoRecord(info)
+	if err != nil {
+		return nil, err
+	}
+	defer record.Release()
+	return SerializeRecordBatch(record)
+}
+
+func buildViewInfoRecord(info *ViewInfo) (arrow.RecordBatch, error) {
 	mem := memory.NewGoAllocator()
 
 	// comment
@@ -116,16 +123,5 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 		}
 	}()
 
-	batch := array.NewRecordBatch(viewInfoSchema, cols, 1)
-	defer batch.Release()
-
-	var buf bytes.Buffer
-	w := ipc.NewWriter(&buf, ipc.WithSchema(viewInfoSchema))
-	if err := w.Write(batch); err != nil {
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return array.NewRecordBatch(viewInfoSchema, cols, 1), nil
 }

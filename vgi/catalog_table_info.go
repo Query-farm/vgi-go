@@ -3,14 +3,12 @@
 package vgi
 
 import (
-	"bytes"
 	"maps"
 	"slices"
 	"sort"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 
 	"github.com/Query-farm/vgi-go/vgi/generated"
@@ -77,6 +75,15 @@ var tableInfoSchema = generated.TableInfoSchema
 
 // SerializeTableInfo serializes a TableInfo to IPC bytes.
 func SerializeTableInfo(info *TableInfo) ([]byte, error) {
+	record, err := buildTableInfoRecord(info)
+	if err != nil {
+		return nil, err
+	}
+	defer record.Release()
+	return SerializeRecordBatch(record)
+}
+
+func buildTableInfoRecord(info *TableInfo) (arrow.RecordBatch, error) {
 	mem := memory.NewGoAllocator()
 
 	// comment
@@ -292,18 +299,7 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 		}
 	}()
 
-	batch := array.NewRecordBatch(tableInfoSchema, cols, 1)
-	defer batch.Release()
-
-	var buf bytes.Buffer
-	w := ipc.NewWriter(&buf, ipc.WithSchema(tableInfoSchema))
-	if err := w.Write(batch); err != nil {
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return array.NewRecordBatch(tableInfoSchema, cols, 1), nil
 }
 
 // serializeInlineBindResult produces the IPC bytes for an inlined bind result

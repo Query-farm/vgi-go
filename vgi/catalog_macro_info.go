@@ -3,14 +3,12 @@
 package vgi
 
 import (
-	"bytes"
 	"fmt"
 	"maps"
 	"slices"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 
 	"github.com/Query-farm/vgi-go/vgi/generated"
@@ -85,6 +83,15 @@ var macroInfoSchema = generated.MacroInfoSchema
 
 // SerializeMacroInfo serializes a MacroInfo to IPC bytes.
 func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
+	record, err := buildMacroInfoRecord(info)
+	if err != nil {
+		return nil, err
+	}
+	defer record.Release()
+	return SerializeRecordBatch(record)
+}
+
+func buildMacroInfoRecord(info *MacroInfo) (arrow.RecordBatch, error) {
 	mem := memory.NewGoAllocator()
 
 	// comment
@@ -179,18 +186,7 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 		}
 	}()
 
-	batch := array.NewRecordBatch(macroInfoSchema, cols, 1)
-	defer batch.Release()
-
-	var buf bytes.Buffer
-	w := ipc.NewWriter(&buf, ipc.WithSchema(macroInfoSchema))
-	if err := w.Write(batch); err != nil {
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return array.NewRecordBatch(macroInfoSchema, cols, 1), nil
 }
 
 // macroInfoFromCatalogMacro builds the wire MacroInfo for a registered
