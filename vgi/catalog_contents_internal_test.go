@@ -99,11 +99,11 @@ func TestCatalogContentsCache(t *testing.T) {
 	if *binds != 1 {
 		t.Fatalf("cached catalog rebuilt: %d binds after three calls", *binds)
 	}
-	if *again.Etag != *first.Etag || len(again.Schemas) != len(first.Schemas) {
+	if *again.Etag != *first.Etag || len(*again.Schemas) != len(*first.Schemas) {
 		t.Fatal("a cache hit answered differently")
 	}
-	if !nm.NotModified || len(nm.Schemas) != 0 || *nm.Etag != *first.Etag {
-		t.Fatalf("a cache hit with a matching if_none_match: not_modified=%v schemas=%d", nm.NotModified, len(nm.Schemas))
+	if !nm.NotModified || nm.Schemas != nil || *nm.Etag != *first.Etag {
+		t.Fatalf("a cache hit with a matching if_none_match: not_modified=%v schemas=%d", nm.NotModified, nm.Schemas)
 	}
 	// Another catalog name served by the same worker is its own entry.
 	call(w, "other", nil)

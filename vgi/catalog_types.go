@@ -3,14 +3,12 @@
 package vgi
 
 import (
-	"bytes"
 	"fmt"
 	"maps"
 	"slices"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 
 	"github.com/Query-farm/vgi-go/vgi/generated"
@@ -129,6 +127,15 @@ var functionInfoSchema = generated.FunctionInfoSchema
 
 // SerializeFunctionInfo serializes a FunctionInfo to IPC bytes.
 func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
+	record, err := buildFunctionInfoRecord(info)
+	if err != nil {
+		return nil, err
+	}
+	defer record.Release()
+	return SerializeRecordBatch(record)
+}
+
+func buildFunctionInfoRecord(info *FunctionInfo) (arrow.RecordBatch, error) {
 	// function_type is a dictionary-encoded enum column: it must carry the
 	// protocol member NAME (SCALAR, TABLE, AGGREGATE, TABLE_BUFFERING).
 	functionType := normalizeFunctionType(info.FunctionType)
@@ -209,33 +216,42 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 	ftBuilder.(*array.BinaryDictionaryBuilder).AppendString(string(functionType))
 
 	// arguments
-	argBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	binaryDictionary := &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int32, ValueType: arrow.BinaryTypes.Binary}
+	argBuilder := array.NewDictionaryBuilder(mem, binaryDictionary).(*array.BinaryDictionaryBuilder)
 	defer argBuilder.Release()
 	if info.ArgSchema != nil {
 		argBytes, err := SerializeSchema(info.ArgSchema)
 		if err != nil {
 			return nil, err
 		}
-		argBuilder.Append(argBytes)
+		if err := argBuilder.Append(argBytes); err != nil {
+			return nil, err
+		}
 	} else {
-		argBuilder.Append([]byte{})
+		if err := argBuilder.Append([]byte{}); err != nil {
+			return nil, err
+		}
 	}
 
 	// output_schema
-	outputBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	outputBuilder := array.NewDictionaryBuilder(mem, binaryDictionary).(*array.BinaryDictionaryBuilder)
 	defer outputBuilder.Release()
 	if info.OutputSchema != nil {
 		outBytes, err := SerializeSchema(info.OutputSchema)
 		if err != nil {
 			return nil, err
 		}
-		outputBuilder.Append(outBytes)
+		if err := outputBuilder.Append(outBytes); err != nil {
+			return nil, err
+		}
 	} else {
-		outputBuilder.Append([]byte{})
+		if err := outputBuilder.Append([]byte{}); err != nil {
+			return nil, err
+		}
 	}
 
 	// parameter_default_values
-	defaultsBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	defaultsBuilder := array.NewDictionaryBuilder(mem, binaryDictionary).(*array.BinaryDictionaryBuilder)
 	defer defaultsBuilder.Release()
 	if info.ParameterDefaultValues != nil {
 		if info.ParameterDefaultValues.NumRows() != 1 {
@@ -245,7 +261,9 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("serialize parameter_default_values: %w", err)
 		}
-		defaultsBuilder.Append(defaultBytes)
+		if err := defaultsBuilder.Append(defaultBytes); err != nil {
+			return nil, err
+		}
 	} else {
 		defaultsBuilder.AppendNull()
 	}
@@ -575,25 +593,15 @@ func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error) {
 		}
 	}()
 
-	batch := array.NewRecordBatch(functionInfoSchema, cols, 1)
-	defer batch.Release()
-
-	var buf bytes.Buffer
-	w := ipc.NewWriter(&buf, ipc.WithSchema(functionInfoSchema))
-	if err := w.Write(batch); err != nil {
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return array.NewRecordBatch(functionInfoSchema, cols, 1), nil
 }
 
 // SchemaInfo describes a schema in the catalog.
 type SchemaInfo struct {
-	Path             SchemaPath
-	Comment          string
-	Tags             map[string]string
+	Path    SchemaPath
+	Comment string
+	Tags    map[string]string
+	// Deprecated: ignored when encoding SchemaInfo; use the attachment result.
 	AttachOpaqueData []byte
 	// EstimatedObjectCount, when non-nil, advertises the approximate per-kind
 	// population (e.g. {"table": 0, "view": 12}). A value of 0 is a hard
@@ -606,6 +614,15 @@ var schemaInfoSchema = generated.SchemaInfoSchema
 
 // SerializeSchemaInfo serializes a SchemaInfo to IPC bytes.
 func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error) {
+	record, err := buildSchemaInfoRecord(info)
+	if err != nil {
+		return nil, err
+	}
+	defer record.Release()
+	return SerializeRecordBatch(record)
+}
+
+func buildSchemaInfoRecord(info *SchemaInfo) (arrow.RecordBatch, error) {
 	mem := memory.NewGoAllocator()
 
 	commentBuilder := array.NewStringBuilder(mem)
@@ -628,14 +645,6 @@ func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error) {
 			kb.Append(k)
 			vb.Append(v)
 		}
-	}
-
-	attachOpaqueDataBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
-	defer attachOpaqueDataBuilder.Release()
-	if info.AttachOpaqueData != nil {
-		attachOpaqueDataBuilder.Append(info.AttachOpaqueData)
-	} else {
-		attachOpaqueDataBuilder.Append([]byte{})
 	}
 
 	pathBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
@@ -662,7 +671,6 @@ func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error) {
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
-		attachOpaqueDataBuilder.NewArray(),
 		pathBuilder.NewArray(),
 		eocBuilder.NewArray(),
 	}
@@ -672,16 +680,5 @@ func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error) {
 		}
 	}()
 
-	batch := array.NewRecordBatch(schemaInfoSchema, cols, 1)
-	defer batch.Release()
-
-	var buf bytes.Buffer
-	w := ipc.NewWriter(&buf, ipc.WithSchema(schemaInfoSchema))
-	if err := w.Write(batch); err != nil {
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return array.NewRecordBatch(schemaInfoSchema, cols, 1), nil
 }

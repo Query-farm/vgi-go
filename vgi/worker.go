@@ -288,12 +288,14 @@ func buildDefaultValueBatch(mem memory.Allocator, schema *arrow.Schema, dt arrow
 
 // Worker is the main VGI worker that hosts functions and serves RPC.
 type Worker struct {
-	scalars         map[string][]ScalarFunction
-	tables          map[string][]TableFunction
-	tableInOuts     map[string][]TableInOutFunction
-	tableBufferings map[string][]TableBufferingFunction
-	aggregates      map[string][]AggregateFunction
-	aggStorage      *aggregateStorage
+	catalogSnapshotPolicy  *CatalogSnapshotPolicy
+	catalogSnapshotManager *CatalogSnapshotManager
+	scalars                map[string][]ScalarFunction
+	tables                 map[string][]TableFunction
+	tableInOuts            map[string][]TableInOutFunction
+	tableBufferings        map[string][]TableBufferingFunction
+	aggregates             map[string][]AggregateFunction
+	aggStorage             *aggregateStorage
 	// streamingSessions tracks per-execution_id state for streaming-partitioned
 	// aggregates (aggregate_streaming_open/_chunk/_close).
 	streamingSessions streamingSessionStore
@@ -1280,7 +1282,7 @@ const ProtocolName = "vgi.v2"
 // 2.0.0 represents every schema identity as a root-to-leaf list of components;
 // 2.1.0 adds supports_catalog_contents to CatalogAttachResult and the
 // catalog_contents RPC (the whole catalog in one call; see catalog_contents.go).
-const ProtocolVersion = "2.1.0"
+const ProtocolVersion = "2.2.0"
 
 // buildServer is the one place a worker's server is built, for every
 // transport; see hosting.go for what it hosts. An error means the worker must

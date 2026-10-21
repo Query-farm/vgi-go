@@ -97,15 +97,15 @@ func illegalNulls(path string, f arrow.Field, arr arrow.Array) []string {
 	return out
 }
 
-// assertEnumMemberNames checks every dictionary column of rec carries only
-// values from the record's allowed member-name sets, and that no dictionary
-// column of the record goes unchecked.
+// assertEnumMemberNames checks every string dictionary column of rec carries
+// only values from the record's allowed member-name sets. Binary metadata
+// dictionaries are tested separately for byte equality and required values.
 func assertEnumMemberNames(t *testing.T, origin string, rec arrow.RecordBatch) {
 	t.Helper()
 	allowed := wireEnumMemberNames[origin]
 	for i, f := range rec.Schema().Fields() {
 		dict, ok := rec.Column(i).(*array.Dictionary)
-		if !ok {
+		if !ok || dict.Dictionary().DataType().ID() != arrow.STRING {
 			continue
 		}
 		names, known := allowed[f.Name]
