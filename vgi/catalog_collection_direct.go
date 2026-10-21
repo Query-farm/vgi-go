@@ -1,4 +1,5 @@
 // Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 package vgi
 
 import (
@@ -18,7 +19,7 @@ func encodeCatalogRecords(schema *arrow.Schema, records []arrow.RecordBatch) ([]
 	}
 	var output bytes.Buffer
 	writer := ipc.NewWriter(&output, ipc.WithSchema(schema))
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 	for offset := 0; offset < len(records); offset += catalogBatchRows {
 		chunk := records[offset:min(offset+catalogBatchRows, len(records))]
 		columns := make([]arrow.Array, schema.NumFields())

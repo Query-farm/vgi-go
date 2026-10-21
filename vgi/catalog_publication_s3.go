@@ -1,4 +1,5 @@
 // Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 package vgi
 
 import (
@@ -21,6 +22,8 @@ type CatalogS3SignedRequest struct {
 	ExpiresAt *time.Time
 	Stable    bool
 }
+
+// CatalogS3Signer signs a storage request, including its conditional headers and GET URL lifetime.
 type CatalogS3Signer func(key, method string, headers http.Header) (CatalogS3SignedRequest, error)
 
 // S3CatalogObjectStorage provides actual HTTP upload and conditional manifest
@@ -54,6 +57,8 @@ func (s *S3CatalogObjectStorage) request(key, method string, headers http.Header
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return fmt.Errorf("catalog storage redirect refused") }
 	return client.Do(req)
 }
+
+// Upload writes an immutable Arrow object and returns its signed GET URL.
 func (s *S3CatalogObjectStorage) Upload(data []byte, _ *arrow.Schema, encoding string) (string, error) {
 	key := s.ObjectPrefix + uuid.NewString() + ".arrow"
 	headers := http.Header{"Content-Type": []string{"application/vnd.apache.arrow.stream"}, "If-None-Match": []string{"*"}}
@@ -64,7 +69,7 @@ func (s *S3CatalogObjectStorage) Upload(data []byte, _ *arrow.Schema, encoding s
 	if err != nil {
 		return "", err
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return "", fmt.Errorf("catalog object PUT failed (%d)", response.StatusCode)
 	}
@@ -88,6 +93,8 @@ func (s *S3CatalogObjectStorage) Upload(data []byte, _ *arrow.Schema, encoding s
 	s.mu.Unlock()
 	return get.URL, nil
 }
+
+// Location consumes the lifetime information recorded for a newly uploaded reference.
 func (s *S3CatalogObjectStorage) Location(ref vgirpc.ExternalRef) (CatalogPublicationLocation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -98,12 +105,14 @@ func (s *S3CatalogObjectStorage) Location(ref vgirpc.ExternalRef) (CatalogPublic
 	delete(s.locations, ref.URL())
 	return value, nil
 }
+
+// Get reads a bounded manifest and its ETag, or returns nil bytes when absent.
 func (s *S3CatalogObjectStorage) Get(key string) ([]byte, string, error) {
 	response, err := s.request(key, "GET", http.Header{}, nil)
 	if err != nil {
 		return nil, "", err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == 404 {
 		return nil, "", nil
 	}
@@ -123,12 +132,14 @@ func (s *S3CatalogObjectStorage) Get(key string) ([]byte, string, error) {
 	}
 	return body, etag, nil
 }
+
+// PutIfAbsent creates a manifest with an atomic If-None-Match condition.
 func (s *S3CatalogObjectStorage) PutIfAbsent(key string, body []byte) (bool, error) {
 	response, err := s.request(key, "PUT", http.Header{"If-None-Match": []string{"*"}, "Content-Type": []string{"application/json"}}, body)
 	if err != nil {
 		return false, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == 412 || response.StatusCode == 409 {
 		return false, nil
 	}
@@ -137,12 +148,14 @@ func (s *S3CatalogObjectStorage) PutIfAbsent(key string, body []byte) (bool, err
 	}
 	return true, nil
 }
+
+// PutIfMatch replaces a manifest with an atomic If-Match condition.
 func (s *S3CatalogObjectStorage) PutIfMatch(key string, body []byte, etag string) (bool, error) {
 	response, err := s.request(key, "PUT", http.Header{"If-Match": []string{etag}, "Content-Type": []string{"application/json"}}, body)
 	if err != nil {
 		return false, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == 412 || response.StatusCode == 409 {
 		return false, nil
 	}
@@ -151,12 +164,14 @@ func (s *S3CatalogObjectStorage) PutIfMatch(key string, body []byte, etag string
 	}
 	return true, nil
 }
+
+// DeleteIfMatch deletes a manifest with an atomic If-Match condition.
 func (s *S3CatalogObjectStorage) DeleteIfMatch(key, etag string) (bool, error) {
 	response, err := s.request(key, "DELETE", http.Header{"If-Match": []string{etag}}, nil)
 	if err != nil {
 		return false, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == 412 || response.StatusCode == 404 {
 		return false, nil
 	}
@@ -165,6 +180,8 @@ func (s *S3CatalogObjectStorage) DeleteIfMatch(key, etag string) (bool, error) {
 	}
 	return true, nil
 }
+
+// Repository creates a durable manifest repository with conditional signed-URL renewal.
 func (s *S3CatalogObjectStorage) Repository(profile, prefix string, resolver *vgirpc.ExternalLocationConfig) *S3CatalogPublicationRepository {
 	if resolver == nil {
 		resolver = vgirpc.DefaultExternalLocationConfig(s)

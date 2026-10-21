@@ -1,4 +1,5 @@
 // Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 package vgi
 
 import (
@@ -34,7 +35,7 @@ func CombineCatalogItems(schema *arrow.Schema, items [][]byte) ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	writer := ipc.NewWriter(&buf, ipc.WithSchema(schema))
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 	records := []arrow.RecordBatch{}
 	pendingRows := int64(0)
 	totalRows := int64(0)

@@ -1,4 +1,5 @@
 // Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 package vgi
 
 import (
@@ -25,6 +26,7 @@ type catalogReadbackTransport struct {
 	manifest          CatalogPublicationManifest
 }
 
+// RoundTrip validates the complete encoded response before exposing decoded bytes to the RPC resolver.
 func (t catalogReadbackTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	request = request.Clone(request.Context())
 	request.Header = request.Header.Clone()
@@ -34,7 +36,7 @@ func (t catalogReadbackTransport) RoundTrip(request *http.Request) (*http.Respon
 	if err != nil || response.StatusCode != http.StatusOK {
 		return response, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.Uncompressed {
 		return nil, fmt.Errorf("catalog readback transport must preserve encoded response bytes")
 	}
@@ -56,7 +58,7 @@ func (t catalogReadbackTransport) RoundTrip(request *http.Request) (*http.Respon
 		if err != nil {
 			return nil, err
 		}
-		defer gzipReader.Close()
+		defer func() { _ = gzipReader.Close() }()
 		reader = gzipReader
 	case "zstd":
 		zstdReader, err := zstd.NewReader(reader, zstd.WithDecoderMaxMemory(uint64(t.rawCap)))

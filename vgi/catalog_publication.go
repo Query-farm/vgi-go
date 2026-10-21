@@ -1,4 +1,5 @@
 // Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 package vgi
 
 import (
@@ -30,6 +31,7 @@ type SnapshotIdentity struct {
 	CatalogVersion   int64  `json:"catalog_version"`
 }
 
+// CatalogPublicationManifest describes a validated, immutable catalog object and its wire contract.
 type CatalogPublicationManifest struct {
 	CacheKey          string     `json:"cache_key"`
 	ManifestID        string     `json:"manifest_id"`
@@ -51,6 +53,7 @@ type CatalogPublicationManifest struct {
 	ValidatorRevision int        `json:"validator_revision"`
 }
 
+// CatalogPublicationLocation declares the lifetime and storage identity of an external object.
 type CatalogPublicationLocation struct {
 	ObjectID    string
 	ExpiresAt   *time.Time
@@ -59,20 +62,32 @@ type CatalogPublicationLocation struct {
 	Stable bool
 }
 
+// CatalogPublicationRepository stores manifests and supplies external object storage and readback policy.
+// Commit and invalidation operations must be atomic for each cache key.
 type CatalogPublicationRepository interface {
+	// Profile returns a stable identifier for the storage configuration.
 	Profile() string
+	// Storage returns the external object uploader.
 	Storage() vgirpc.ExternalStorage
+	// Resolver returns the URL access and fetch policy used for readback.
 	Resolver() *vgirpc.ExternalLocationConfig
+	// Lookup returns the current manifest, or nil when the key is absent.
 	Lookup(key string) (*CatalogPublicationManifest, error)
+	// CommitIfAbsent stores a validated manifest unless one exists, returning the winner.
 	CommitIfAbsent(manifest CatalogPublicationManifest) (CatalogPublicationManifest, error)
+	// Invalidate removes the manifest only if its ID still matches.
 	Invalidate(key, manifestID string) (bool, error)
+	// Location returns the lifetime and storage identity of an uploaded reference.
 	Location(ref vgirpc.ExternalRef) (CatalogPublicationLocation, error)
 }
 
+// CatalogPublicationRenewer optionally refreshes an expiring location without changing its catalog content.
 type CatalogPublicationRenewer interface {
+	// Renew refreshes a location while preserving immutable identity and content.
 	Renew(CatalogPublicationManifest) (*CatalogPublicationManifest, error)
 }
 
+// CatalogSnapshotPolicy configures opt-in publication, identity, limits, and failure handling.
 type CatalogSnapshotPolicy struct {
 	Delivery             string // ordinary (default) or published
 	Repository           CatalogPublicationRepository
@@ -96,6 +111,7 @@ func WithCatalogSnapshotPolicy(policy *CatalogSnapshotPolicy) WorkerOption {
 	}
 }
 
+// MemoryCatalogPublicationRepository keeps manifests in process while storing catalog objects externally.
 type MemoryCatalogPublicationRepository struct {
 	mu        sync.Mutex
 	manifests map[string]CatalogPublicationManifest
@@ -105,20 +121,32 @@ type MemoryCatalogPublicationRepository struct {
 	location  func(vgirpc.ExternalRef) (CatalogPublicationLocation, error)
 }
 
+// NewMemoryCatalogPublicationRepository creates a process-local manifest repository.
+// The location callback must declare the lifetime of every uploaded reference.
 func NewMemoryCatalogPublicationRepository(profile string, storage vgirpc.ExternalStorage, resolver *vgirpc.ExternalLocationConfig, location func(vgirpc.ExternalRef) (CatalogPublicationLocation, error)) *MemoryCatalogPublicationRepository {
 	return &MemoryCatalogPublicationRepository{manifests: map[string]CatalogPublicationManifest{}, profile: profile, storage: storage, resolver: resolver, location: location}
 }
-func (r *MemoryCatalogPublicationRepository) Profile() string                 { return r.profile }
+
+// Profile returns the storage configuration identifier used in snapshot cache keys.
+func (r *MemoryCatalogPublicationRepository) Profile() string { return r.profile }
+
+// Storage returns the external object uploader.
 func (r *MemoryCatalogPublicationRepository) Storage() vgirpc.ExternalStorage { return r.storage }
+
+// Resolver returns the URL access policy and HTTP client used for readback validation.
 func (r *MemoryCatalogPublicationRepository) Resolver() *vgirpc.ExternalLocationConfig {
 	return r.resolver
 }
+
+// Location returns the storage identity and lifetime of an uploaded reference.
 func (r *MemoryCatalogPublicationRepository) Location(ref vgirpc.ExternalRef) (CatalogPublicationLocation, error) {
 	if r.location == nil {
 		return CatalogPublicationLocation{}, fmt.Errorf("publication storage must declare URL lifetime")
 	}
 	return r.location(ref)
 }
+
+// Lookup returns a manifest copy, or nil when the cache key is absent.
 func (r *MemoryCatalogPublicationRepository) Lookup(key string) (*CatalogPublicationManifest, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -128,6 +156,8 @@ func (r *MemoryCatalogPublicationRepository) Lookup(key string) (*CatalogPublica
 	}
 	return &m, nil
 }
+
+// CommitIfAbsent stores a manifest unless its key already exists, returning the winning manifest.
 func (r *MemoryCatalogPublicationRepository) CommitIfAbsent(m CatalogPublicationManifest) (CatalogPublicationManifest, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -137,6 +167,8 @@ func (r *MemoryCatalogPublicationRepository) CommitIfAbsent(m CatalogPublication
 	r.manifests[m.CacheKey] = m
 	return m, nil
 }
+
+// Invalidate removes a manifest only when its ID still matches the supplied ID.
 func (r *MemoryCatalogPublicationRepository) Invalidate(key, id string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -150,12 +182,17 @@ func (r *MemoryCatalogPublicationRepository) Invalidate(key, id string) (bool, e
 // CatalogManifestObjectStore maps onto S3/R2 conditional object operations.
 // Get returns nil for a missing object; conditions must be enforced atomically.
 type CatalogManifestObjectStore interface {
+	// Get returns object bytes and its conditional-operation ETag, or nil bytes when absent.
 	Get(key string) (body []byte, etag string, err error)
+	// PutIfAbsent atomically writes an object only when its key is absent.
 	PutIfAbsent(key string, body []byte) (created bool, err error)
+	// DeleteIfMatch atomically deletes an object only when its ETag matches.
 	DeleteIfMatch(key, etag string) (deleted bool, err error)
+	// PutIfMatch atomically replaces an object only when its ETag matches.
 	PutIfMatch(key string, body []byte, etag string) (bool, error)
 }
 
+// S3CatalogPublicationRepository persists manifests with conditional S3-compatible object operations.
 type S3CatalogPublicationRepository struct {
 	*MemoryCatalogPublicationRepository // storage configuration only; manifests live in Objects
 	Objects                             CatalogManifestObjectStore
@@ -163,6 +200,8 @@ type S3CatalogPublicationRepository struct {
 	RenewReference                      func(CatalogPublicationManifest) (*CatalogPublicationManifest, error)
 }
 
+// NewS3CatalogPublicationRepository creates a durable manifest repository under prefix.
+// Objects must enforce conditional writes and deletes atomically.
 func NewS3CatalogPublicationRepository(profile string, storage vgirpc.ExternalStorage, resolver *vgirpc.ExternalLocationConfig, location func(vgirpc.ExternalRef) (CatalogPublicationLocation, error), objects CatalogManifestObjectStore, prefix string) *S3CatalogPublicationRepository {
 	return &S3CatalogPublicationRepository{MemoryCatalogPublicationRepository: NewMemoryCatalogPublicationRepository(profile, storage, resolver, location), Objects: objects, Prefix: prefix}
 }
@@ -175,6 +214,8 @@ func (r *S3CatalogPublicationRepository) objectKey(key string) (string, error) {
 	}
 	return r.Prefix + key + ".json", nil
 }
+
+// Lookup reads a durable manifest, or returns nil when the cache key is absent.
 func (r *S3CatalogPublicationRepository) Lookup(key string) (*CatalogPublicationManifest, error) {
 	name, err := r.objectKey(key)
 	if err != nil {
@@ -193,6 +234,8 @@ func (r *S3CatalogPublicationRepository) Lookup(key string) (*CatalogPublication
 	}
 	return &m, nil
 }
+
+// CommitIfAbsent conditionally stores a manifest and returns the winner if another writer committed first.
 func (r *S3CatalogPublicationRepository) CommitIfAbsent(m CatalogPublicationManifest) (CatalogPublicationManifest, error) {
 	name, err := r.objectKey(m.CacheKey)
 	if err != nil {
@@ -215,6 +258,8 @@ func (r *S3CatalogPublicationRepository) CommitIfAbsent(m CatalogPublicationMani
 	}
 	return *winner, nil
 }
+
+// Renew refreshes a reference and conditionally persists it without replacing a concurrent manifest.
 func (r *S3CatalogPublicationRepository) Renew(before CatalogPublicationManifest) (*CatalogPublicationManifest, error) {
 	if r.RenewReference == nil {
 		return nil, nil
@@ -267,6 +312,8 @@ func checkPublicationRenewal(before, after CatalogPublicationManifest) error {
 	}
 	return nil
 }
+
+// Invalidate deletes a durable manifest only if its ID and storage ETag still match.
 func (r *S3CatalogPublicationRepository) Invalidate(key, id string) (bool, error) {
 	name, err := r.objectKey(key)
 	if err != nil {
@@ -296,6 +343,8 @@ type publicationPending struct {
 	manifest CatalogPublicationManifest
 	err      error
 }
+
+// CatalogSnapshotManager validates, caches, and coalesces immutable catalog publications.
 type CatalogSnapshotManager struct {
 	policy  *CatalogSnapshotPolicy
 	mu      sync.Mutex
@@ -303,9 +352,12 @@ type CatalogSnapshotManager struct {
 	pending map[string]*publicationPending
 }
 
+// NewCatalogSnapshotManager creates a manager using the supplied publication policy.
 func NewCatalogSnapshotManager(policy *CatalogSnapshotPolicy) *CatalogSnapshotManager {
 	return &CatalogSnapshotManager{policy: policy, cached: map[string]CatalogPublicationManifest{}, pending: map[string]*publicationPending{}}
 }
+
+// Key derives a cache key from the catalog identity, wire contract, and storage profile.
 func (m *CatalogSnapshotManager) Key(id SnapshotIdentity) (string, error) {
 	if id.CatalogNamespace == "" || id.SourceRevision == "" || id.VisibilityScope == "" || m.policy.Repository == nil {
 		return "", fmt.Errorf("published catalogs require repository, namespace, source revision and visibility scope")
@@ -332,6 +384,8 @@ func (m *CatalogSnapshotManager) usable(p CatalogPublicationManifest) bool {
 	deadline := time.Now().Add(grace)
 	return (p.Stable || p.ExpiresAt != nil) && (p.ExpiresAt == nil || p.ExpiresAt.After(deadline)) && (p.RetainUntil == nil || p.RetainUntil.After(deadline))
 }
+
+// Invalidate waits for an active publication, then removes its local and durable manifest.
 func (m *CatalogSnapshotManager) Invalidate(key string) error {
 	m.mu.Lock()
 	pending := m.pending[key]
@@ -349,6 +403,8 @@ func (m *CatalogSnapshotManager) Invalidate(key string) error {
 	_, err = m.policy.Repository.Invalidate(key, p.ManifestID)
 	return err
 }
+
+// Import validates an external manifest and commits it, validating any concurrent winner before caching it.
 func (m *CatalogSnapshotManager) Import(p CatalogPublicationManifest, id SnapshotIdentity) error {
 	key, err := m.Key(id)
 	if err != nil {
@@ -384,6 +440,9 @@ func (m *CatalogSnapshotManager) remember(p CatalogPublicationManifest) {
 	}
 	m.cached[p.CacheKey] = p
 }
+
+// Warm returns a validated publication, recovering or building it once per cache key.
+// The caller must ensure id still identifies the current catalog before serving the result.
 func (m *CatalogSnapshotManager) Warm(id SnapshotIdentity, build func() (generated.CatalogContentsResponse, error)) (CatalogPublicationManifest, error) {
 	key, err := m.Key(id)
 	if err != nil {
@@ -530,6 +589,7 @@ type boundedCatalogStorage struct {
 	compression                            string
 }
 
+// Upload enforces raw and stored byte limits before forwarding the encoded catalog to external storage.
 func (s *boundedCatalogStorage) Upload(data []byte, schema *arrow.Schema, encoding string) (string, error) {
 	if encoding != "" {
 		return "", fmt.Errorf("catalog publication requires identity content encoding")
@@ -558,7 +618,9 @@ func (s *boundedCatalogStorage) Upload(data []byte, schema *arrow.Schema, encodi
 			return "", err
 		}
 		body = writer.EncodeAll(data, nil)
-		writer.Close()
+		if err := writer.Close(); err != nil {
+			return "", err
+		}
 		encoding = "zstd"
 	default:
 		return "", fmt.Errorf("unsupported catalog publication compression")

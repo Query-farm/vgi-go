@@ -69,7 +69,7 @@ func TestCatalogPublicationRejectsNonResultEnvelopes(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			var output bytes.Buffer
 			writer := ipc.NewWriter(&output, ipc.WithSchema(record.Schema()))
-			var candidate arrow.RecordBatch = record
+			candidate := record
 			if key != "extra-batch" {
 				candidate = publicationMetadataRecord{record, arrow.NewMetadata([]string{key}, []string{"INFO"})}
 			}
