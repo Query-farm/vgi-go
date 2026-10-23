@@ -352,6 +352,12 @@ type FunctionMetadata struct {
 	// name for fixed args, positionally for varargs); named args stay bind-time
 	// scalars on ProcessParams.Args. Mirrors vgi-python's RowTransformFunction.
 	InputFromArgs bool
+	// InputRowsPerCall (InputFromArgs functions only) is the most input rows
+	// one worker call receives: the client's batched-LATERAL operator splits
+	// each input chunk, after dedup, into calls of at most this many rows. Nil
+	// (the default) sends a whole chunk per call. Must be positive; the worker
+	// refuses to start otherwise. Mirrors vgi-python's Meta.input_rows_per_call.
+	InputRowsPerCall *int64
 	// CacheControl opts the function into the extension's result cache: when
 	// set, its vgi.cache.* metadata is attached by the framework to every
 	// output batch of a SCALAR function and to every finalize batch of a

@@ -383,6 +383,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			// columns — the C++ extension reads this to register the function
 			// with real-typed args serving literal / column / LATERAL shapes.
 			fi.InputFromArgs = meta.InputFromArgs
+			fi.InputRowsPerCall = meta.InputRowsPerCall
 			place(kindTableInOut, name, i, fi)
 		}
 	}

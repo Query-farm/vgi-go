@@ -80,7 +80,11 @@ type FunctionInfo struct {
 	// placeholder), so one registration serves literal / column / LATERAL call
 	// shapes. The C++ extension reads it to enter the in-out registration branch
 	// with real-typed args and drive the literal single-row scan-mode.
-	InputFromArgs    bool
+	InputFromArgs bool
+	// InputRowsPerCall is, for a blended function, the most input rows one
+	// worker call receives; the client splits each input chunk into calls of
+	// at most this many rows. Nil sends a whole chunk per call.
+	InputRowsPerCall *int64
 	RequiredSettings []string
 	RequiredSecrets  []SecretRequirement
 
@@ -515,6 +519,15 @@ func buildFunctionInfoRecord(info *FunctionInfo) (arrow.RecordBatch, error) {
 	defer ifaBuilder.Release()
 	ifaBuilder.Append(info.InputFromArgs)
 
+	// input_rows_per_call (nullable; nil = a whole chunk per call)
+	irpcBuilder := array.NewInt64Builder(mem)
+	defer irpcBuilder.Release()
+	if info.InputRowsPerCall != nil {
+		irpcBuilder.Append(*info.InputRowsPerCall)
+	} else {
+		irpcBuilder.AppendNull()
+	}
+
 	// required_settings
 	reqSettingsBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
 	defer reqSettingsBuilder.Release()
@@ -584,6 +597,7 @@ func buildFunctionInfoRecord(info *FunctionInfo) (arrow.RecordBatch, error) {
 		sinkodBuilder.NewArray(),
 		ribiBuilder.NewArray(),
 		ifaBuilder.NewArray(),
+		irpcBuilder.NewArray(),
 		reqSettingsBuilder.NewArray(),
 		rsListBuilder.NewArray(),
 	}

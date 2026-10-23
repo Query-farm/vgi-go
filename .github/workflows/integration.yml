@@ -23,7 +23,7 @@ concurrency:
 
 env:
   # Test sources and statically linked binaries come from this exact native commit.
-  VGI_REF: 3a2249f815ff6e2a8b5289a3e6284326084e3630
+  VGI_REF: fc3e08f7e7fd800165a0edc00313de46fed15329
 
 jobs:
   build-worker:

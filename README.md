@@ -183,6 +183,15 @@ Pick the typed variants (`TypedScalarFunc`, `TypedTableFunc`) when you want
 the framework to derive `ArgumentSpecs` from a Go struct with `vgi:"..."`
 tags. See `examples/scalar/add_values.go` and `examples/table/sequence.go`.
 
+A table-in-out function answers each input batch with one emit. To answer one
+input with several (one upstream API page per reply), emit each but the last
+with `vgi.WithMoreOutput(true)` and implement `Resume` (`TypedTableInOutResumer[S]`):
+the framework calls it for each next reply. `Resume` gets no input, so the
+state `S` holds the resume position; over HTTP it travels in the stream's state
+token, so keep positions there, not output rows. A blended function
+(`InputFromArgs`) may also cap the input rows per call with
+`FunctionMetadata.InputRowsPerCall`. See `examples/table_in_out/paged.go`.
+
 ## Logging
 
 Workers emit structured logs through named slog loggers (`vgi`, `vgi.worker`,

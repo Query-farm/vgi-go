@@ -203,12 +203,14 @@ func (s *FinalizeProducerState) GobDecode(data []byte) error {
 }
 
 // tableInOutWire is the gob wire form of TableInOutExchangeState. It carries
-// the dynamic-filter history for the reason tableProducerWire does.
+// the dynamic-filter history for the reason tableProducerWire does, and
+// MorePending so the next turn knows whether only a continuation tick is valid.
 type tableInOutWire struct {
 	Recipe               InitRecipe
 	UserStateBytes       []byte
 	FilterDeltaIPC       [][]byte
 	FilterPredicateOrder []string
+	MorePending          bool
 }
 
 // GobEncode snapshots the live user state into UserStateBytes, then encodes the
@@ -229,6 +231,7 @@ func (s *TableInOutExchangeState) GobEncode() ([]byte, error) {
 		UserStateBytes:       usb,
 		FilterDeltaIPC:       s.FilterDeltaIPC,
 		FilterPredicateOrder: s.FilterPredicateOrder,
+		MorePending:          s.MorePending,
 	}); err != nil {
 		return nil, err
 	}
@@ -246,5 +249,6 @@ func (s *TableInOutExchangeState) GobDecode(data []byte) error {
 	s.UserStateBytes = w.UserStateBytes
 	s.FilterDeltaIPC = w.FilterDeltaIPC
 	s.FilterPredicateOrder = w.FilterPredicateOrder
+	s.MorePending = w.MorePending
 	return nil
 }

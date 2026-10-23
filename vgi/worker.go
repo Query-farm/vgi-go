@@ -1320,6 +1320,13 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 		return nil, err
 	}
 
+	// A table-in-out registration the client cannot drive (Resume without a
+	// state to resume from, a bad InputRowsPerCall) refuses to start here,
+	// rather than failing the first query that calls it.
+	if err := w.checkTableInOutContracts(); err != nil {
+		return nil, err
+	}
+
 	// Bring up the routed catalogs (sub-catalogs import their functions,
 	// homed in their own catalog) before the default catalog is built.
 	w.prepareRoutes()

@@ -134,6 +134,11 @@ func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
 	// Restore user state from gob bytes
 	if len(s.UserStateBytes) > 0 {
 		userState, err := gobDecode(s.UserStateBytes)
+		if err != nil && s.MorePending {
+			// Output is pending: the state is Resume's position. A fresh state
+			// would silently restart or end the input's output.
+			return fmt.Errorf("%s: restoring the state continued output resumes from: %w", s.Recipe.FunctionName, err)
+		}
 		if err != nil {
 			LogRPC.Debug("rehydrate: gob decode user state failed, calling NewState", "err", err)
 			userState, err = tioFn.NewState(params)
