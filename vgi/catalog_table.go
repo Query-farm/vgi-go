@@ -550,8 +550,14 @@ func applyColumnComments(schema *arrow.Schema, comments map[string]string) (*arr
 			return nil, fmt.Errorf("column_comment references non-existent column %q", colName)
 		}
 		existing := fields[idx].Metadata
-		keys := append(existing.Keys(), "comment")
-		vals := append(existing.Values(), comment)
+		keys := append([]string(nil), existing.Keys()...)
+		vals := append([]string(nil), existing.Values()...)
+		if found := existing.FindKey("comment"); found >= 0 {
+			vals[found] = comment
+		} else {
+			keys = append(keys, "comment")
+			vals = append(vals, comment)
+		}
 		fields[idx].Metadata = arrow.NewMetadata(keys, vals)
 	}
 	md := schema.Metadata()

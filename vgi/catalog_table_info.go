@@ -72,6 +72,9 @@ var tableInfoSchema = generated.TableInfoSchema
 
 // SerializeTableInfo serializes a TableInfo to IPC bytes.
 func SerializeTableInfo(info *TableInfo) ([]byte, error) {
+	if err := ValidateColumnMetadata(info.Columns); err != nil {
+		return nil, err
+	}
 	if len(info.NotNullConstraints)+len(info.UniqueConstraints)+len(info.CheckConstraints)+len(info.PrimaryKeyConstraints)+len(info.ForeignKeyConstraints) > 0 {
 		return nil, methodNotImplemented("legacy constraint metadata requires explicit canonical records")
 	}

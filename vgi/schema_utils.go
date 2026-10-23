@@ -59,7 +59,7 @@ func DeserializeSchema(data []byte) (*arrow.Schema, error) {
 		return nil, fmt.Errorf("reading schema IPC: %w", err)
 	}
 	defer reader.Release()
-	return reader.Schema(), nil
+	return restoreSchemaFieldMetadata(data, reader.Schema())
 }
 
 // Empty canonical definitions cannot authorize SQL NOT NULL claims. Storage

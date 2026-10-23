@@ -132,6 +132,9 @@ func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestW
 	if err != nil {
 		return fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
 	}
+	if err := ValidateColumnMetadata(schema); err != nil {
+		return err
+	}
 	if err := requireUnconstrainedCreateSchema(schema); err != nil {
 		return err
 	}
