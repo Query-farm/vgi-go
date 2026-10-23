@@ -271,7 +271,7 @@ func TestCatalogContractPythonCorpus(t *testing.T) {
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[generated.MacroParameter](t, name) })
 	}
 	t.Run("macro_overload", func(t *testing.T) { echoCatalogRecord[generated.MacroOverload](t, "macro_overload") })
-	for _, name := range []string{"macro_create", "macro_create_legacy"} {
+	for _, name := range []string{"macro_create", "macro_create_single"} {
 		t.Run(name, func(t *testing.T) { echoCatalogRecord[vgi.MacroCreateRequestWire](t, name) })
 	}
 	t.Run("query_offer", func(t *testing.T) { echoCatalogRecord[generated.ClientQueryCapabilities](t, "query_offer") })
@@ -427,7 +427,7 @@ func TestViewSecurityMatchesPythonCorpus(t *testing.T) {
 }
 
 func TestLogicalTypeAndOpaqueMacroCorpus(t *testing.T) {
-	for _, name := range []string{"logical_tuple", "logical_struct", "logical_variant_sql_null", "logical_variant_null", "logical_variant_absent", "logical_variant_null_member", "macro_info", "macro_info_legacy"} {
+	for _, name := range []string{"logical_tuple", "logical_struct", "logical_variant_sql_null", "logical_variant_null", "logical_variant_absent", "logical_variant_null_member", "macro_info", "macro_info_single"} {
 		t.Run(name, func(t *testing.T) {
 			original := catalogBatch(t, catalogFixture(t, name))
 			var encoded bytes.Buffer

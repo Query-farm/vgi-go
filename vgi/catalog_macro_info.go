@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -40,6 +41,8 @@ func macroKindFilter(s string) MacroType {
 
 // CatalogMacro describes a macro to register in the catalog.
 type CatalogMacro struct {
+	// Overloads is a complete canonical family; simple-definition fields must be empty.
+	Overloads []generated.MacroOverload
 	// Name is the macro name visible in SQL.
 	Name string
 	// MacroType is "scalar" or "table".
@@ -58,27 +61,19 @@ type CatalogMacro struct {
 	Tags map[string]string
 	// ParameterDocs is an optional mapping of parameter name to a
 	// human/agent-facing description. Keys must appear in Parameters.
-	// Descriptions flow over the wire via the macro arguments_schema's
-	// vgi_doc field metadata (the same channel functions use for per-argument
-	// docs). Empty/nil means no per-parameter docs.
+	// Descriptions populate each canonical parameter's Documentation field.
+	// A present empty description is distinct from an absent description.
 	ParameterDocs map[string]string
 }
 
 // MacroInfo describes a macro in the catalog for wire serialization.
 type MacroInfo struct {
-	Name                   string
-	SchemaPath             []string
-	Comment                string
-	Tags                   map[string]string
-	MacroType              MacroType
-	Parameters             []string
-	ParameterDefaultValues []byte
-	Definition             string
-	// ArgumentsSchema is the optional macro arguments schema, serialized as
-	// Arrow IPC bytes: one nullable field per parameter, in Parameters order,
-	// each carrying its description via the vgi_doc field-metadata key (the
-	// same channel functions use). nil when no per-parameter docs are supplied.
-	ArgumentsSchema []byte
+	Name       string
+	SchemaPath []string
+	Comment    string
+	Tags       map[string]string
+	MacroType  MacroType
+	Overloads  []generated.MacroOverload
 }
 
 var macroInfoSchema = generated.MacroInfoSchema
@@ -126,46 +121,20 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 	defer mtBuilder.Release()
 	mtBuilder.(*array.BinaryDictionaryBuilder).AppendString(string(info.MacroType))
 
-	// parameters
-	paramsBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
-	defer paramsBuilder.Release()
-	paramsBuilder.Append(true)
-	if len(info.Parameters) > 0 {
-		vb := paramsBuilder.ValueBuilder().(*array.StringBuilder)
-		for _, p := range info.Parameters {
-			vb.Append(p)
+	if len(info.Overloads) == 0 {
+		return nil, fmt.Errorf("macro family must be nonempty")
+	}
+	overloadsBuilder := array.NewBuilder(mem, macroInfoSchema.Field(5).Type).(*array.ListBuilder)
+	defer overloadsBuilder.Release()
+	overloadsBuilder.Append(true)
+	for _, overload := range info.Overloads {
+		if !slices.Equal(overload.SchemaPath, info.SchemaPath) || !strings.EqualFold(overload.MacroType, string(info.MacroType)) {
+			return nil, fmt.Errorf("macro overload kind and owner must equal parent macro")
+		}
+		if err := appendMacroOverload(overloadsBuilder.ValueBuilder().(*array.StructBuilder), overload); err != nil {
+			return nil, err
 		}
 	}
-
-	// parameter_default_values (binary, nullable; this SDK writes empty bytes
-	// rather than null when there are no defaults)
-	pdvBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
-	defer pdvBuilder.Release()
-	if info.ParameterDefaultValues != nil {
-		pdvBuilder.Append(info.ParameterDefaultValues)
-	} else {
-		pdvBuilder.Append([]byte{})
-	}
-
-	// definition
-	defBuilder := array.NewStringBuilder(mem)
-	defer defBuilder.Release()
-	defBuilder.Append(info.Definition)
-
-	// arguments_schema (binary, nullable; this SDK writes empty bytes rather
-	// than null when there are no per-parameter docs)
-	argsBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
-	defer argsBuilder.Release()
-	if info.ArgumentsSchema != nil {
-		argsBuilder.Append(info.ArgumentsSchema)
-	} else {
-		argsBuilder.Append([]byte{})
-	}
-	// This catalog adapter supplies legacy definitions only. Preserve the new
-	// nullable family column without claiming overload semantics.
-	overloadsBuilder := array.NewBuilder(mem, macroInfoSchema.Field(9).Type)
-	defer overloadsBuilder.Release()
-	overloadsBuilder.AppendNull()
 
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
@@ -173,10 +142,6 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 		nameBuilder.NewArray(),
 		schemaPathBuilder.NewArray(),
 		mtBuilder.NewArray(),
-		paramsBuilder.NewArray(),
-		pdvBuilder.NewArray(),
-		defBuilder.NewArray(),
-		argsBuilder.NewArray(),
 		overloadsBuilder.NewArray(),
 	}
 	defer func() {
@@ -203,21 +168,118 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 // CatalogMacro in the given schema, including the per-parameter arguments_schema
 // (carrying vgi_doc field metadata for documented parameters).
 func macroInfoFromCatalogMacro(cm CatalogMacro, schemaPath SchemaPath) (*MacroInfo, error) {
-	argsSchema, err := BuildMacroArgumentsSchema(cm.Parameters, cm.ParameterDefaultValues, cm.ParameterDocs)
-	if err != nil {
-		return nil, err
+	family := cm.Overloads
+	if family != nil {
+		if len(family) == 0 || len(cm.Parameters) != 0 || cm.Definition != "" || len(cm.ParameterDefaultValues) != 0 || len(cm.ParameterDocs) != 0 {
+			return nil, fmt.Errorf("a nonempty macro family cannot coexist with simple-definition fields")
+		}
+	} else {
+		if strings.TrimSpace(cm.Definition) == "" || strings.ContainsRune(cm.Definition, 0) {
+			return nil, fmt.Errorf("macro definition must be nonempty SQL without NUL")
+		}
+		defaults := map[string][]byte{}
+		if len(cm.ParameterDefaultValues) > 0 {
+			reader, err := ipc.NewReader(bytes.NewReader(cm.ParameterDefaultValues))
+			if err != nil {
+				return nil, err
+			}
+			defer reader.Release()
+			if !reader.Next() || reader.RecordBatch().NumRows() != 1 {
+				return nil, fmt.Errorf("macro defaults require exactly one row")
+			}
+			batch := reader.RecordBatch()
+			for i, field := range batch.Schema().Fields() {
+				if !slices.Contains(cm.Parameters, field.Name) {
+					return nil, fmt.Errorf("unknown macro default parameter %q", field.Name)
+				}
+				if _, exists := defaults[field.Name]; exists {
+					return nil, fmt.Errorf("duplicate macro default")
+				}
+				metadata := batch.Schema().Metadata()
+				single := array.NewRecordBatch(arrow.NewSchema([]arrow.Field{field}, &metadata), []arrow.Array{batch.Column(i)}, 1)
+				payload, err := SerializeRecordBatch(single)
+				single.Release()
+				if err != nil {
+					return nil, err
+				}
+				defaults[field.Name] = payload
+			}
+			if reader.Next() || reader.Err() != nil {
+				return nil, fmt.Errorf("macro defaults must contain one batch")
+			}
+		}
+		for name := range cm.ParameterDocs {
+			if !slices.Contains(cm.Parameters, name) {
+				return nil, fmt.Errorf("unknown documented macro parameter %q", name)
+			}
+		}
+		parameters := make([]generated.MacroParameter, 0, len(cm.Parameters))
+		seen := map[string]bool{}
+		seenDefault := false
+		for _, name := range cm.Parameters {
+			key := strings.ToLower(name)
+			if name == "" || strings.ContainsRune(name, 0) || seen[key] {
+				return nil, fmt.Errorf("invalid or duplicate macro parameter")
+			}
+			seen[key] = true
+			value, hasDefault := defaults[name]
+			if seenDefault && !hasDefault {
+				return nil, fmt.Errorf("required parameter cannot follow a default")
+			}
+			seenDefault = seenDefault || hasDefault
+			parameter := generated.MacroParameter{Name: name}
+			if hasDefault {
+				parameter.DefaultValue = &value
+			}
+			if doc, ok := cm.ParameterDocs[name]; ok {
+				parameter.Documentation = &doc
+			}
+			parameters = append(parameters, parameter)
+		}
+		family = []generated.MacroOverload{{Parameters: parameters, Definition: cm.Definition, Profile: "duckdb.macro.v1",
+			SchemaPath: schemaPath, MacroType: string(cm.MacroType), EvaluationContext: generated.QueryEvaluationContext{
+				Timezone: "UTC", Collation: "binary", DefaultOrder: "asc", DefaultNullOrder: "nulls_last", PreserveInsertionOrder: true}}}
 	}
-	return &MacroInfo{
-		Name:                   cm.Name,
-		SchemaPath:             schemaPath,
-		Comment:                cm.Comment,
-		Tags:                   cm.Tags,
-		MacroType:              cm.MacroType,
-		Parameters:             cm.Parameters,
-		ParameterDefaultValues: cm.ParameterDefaultValues,
-		Definition:             cm.Definition,
-		ArgumentsSchema:        argsSchema,
-	}, nil
+	return &MacroInfo{Name: cm.Name, SchemaPath: schemaPath, Comment: cm.Comment, Tags: cm.Tags, MacroType: cm.MacroType, Overloads: family}, nil
+}
+
+func appendMacroOverload(builder *array.StructBuilder, value generated.MacroOverload) error {
+	builder.Append(true)
+	parameters := builder.FieldBuilder(0).(*array.ListBuilder)
+	parameters.Append(true)
+	param := parameters.ValueBuilder().(*array.StructBuilder)
+	for _, p := range value.Parameters {
+		if p.DefaultExpression != nil {
+			return fmt.Errorf("discovery macro defaults must be resolved values")
+		}
+		param.Append(true)
+		param.FieldBuilder(0).(*array.StringBuilder).Append(p.Name)
+		for i, payload := range []*[]byte{p.DeclaredType, p.DefaultValue, p.DefaultExpression} {
+			b := param.FieldBuilder(i + 1).(*array.BinaryBuilder)
+			if payload == nil {
+				b.AppendNull()
+			} else {
+				b.Append(*payload)
+			}
+		}
+		doc := param.FieldBuilder(4).(*array.StringBuilder)
+		if p.Documentation == nil {
+			doc.AppendNull()
+		} else {
+			doc.Append(*p.Documentation)
+		}
+	}
+	builder.FieldBuilder(1).(*array.StringBuilder).Append(value.Definition)
+	builder.FieldBuilder(2).(*array.StringBuilder).Append(value.Profile)
+	appendSchemaPath(builder.FieldBuilder(3).(*array.ListBuilder), value.SchemaPath)
+	builder.FieldBuilder(4).(*array.StringBuilder).Append(value.MacroType)
+	context := builder.FieldBuilder(5).(*array.StructBuilder)
+	context.Append(true)
+	for i, item := range []string{value.EvaluationContext.Timezone, value.EvaluationContext.Collation, value.EvaluationContext.DefaultOrder, value.EvaluationContext.DefaultNullOrder} {
+		context.FieldBuilder(i).(*array.StringBuilder).Append(item)
+	}
+	context.FieldBuilder(4).(*array.BooleanBuilder).Append(value.EvaluationContext.PreserveInsertionOrder)
+	return nil
 }
 
 // MacroDefault describes a single parameter default value.
@@ -239,7 +301,7 @@ func BuildMacroDefaultValues(defaults []MacroDefault) ([]byte, error) {
 	fields := make([]arrow.Field, len(defaults))
 	builders := make([]array.Builder, len(defaults))
 	for i, d := range defaults {
-		fields[i] = arrow.Field{Name: d.Name, Type: d.Type}
+		fields[i] = arrow.Field{Name: d.Name, Type: d.Type, Nullable: true}
 		b := array.NewBuilder(mem, d.Type)
 		appendValue(b, d.Value)
 		builders[i] = b
@@ -267,7 +329,7 @@ func BuildMacroDefaultValues(defaults []MacroDefault) ([]byte, error) {
 	return data, nil
 }
 
-// BuildMacroArgumentsSchema builds the macro arguments_schema describing macro
+// BuildMacroArgumentsSchema builds a local documentation schema describing macro
 // parameters, mirroring the function arguments_schema mechanism: one nullable
 // Arrow field per parameter, in parameters order. Each parameter's field type is
 // the type of its default value when known (derived from parameterDefaultValues,
@@ -277,8 +339,8 @@ func BuildMacroDefaultValues(defaults []MacroDefault) ([]byte, error) {
 // is no doc).
 //
 // Returns nil when there are no parameters (nothing to describe). The returned
-// bytes are Arrow IPC schema bytes suitable for MacroInfo.ArgumentsSchema and
-// the macro create-request arguments_schema slot.
+// bytes are for local presentation only. MacroInfo and CREATE carry canonical
+// overload parameters, including Documentation and a separate DeclaredType.
 func BuildMacroArgumentsSchema(parameters []string, parameterDefaultValues []byte, parameterDocs map[string]string) ([]byte, error) {
 	if len(parameters) == 0 {
 		return nil, nil

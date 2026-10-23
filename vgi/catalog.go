@@ -159,21 +159,13 @@ type TableScanBranchesGetResponseWire struct {
 
 // MacroCreateRequestWire is for catalog_macro_create.
 type MacroCreateRequestWire struct {
-	AttachOpaqueData       []byte   `vgirpc:"attach_opaque_data"`
-	SchemaPath             []string `vgirpc:"schema_path"`
-	Name                   string   `vgirpc:"name"`
-	MacroType              string   `vgirpc:"macro_type,enum"`
-	Parameters             []string `vgirpc:"parameters"`
-	Definition             string   `vgirpc:"definition"`
-	OnConflict             string   `vgirpc:"on_conflict,enum"`
-	ParameterDefaultValues *[]byte  `vgirpc:"parameter_default_values"`
-	// ArgumentsSchema is the optional macro arguments schema (Arrow IPC schema
-	// bytes): one nullable field per parameter, in Parameters order, each
-	// carrying its description via the vgi_doc field-metadata key. nil when no
-	// per-parameter docs are supplied. Decode with MacroParameterDocsFromSchema.
-	ArgumentsSchema       *[]byte                    `vgirpc:"arguments_schema"`
-	TransactionOpaqueData *[]byte                    `vgirpc:"transaction_opaque_data"`
-	Overloads             *[]generated.MacroOverload `vgirpc:"overloads"`
+	AttachOpaqueData      []byte                    `vgirpc:"attach_opaque_data"`
+	SchemaPath            []string                  `vgirpc:"schema_path"`
+	Name                  string                    `vgirpc:"name"`
+	MacroType             string                    `vgirpc:"macro_type,enum"`
+	Overloads             []generated.MacroOverload `vgirpc:"overloads"`
+	OnConflict            string                    `vgirpc:"on_conflict,enum"`
+	TransactionOpaqueData *[]byte                   `vgirpc:"transaction_opaque_data"`
 }
 
 // TableCreateRequestWire is for catalog_table_create.

@@ -68,10 +68,6 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 	columns := arrow.NewSchema([]arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 	}, nil)
-	columnsIPC, err := SerializeSchema(columns)
-	if err != nil {
-		t.Fatalf("SerializeSchema: %v", err)
-	}
 	defaultBuilder := array.NewInt64Builder(memory.DefaultAllocator)
 	defaultBuilder.Append(42)
 	defaultColumn := defaultBuilder.NewArray()
@@ -208,21 +204,16 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 			},
 		},
 		{
-			origin:       "MacroInfo",
-			schema:       generated.MacroInfoSchema,
-			expectedNull: map[string]string{"overloads": "The Go catalog adapter exposes legacy single definitions only and does not advertise overload-family support; generated MacroParameter/MacroOverload and opaque family preservation are covered by catalog_contracts_test.go."},
+			origin: "MacroInfo",
+			schema: generated.MacroInfoSchema,
+
 			build: func() ([]byte, error) {
-				return SerializeMacroInfo(&MacroInfo{
-					Name:                   "add_one",
-					SchemaPath:             []string{"main"},
-					Comment:                "adds one",
-					Tags:                   map[string]string{"tier": "hot"},
-					MacroType:              MacroTypeScalar,
-					Parameters:             []string{"x"},
-					ParameterDefaultValues: []byte{0x09},
-					Definition:             "x + 1",
-					ArgumentsSchema:        columnsIPC,
-				})
+				info, err := macroInfoFromCatalogMacro(CatalogMacro{Name: "add_one", MacroType: MacroTypeScalar,
+					Parameters: []string{"x"}, Definition: "x + 1", Comment: "adds one", Tags: map[string]string{"tier": "hot"}}, SchemaPath{"main"})
+				if err != nil {
+					return nil, err
+				}
+				return SerializeMacroInfo(info)
 			},
 		},
 		{

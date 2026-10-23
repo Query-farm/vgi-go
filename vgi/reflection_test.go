@@ -61,9 +61,9 @@ func TestWorkerReflectionDiscovery(t *testing.T) {
 // reference) reports through vgi_rpc.Reflection.v1: SHA-256 over every vgi.v2
 // method's name, type and params/result/header schemas (WIRE_PROTOCOL.md §14).
 // Every SDK hosts the whole of vgi.v2 with exactly the reference's schemas, so
-// every SDK reports this hash. It changes only with vgi.v2's protocol version
-// (2.1.0): a mismatch here is schema drift, not a constant to update.
-const vgiV2ReferenceProtocolHash = "8003abf6447266f5bc59cca76bef09df661f35fbbf0b360f400d92fdd4b12aee"
+// every SDK reports this hash. Update only after the combined protocol schema
+// change is confirmed against the reference reflection endpoint.
+const vgiV2ReferenceProtocolHash = "457a2fc7c24a637480d2c34237ea0ccf826b10f4ea5e316d4623895f4a535585"
 
 // describeVgiV2 starts an HTTP worker and returns vgi.v2's Reflection.v1
 // description.
