@@ -514,7 +514,12 @@ func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.Reco
 		}
 		return applied
 	}
-	_, resumer := s.fn.(TableInOutResumer)
+	resumeFn, resumer := s.fn.(TableInOutResumer)
+	if tick && !resumer {
+		// Only an HTTP state token can get here: a reply said more (MorePending),
+		// but the function resolved for this turn has no Resume to answer it.
+		return fmt.Errorf("%s: continuation tick received, but the function does not implement Resume", name)
+	}
 	tracker := &replyTracker{
 		name:         name,
 		resumable:    resumer,
@@ -555,12 +560,21 @@ func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.Reco
 		}
 	}
 	if tick {
-		err = s.fn.(TableInOutResumer).Resume(ctx, s.params, s.state, out)
+		err = resumeFn.Resume(ctx, s.params, s.state, out)
 	} else {
 		err = s.fn.Process(ctx, s.params, s.state, input, out)
 	}
 	if err != nil {
 		return err
+	}
+	if err := checkReplyStatus(out, tracker); err != nil {
+		return err
+	}
+	if tracker.more && s.state == nil {
+		// Resume gets nothing but the state, and over HTTP only the serialized
+		// state reaches the next turn: a nil state has nowhere to keep the
+		// position, so the tick could only restart or end the output.
+		return fmt.Errorf("%s: emitted WithMoreOutput(true) with a nil state; continued output must resume from its saved state (NewState must return one)", name)
 	}
 	s.MorePending = tracker.more
 	return nil

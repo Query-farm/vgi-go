@@ -19,8 +19,11 @@ import (
 // extension's table_in_out/*continuation*.test files over stdio and HTTP. These
 // cover the pieces that decide it.
 
+// continuationBatch builds a one-column int64 batch; t may be nil.
 func continuationBatch(t *testing.T, vals ...int64) arrow.RecordBatch {
-	t.Helper()
+	if t != nil {
+		t.Helper()
+	}
 	b := array.NewInt64Builder(memory.NewGoAllocator())
 	defer b.Release()
 	b.AppendValues(vals, nil)

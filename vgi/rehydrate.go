@@ -110,6 +110,14 @@ func (w *Worker) rehydrateTableProducer(s *TableProducerState) error {
 }
 
 func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
+	// Output is pending: the state is Resume's position, so there must be one.
+	// A token with none (a raw TableInOutResumer whose NewState returned nil,
+	// so GobEncode wrote no state) must not fall back to a fresh NewState,
+	// which would silently restart or end the input's output.
+	if s.MorePending && len(s.UserStateBytes) == 0 {
+		return fmt.Errorf("%s: output is pending but the state token carries no state; continued output must resume from its saved state", s.Recipe.FunctionName)
+	}
+
 	fn, params, err := w.rebuildProcessParams(&s.Recipe)
 	if err != nil {
 		return err

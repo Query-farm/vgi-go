@@ -50,8 +50,9 @@ const (
 // Valid only from the Process or Resume of a table-in-out function that
 // implements Resume, and only through the vgi emit helpers (Emit,
 // EmitParentRows, ...): the framework learns that output is pending from them,
-// so setting the vgi.status key on out.EmitWithMetadata directly is not
-// supported.
+// so a reply that sets the vgi.status key on out.EmitWithMetadata directly is
+// refused. (vgi.WithMetadata("vgi.status", "HAVE_MORE_OUTPUT") goes through the
+// helpers, so it counts as WithMoreOutput(true), with the same checks.)
 func WithMoreOutput(more bool) EmitOption {
 	return func(md map[string]string) error {
 		if more {
@@ -161,6 +162,62 @@ func emitAnnotated(out *vgirpc.OutputCollector, batch arrow.RecordBatch, md map[
 	return err
 }
 
+// checkReplyStatus refuses a turn whose emitted reply says HAVE_MORE_OUTPUT on
+// the wire though the vgi emit helpers did not record it: the function put
+// vgi.status on out.EmitWithMetadata itself. The client would then send a tick
+// that the next turn, with MorePending false, refuses as unexpected; refusing
+// here names the real mistake instead.
+func checkReplyStatus(out *vgirpc.OutputCollector, t *replyTracker) error {
+	status, ok := emittedStatus(out)
+	if !ok || status != statusHaveMoreOutput || t.more {
+		return nil
+	}
+	return fmt.Errorf("%s: emitted %s: %s directly with out.EmitWithMetadata; continued output must be "+
+		"emitted with vgi.WithMoreOutput through the vgi emit helpers (Emit, EmitParentRows, ...)",
+		t.name, statusKey, statusHaveMoreOutput)
+}
+
+// emittedStatus returns the vgi.status metadata of the data batch out holds for
+// this turn ("" when it has none). ok is false when out's layout is not the one
+// read here. vgirpc's OutputCollector exposes neither the stored batch's
+// metadata nor a hook that sees it, so it is read by reflection (field reads
+// only; TestRawHaveMoreOutputRefused fails if the layout changes).
+func emittedStatus(out *vgirpc.OutputCollector) (status string, ok bool) {
+	if out == nil {
+		return "", false
+	}
+	v := reflect.ValueOf(out).Elem()
+	idx, batches := v.FieldByName("dataBatchIdx"), v.FieldByName("batches")
+	if idx.Kind() != reflect.Int || batches.Kind() != reflect.Slice {
+		return "", false
+	}
+	i := int(idx.Int())
+	if i < 0 || i >= batches.Len() {
+		return "", true // no data batch
+	}
+	ab := batches.Index(i)
+	if ab.Kind() != reflect.Struct {
+		return "", false
+	}
+	meta := ab.FieldByName("meta")
+	if meta.Kind() != reflect.Pointer {
+		return "", false
+	}
+	if meta.IsNil() {
+		return "", true
+	}
+	keys, vals := meta.Elem().FieldByName("keys"), meta.Elem().FieldByName("values")
+	if keys.Kind() != reflect.Slice || vals.Kind() != reflect.Slice || keys.Len() != vals.Len() {
+		return "", false
+	}
+	for j := 0; j < keys.Len(); j++ {
+		if keys.Index(j).String() == statusKey {
+			return vals.Index(j).String(), true
+		}
+	}
+	return "", true
+}
+
 // hasCacheControlKeys reports whether md carries any response-side vgi.cache.*
 // key.
 func hasCacheControlKeys(md map[string]string) bool {
@@ -253,6 +310,9 @@ func checkTableInOutContract(name string, fn TableInOutFunction) error {
 	if _, ok := fn.(TableInOutResumer); !ok {
 		return nil
 	}
+	// A raw (untyped) TableInOutResumer's state type is unknown until NewState
+	// runs, so it is checked per turn instead: Exchange refuses WithMoreOutput
+	// with a nil state, and HTTP rehydration a pending token with no state.
 	if st, ok := fn.(stateTyped); ok {
 		t := st.stateType()
 		if t.Kind() == reflect.Struct && t.NumField() == 0 {
