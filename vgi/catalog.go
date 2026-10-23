@@ -831,6 +831,7 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 		}
 		globalFunctionPrefix = w.globalFunctionPrefix
 	}
+	defaultSchema := "main"
 	result := CatalogAttachResultWire{
 		AttachOpaqueData:              attachOpaqueData,
 		SupportsTransactions:          w.supportsTransactions,
@@ -838,7 +839,7 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 		CatalogVersionFrozen:          true,
 		CatalogVersion:                version,
 		AttachOpaqueDataRequired:      attachOpaqueDataRequired,
-		DefaultSchema:                 "main",
+		DefaultSchema:                 &defaultSchema,
 		Settings:                      serializedSettings,
 		SecretTypes:                   serializedSecretTypes,
 		AttachCatalogs:                serializedAttachCatalogs,

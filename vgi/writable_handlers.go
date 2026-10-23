@@ -286,6 +286,7 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 		serializedAttachCatalogs = [][]byte{}
 	}
 
+	defaultSchema := "main"
 	return CatalogAttachResultWire{
 		AttachOpaqueData:         attachOpaqueData,
 		SupportsTransactions:     true,
@@ -293,7 +294,7 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 		CatalogVersionFrozen:     false,
 		CatalogVersion:           version,
 		AttachOpaqueDataRequired: true,
-		DefaultSchema:            "main",
+		DefaultSchema:            &defaultSchema,
 		Settings:                 serializedSettings,
 		SecretTypes:              serializedSecretTypes,
 		AttachCatalogs:           serializedAttachCatalogs,

@@ -118,6 +118,27 @@ func echoCatalogRecord[T any](t *testing.T, name string) {
 	}
 }
 
+func TestAttachDefaultSchemaPreservesNullAndRawNames(t *testing.T) {
+	for _, tc := range []struct{ suffix, value string }{
+		{"none", ""}, {"main", "main"}, {"dotted", "sales.archive"},
+	} {
+		t.Run(tc.suffix, func(t *testing.T) {
+			name := "attach_default_schema_" + tc.suffix
+			batch := catalogBatch(t, catalogFixture(t, name))
+			index := batch.Schema().FieldIndices("default_schema")[0]
+			column := batch.Column(index).(*array.String)
+			if tc.suffix == "none" {
+				if !column.IsNull(0) {
+					t.Fatal("no default schema must be NULL")
+				}
+			} else if column.IsNull(0) || column.Value(0) != tc.value {
+				t.Fatalf("raw default schema changed: %v", column)
+			}
+			echoCatalogRecord[generated.CatalogAttachResult](t, name)
+		})
+	}
+}
+
 func TestColumnExpressionMetadataRetainsIPCBytes(t *testing.T) {
 	source := catalogBatch(t, catalogFixture(t, "column_expression_metadata"))
 	var encoded bytes.Buffer

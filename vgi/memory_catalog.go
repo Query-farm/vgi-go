@@ -202,11 +202,12 @@ func (m *MemoryCatalog) attach(_ *vgirpc.CallContext, req *CatalogAttachRequestW
 	m.attaches[string(attach)] = st
 	version := m.reportedVersion(st)
 	m.mu.Unlock()
+	defaultSchema := "main"
 	res := CatalogAttachResultWire{
 		AttachOpaqueData:         attach,
 		CatalogVersion:           version,
 		AttachOpaqueDataRequired: true,
-		DefaultSchema:            "main",
+		DefaultSchema:            &defaultSchema,
 		Settings:                 [][]byte{},
 		SecretTypes:              [][]byte{},
 		AttachCatalogs:           [][]byte{},
