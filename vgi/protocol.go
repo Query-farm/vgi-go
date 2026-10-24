@@ -172,6 +172,7 @@ type BindResponseWire struct {
 	LookupScopes                 []string `vgirpc:"lookup_scopes"`
 	LookupNames                  []string `vgirpc:"lookup_names"`
 	ProjectionExpressionProfiles []string `vgirpc:"projection_expression_profiles"`
+	Repeatability                string   `vgirpc:"repeatability,enum"`
 }
 
 // InitRequestWire is the wire format for init requests.
@@ -744,6 +745,11 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		return BindResponseWire{}, err
 	}
 
+	repeatability, err := wireBindRepeatability(bindResp.Repeatability)
+	if err != nil {
+		return BindResponseWire{}, err
+	}
+
 	// Two-phase bind: if the function requests scoped secret lookup, return
 	// the lookup columns instead of an output schema.
 	if bindResp.SecretScopeRequest != nil {
@@ -760,6 +766,7 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 			LookupSecretTypes: types,
 			LookupScopes:      scopes,
 			LookupNames:       names,
+			Repeatability:     repeatability,
 		}, nil
 	}
 
@@ -775,6 +782,7 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		OutputSchema:                 outputSchemaBytes,
 		OpaqueData:                   bindResp.OpaqueData,
 		ProjectionExpressionProfiles: bindResp.ProjectionExpressionProfiles,
+		Repeatability:                repeatability,
 	}
 	return resp, nil
 }

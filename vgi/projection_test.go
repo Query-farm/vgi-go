@@ -37,7 +37,7 @@ func TestProjectionAcceptanceContract(t *testing.T) {
 	owner := []string{"main"}
 	text, _ := GeneratedExpressionMetadata(`CAST("n" AS BIGINT)`, owner)
 	expression, _ := base64.StdEncoding.DecodeString(text)
-	req := projectionDecodedRequest{BindCall: BindRequestWire{FunctionName: "projection_test", FunctionType: "TABLE", Arguments: args, SchemaPath: &owner}, BindResult: BindResponseWire{OutputSchema: schemaBytes, ProjectionExpressionProfiles: []string{ScalarProjectionProfile}}, Expressions: [][]byte{expression}, ResultSchema: resultBytes}
+	req := projectionDecodedRequest{BindCall: BindRequestWire{FunctionName: "projection_test", FunctionType: "TABLE", Arguments: args, SchemaPath: &owner}, BindResult: BindResponseWire{OutputSchema: schemaBytes, ProjectionExpressionProfiles: []string{ScalarProjectionProfile}, Repeatability: string(BindRepeatabilityUnknown)}, Expressions: [][]byte{expression}, ResultSchema: resultBytes}
 	f := &projectionTestFunction{}
 	w := NewWorker()
 	w.RegisterTable(f)
@@ -45,7 +45,7 @@ func TestProjectionAcceptanceContract(t *testing.T) {
 	makeAccepted := func() *ProjectionAcceptance {
 		return &ProjectionAcceptance{AcceptedIndices: []int64{0}, BindResult: &BindResponse{OutputSchema: expected, OpaqueData: []byte("state"), ProjectionExpressionProfiles: []string{ScalarProjectionProfile}}}
 	}
-	for _, name := range []string{"valid", "decline", "duplicate", "negative", "range", "schema", "metadata", "offer", "secret"} {
+	for _, name := range []string{"valid", "decline", "duplicate", "negative", "range", "schema", "metadata", "offer", "secret", "repeatability"} {
 		t.Run(name, func(t *testing.T) {
 			f.accept = makeAccepted()
 			switch name {
@@ -63,6 +63,8 @@ func TestProjectionAcceptanceContract(t *testing.T) {
 				f.accept.BindResult.OutputSchema = arrow.NewSchema(expected.Fields(), nil)
 			case "offer":
 				f.accept.BindResult.ProjectionExpressionProfiles = nil
+			case "repeatability":
+				f.accept.BindResult.Repeatability = BindRepeatabilityStableWithinQuery
 			case "secret":
 				f.accept.BindResult.SecretScopeRequest = []SecretLookup{{SecretType: "test"}}
 			}

@@ -25,7 +25,7 @@ func (*ProjectionSequence) Metadata() vgi.FunctionMetadata {
 }
 func (*ProjectionSequence) ArgumentSpecs() []vgi.ArgSpec { return nil }
 func (*ProjectionSequence) OnBind(*vgi.BindParams) (*vgi.BindResponse, error) {
-	return &vgi.BindResponse{OutputSchema: arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int32, Nullable: true}}, nil), ProjectionExpressionProfiles: []string{vgi.ScalarProjectionProfile}}, nil
+	return &vgi.BindResponse{OutputSchema: arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int32, Nullable: true}}, nil), ProjectionExpressionProfiles: []string{vgi.ScalarProjectionProfile}, Repeatability: vgi.BindRepeatabilityStableWithinQuery}, nil
 }
 func (*ProjectionSequence) Projection(_ *vgi.BindParams, p *vgi.ProjectionProposal) (*vgi.ProjectionAcceptance, error) {
 	fields := p.Original.OutputSchema.Fields()
@@ -48,7 +48,7 @@ func (*ProjectionSequence) Projection(_ *vgi.BindParams, p *vgi.ProjectionPropos
 		return nil, nil
 	}
 	md := p.Original.OutputSchema.Metadata()
-	return &vgi.ProjectionAcceptance{AcceptedIndices: indices, BindResult: &vgi.BindResponse{OutputSchema: arrow.NewSchema(fields, &md), OpaqueData: []byte(strconv.Itoa(len(indices))), ProjectionExpressionProfiles: p.Original.ProjectionExpressionProfiles}}, nil
+	return &vgi.ProjectionAcceptance{AcceptedIndices: indices, BindResult: &vgi.BindResponse{OutputSchema: arrow.NewSchema(fields, &md), OpaqueData: []byte(strconv.Itoa(len(indices))), ProjectionExpressionProfiles: p.Original.ProjectionExpressionProfiles, Repeatability: p.Original.Repeatability}}, nil
 }
 func (*ProjectionSequence) OnInit(*vgi.InitParams) (*vgi.GlobalInitResponse, error) {
 	return vgi.DefaultInit()

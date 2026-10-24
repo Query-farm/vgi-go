@@ -3,6 +3,8 @@
 package vgi
 
 import (
+	"fmt"
+
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 )
@@ -100,8 +102,34 @@ func (t *TransactionStorage) PutOne(key, value []byte) error {
 	return t.back.TransactionStatePut(t.txID, []TransactionStateItem{{Key: key, Value: value}})
 }
 
+// BindRepeatability describes equivalent scans of the same bound state within
+// one query. It does not promise identical independent binds or later queries.
+type BindRepeatability string
+
+const (
+	BindRepeatabilityUnknown           BindRepeatability = "UNKNOWN"
+	BindRepeatabilityStableWithinQuery BindRepeatability = "STABLE_WITHIN_QUERY"
+)
+
+func validateWireBindRepeatability(value string) error {
+	if value != string(BindRepeatabilityUnknown) && value != string(BindRepeatabilityStableWithinQuery) {
+		return fmt.Errorf("invalid bind repeatability %q", value)
+	}
+	return nil
+}
+
+func wireBindRepeatability(value BindRepeatability) (string, error) {
+	if value == "" {
+		value = BindRepeatabilityUnknown
+	}
+	return string(value), validateWireBindRepeatability(string(value))
+}
+
 // BindResponse is returned by a function's OnBind method.
 type BindResponse struct {
+	// Repeatability defaults to UNKNOWN. STABLE_WITHIN_QUERY promises that
+	// equivalent scans of this bound state return the same logical rows/values.
+	Repeatability BindRepeatability
 	// ProjectionExpressionProfiles is an explicit per-bind offer; empty disables expression proposals.
 	ProjectionExpressionProfiles []string
 	// OutputSchema is the Arrow schema for the function's output.

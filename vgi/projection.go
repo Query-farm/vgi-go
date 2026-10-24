@@ -34,6 +34,15 @@ type TableFunctionProjectionRequestWire struct {
 	Expressions  [][]byte `vgirpc:"expressions,elem=large_binary"`
 	ResultSchema []byte   `vgirpc:"result_schema"`
 }
+
+var _ vgirpc.WrappedRequestSizeLimiter = TableFunctionProjectionRequestWire{}
+
+// VgiRpcMaxWrappedRequestBytes bounds the complete proposal before the RPC
+// framework decodes its embedded Arrow record (including unused/trailing bytes).
+func (TableFunctionProjectionRequestWire) VgiRpcMaxWrappedRequestBytes() int {
+	return 8 * 1024 * 1024
+}
+
 type TableFunctionProjectionResponseWire struct {
 	AcceptedIndices []int64           `vgirpc:"accepted_indices"`
 	BindResult      *BindResponseWire `vgirpc:"bind_result"`
@@ -77,8 +86,12 @@ func wireProjectionBind(result *BindResponse) (BindResponseWire, error) {
 	if err := validateProjectionProfiles(result.ProjectionExpressionProfiles); err != nil {
 		return BindResponseWire{}, err
 	}
+	repeatability, err := wireBindRepeatability(result.Repeatability)
+	if err != nil {
+		return BindResponseWire{}, err
+	}
 	schema, err := SerializeSchema(result.OutputSchema)
-	return BindResponseWire{OutputSchema: schema, OpaqueData: result.OpaqueData, ProjectionExpressionProfiles: result.ProjectionExpressionProfiles}, err
+	return BindResponseWire{OutputSchema: schema, OpaqueData: result.OpaqueData, ProjectionExpressionProfiles: result.ProjectionExpressionProfiles, Repeatability: repeatability}, err
 }
 func (w workerService) handleProjection(ctx context.Context, cc *vgirpc.CallContext, req projectionDecodedRequest) (TableFunctionProjectionResponseWire, error) {
 	decline := TableFunctionProjectionResponseWire{AcceptedIndices: []int64{}}
@@ -86,6 +99,9 @@ func (w workerService) handleProjection(ctx context.Context, cc *vgirpc.CallCont
 		return decline, fmt.Errorf("projection requires an ordinary table and explicit owner")
 	}
 	if err := validateProjectionProfiles(req.BindResult.ProjectionExpressionProfiles); err != nil {
+		return decline, err
+	}
+	if err := validateWireBindRepeatability(req.BindResult.Repeatability); err != nil {
 		return decline, err
 	}
 	if len(req.BindResult.LookupSecretTypes)+len(req.BindResult.LookupScopes)+len(req.BindResult.LookupNames) > 0 {
@@ -170,7 +186,7 @@ func (w workerService) handleProjection(ctx context.Context, cc *vgirpc.CallCont
 	if !ok {
 		return decline, nil
 	}
-	accepted, err := provider.Projection(params, &ProjectionProposal{Original: &BindResponse{OutputSchema: source, OpaqueData: req.BindResult.OpaqueData, ProjectionExpressionProfiles: req.BindResult.ProjectionExpressionProfiles}, Expressions: req.Expressions, ResultSchema: result})
+	accepted, err := provider.Projection(params, &ProjectionProposal{Original: &BindResponse{OutputSchema: source, OpaqueData: req.BindResult.OpaqueData, ProjectionExpressionProfiles: req.BindResult.ProjectionExpressionProfiles, Repeatability: BindRepeatability(req.BindResult.Repeatability)}, Expressions: req.Expressions, ResultSchema: result})
 	if err != nil {
 		return decline, err
 	}
@@ -195,6 +211,13 @@ func (w workerService) handleProjection(ctx context.Context, cc *vgirpc.CallCont
 	md := source.Metadata()
 	expected := arrow.NewSchemaWithEndian(fields, &md, source.Endianness())
 	value := accepted.BindResult
+	repeatability, err := wireBindRepeatability(value.Repeatability)
+	if err != nil {
+		return decline, err
+	}
+	if repeatability != req.BindResult.Repeatability {
+		return decline, fmt.Errorf("accepted projection changed bind repeatability")
+	}
 	if !value.OutputSchema.Equal(expected) || !value.OutputSchema.Metadata().Equal(md) || !slices.Equal(value.ProjectionExpressionProfiles, req.BindResult.ProjectionExpressionProfiles) || len(value.SecretScopeRequest) > 0 {
 		return decline, fmt.Errorf("accepted projection changed bind contract")
 	}
@@ -322,9 +345,22 @@ func decodeProjectionBind(raw []byte) (BindResponseWire, error) {
 			return r, err
 		}
 	}
+	enum := row.Column(6).(*array.Dictionary)
+	values := enum.Dictionary().(*array.String)
+	index := enum.GetValueIndex(0)
+	if index < 0 || index >= values.Len() || values.IsNull(index) {
+		return r, fmt.Errorf("invalid or NULL bind repeatability dictionary value")
+	}
+	r.Repeatability = values.Value(index)
+	if err := validateWireBindRepeatability(r.Repeatability); err != nil {
+		return r, err
+	}
 	return r, nil
 }
 func encodeProjectionBind(value BindResponseWire) ([]byte, error) {
+	if err := validateWireBindRepeatability(value.Repeatability); err != nil {
+		return nil, err
+	}
 	b := array.NewRecordBuilder(memory.DefaultAllocator, generated.BindResultSchema)
 	defer b.Release()
 	b.Field(0).(*array.BinaryBuilder).Append(value.OutputSchema)
@@ -337,6 +373,9 @@ func encodeProjectionBind(value BindResponseWire) ([]byte, error) {
 		list := b.Field(i + 2).(*array.ListBuilder)
 		list.Append(true)
 		list.ValueBuilder().(*array.StringBuilder).AppendValues(values, nil)
+	}
+	if err := b.Field(6).(*array.BinaryDictionaryBuilder).AppendString(value.Repeatability); err != nil {
+		return nil, err
 	}
 	row := b.NewRecordBatch()
 	defer row.Release()
