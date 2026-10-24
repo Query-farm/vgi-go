@@ -281,6 +281,9 @@ func (insertFn) Process(ctx context.Context, params *vgi.ProcessParams, _ *noSta
 	if err != nil {
 		return err
 	}
+	if err := validateRows(batch, userSchema, false); err != nil {
+		return err
+	}
 	storageMu.Lock()
 	defer storageMu.Unlock()
 	db, err := openDB()
@@ -460,6 +463,9 @@ func (updateFn) Process(ctx context.Context, params *vgi.ProcessParams, _ *noSta
 	if err != nil {
 		return err
 	}
+	if err := validateRows(batch, spec.tableSchema(), true); err != nil {
+		return err
+	}
 	rowidIdx := batch.Schema().FieldIndices("rowid")
 	if len(rowidIdx) == 0 {
 		return fmt.Errorf("schema_reconcile_update: missing rowid column")
@@ -500,6 +506,10 @@ func (updateFn) Process(ctx context.Context, params *vgi.ProcessParams, _ *noSta
 		merged, err := mergeRow(existing, batch, i, spec)
 		existing.Release()
 		if err != nil {
+			return err
+		}
+		if err := validateRows(merged, spec.tableSchema(), false); err != nil {
+			merged.Release()
 			return err
 		}
 		mergedBytes, err := serializeBatch(merged)
@@ -694,6 +704,10 @@ func (scanFn) Process(ctx context.Context, params *vgi.ProcessParams, state *sca
 		if err != nil {
 			return err
 		}
+		if err := validateRows(b, spec.tableSchema(), false); err != nil {
+			b.Release()
+			return err
+		}
 		batches = append(batches, b)
 	}
 	if rows.Err() != nil {
@@ -866,12 +880,21 @@ func buildCountBatch(n int64) arrow.RecordBatch {
 // used by both the schema_contents handler (returns all tables) and the
 // table_get handler (returns one).
 func serializeTableInfo(spec tableSpec) ([]byte, error) {
+	if err := validateStoredRows(spec); err != nil {
+		return nil, err
+	}
+	constraints, err := notNullConstraints(spec)
+	if err != nil {
+		return nil, err
+	}
 	info := &vgi.TableInfo{
-		Name:             spec.name,
-		SchemaPath:       vgi.SchemaPath{SchemaPath},
-		Comment:          fmt.Sprintf("schema_reconcile %s (rowid type %s)", spec.name, spec.rowidField.Type),
-		Columns:          spec.tableSchema(),
-		WriteResultModes: map[string]string{"insert": "rows", "update": "rows", "delete": "rows"},
+		Constraints:        constraints,
+		DefinitionRevision: []byte("schema_reconcile:not_null:v1"),
+		Name:               spec.name,
+		SchemaPath:         vgi.SchemaPath{SchemaPath},
+		Comment:            fmt.Sprintf("schema_reconcile %s (rowid type %s)", spec.name, spec.rowidField.Type),
+		Columns:            spec.tableSchema(),
+		WriteResultModes:   map[string]string{"insert": "rows", "update": "rows", "delete": "rows"},
 	}
 	return vgi.SerializeTableInfo(info)
 }

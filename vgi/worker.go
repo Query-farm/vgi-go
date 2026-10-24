@@ -585,6 +585,12 @@ type AttachDecision struct {
 	ResolvedDataVersion           string
 	ResolvedImplementationVersion string
 	AttachOpaqueData              []byte
+	// CatalogCapabilities and SelectedCapabilities carry canonical
+	// CatalogCapabilities IPC records. The provider must select only profiles
+	// supported by this attachment and offered by the client, with their
+	// prerequisites. Nil preserves the default catalog's absent agreement.
+	CatalogCapabilities  []byte
+	SelectedCapabilities []byte
 }
 
 // AttachValidator is invoked by the default catalog_attach handler. It may

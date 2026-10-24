@@ -132,6 +132,7 @@ func main() {
 		}),
 		vgi.WithAttachScanBranchesGetHandler(multiBranchScanBranchesGet),
 		vgi.WithAttachWriteFunctionGetHandler(schema_reconcile.AttachWriteFunctionGetHandler),
+		vgi.WithAttachValidator(schema_reconcile.AttachValidator),
 		vgi.WithSecretTypes(
 			vgi.SecretTypeSpec{
 				Name:        "vgi_example",

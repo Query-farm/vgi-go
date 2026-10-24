@@ -764,12 +764,21 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 	// to embed the chosen version into attach_opaque_data.
 	attachOpaqueDataRequired := false
 	var resolvedData, resolvedImpl *string
+	var catalogCapabilities, selectedCapabilities *[]byte
 	if w.attachValidator != nil {
 		decision, vErr := w.attachValidator(&req, callCtx)
 		if vErr != nil {
 			return CatalogAttachResultWire{}, rewrapError("ValueError", vErr)
 		}
 		if decision != nil {
+			if decision.CatalogCapabilities != nil {
+				value := append([]byte(nil), decision.CatalogCapabilities...)
+				catalogCapabilities = &value
+			}
+			if decision.SelectedCapabilities != nil {
+				value := append([]byte(nil), decision.SelectedCapabilities...)
+				selectedCapabilities = &value
+			}
 			if decision.AttachOpaqueData != nil {
 				attachOpaqueData = decision.AttachOpaqueData
 				attachOpaqueDataRequired = true
@@ -842,6 +851,8 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 		GlobalFunctionPrefix:          globalFunctionPrefix,
 		ResolvedDataVersion:           resolvedData,
 		ResolvedImplementationVersion: resolvedImpl,
+		CatalogCapabilities:           catalogCapabilities,
+		SelectedCapabilities:          selectedCapabilities,
 		// The default catalog is static and version-frozen, so the
 		// whole of it can be served in one catalog_contents call.
 		SupportsCatalogContents: !w.catalogContentsDisabled,
