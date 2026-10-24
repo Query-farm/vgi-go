@@ -520,9 +520,9 @@ func main() {
 		Name:    "generated_sequence",
 		Comment: "Table with generated columns backed by sequence(10)",
 		Columns: arrow.NewSchema([]arrow.Field{
-			{Name: "n", Type: arrow.PrimitiveTypes.Int64},
-			{Name: "doubled", Type: arrow.PrimitiveTypes.Int64},
-			{Name: "label", Type: arrow.BinaryTypes.String},
+			{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			{Name: "doubled", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			{Name: "label", Type: arrow.BinaryTypes.String, Nullable: true},
 		}, nil),
 		Generated: map[string]string{
 			"doubled": "n * 2",

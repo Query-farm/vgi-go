@@ -72,6 +72,9 @@ var tableInfoSchema = generated.TableInfoSchema
 
 // SerializeTableInfo serializes a TableInfo to IPC bytes.
 func SerializeTableInfo(info *TableInfo) ([]byte, error) {
+	if err := ValidateColumnExpressions(info.Columns, info.SchemaPath, true); err != nil {
+		return nil, err
+	}
 	if err := ValidateColumnMetadata(info.Columns); err != nil {
 		return nil, err
 	}

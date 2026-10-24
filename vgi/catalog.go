@@ -1567,7 +1567,7 @@ func (w *Worker) serializeCatalogTable(schemaPath SchemaPath, ct *CatalogTable) 
 	// Apply generated-column expressions as Arrow field metadata
 	if len(ct.Generated) > 0 && columns != nil {
 		var err error
-		columns, err = applyGenerated(columns, ct.Generated)
+		columns, err = applyGenerated(columns, ct.Generated, schemaPath)
 		if err != nil {
 			return nil, fmt.Errorf("applying generated columns for table %s: %w", ct.Name, err)
 		}

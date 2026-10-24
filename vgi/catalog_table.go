@@ -53,7 +53,7 @@ type CatalogTable struct {
 	// through duckdb_columns().comment.
 	ColumnComments map[string]string
 	// Generated maps column names to SQL expressions for generated (virtual)
-	// columns. Encoded as `generated_expression` Arrow field metadata.
+	// columns. Encoded as canonical SqlExpression IPC with the owning schema.
 	Generated map[string]string
 	// Statistics holds optimizer hints per column name. When non-empty,
 	// the catalog reports supports_column_statistics=true for this table and
@@ -495,9 +495,9 @@ func defaultToSQL(value any) string {
 	}
 }
 
-// applyGenerated adds "generated_expression" metadata to Arrow schema fields
+// applyGenerated adds canonical VIRTUAL expression metadata to Arrow schema fields
 // for generated/virtual columns. Existing field metadata is preserved.
-func applyGenerated(schema *arrow.Schema, generated map[string]string) (*arrow.Schema, error) {
+func applyGenerated(schema *arrow.Schema, generated map[string]string, owner SchemaPath) (*arrow.Schema, error) {
 	if len(generated) == 0 {
 		return schema, nil
 	}
@@ -519,9 +519,20 @@ func applyGenerated(schema *arrow.Schema, generated map[string]string) (*arrow.S
 			return nil, fmt.Errorf("generated references non-existent column %q", colName)
 		}
 		existing := fields[idx].Metadata
-		keys := append(existing.Keys(), "generated_expression")
-		vals := append(existing.Values(), expr)
-		fields[idx].Metadata = arrow.NewMetadata(keys, vals)
+		values := existing.ToMap()
+		if _, ok := values[GeneratedExpressionKey]; ok {
+			return nil, fmt.Errorf("generated convenience conflicts with canonical metadata")
+		}
+		if _, ok := values["generated_expression"]; ok {
+			return nil, fmt.Errorf("legacy generated metadata requires explicit translation")
+		}
+		encoded, err := GeneratedExpressionMetadata(expr, owner)
+		if err != nil {
+			return nil, err
+		}
+		values[GeneratedExpressionKey] = encoded
+		values[GenerationKey] = "virtual"
+		fields[idx].Metadata = arrow.MetadataFrom(values)
 	}
 
 	md := schema.Metadata()
