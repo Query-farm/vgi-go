@@ -318,6 +318,14 @@ func registerTableInOuts(w *vgi.Worker) {
 	w.RegisterTableInOut(table_in_out.NewBlendedExplodeFunction())
 	w.RegisterTableInOut(table_in_out.NewProjectableBlendedFunction())
 	w.RegisterTableInOut(table_in_out.NewHostileProvenanceFunction())
+	// Continued-output fixtures (vgi.WithMoreOutput + Resume): blended_paged
+	// (table_in_out/lateral_continuation.test), blended_sliced, which also
+	// declares InputRowsPerCall = 3 (table_in_out/input_rows_per_call.test),
+	// and paged_explode, the classic stock-path form
+	// (table_in_out/continuation_classic.test).
+	w.RegisterTableInOut(table_in_out.NewBlendedPagedFunction())
+	w.RegisterTableInOut(table_in_out.NewBlendedSlicedFunction())
+	w.RegisterTableInOut(table_in_out.NewPagedExplodeFunction())
 	// Exchange-mode result-cache fixtures (cache/exchange_*.test): cached_double
 	// (blended LATERAL cache), cached_echo (classic streaming cache),
 	// cached_sum_all (buffered cache), and the two always-revalidate (304)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
+	"reflect"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -40,6 +41,8 @@ type TypedTableInOutFunc[S any] interface {
 // for registration with Worker.RegisterTableInOut. The adapter:
 //   - Provides type-safe state casting (returns error instead of panic)
 //   - Defaults OnInit to DefaultInit() (MaxWorkers: 1) unless OnIniter is implemented
+//   - Implements TableInOutResumer when f implements TypedTableInOutResumer[S]
+//     (continued output; see WithMoreOutput)
 //
 // Usage:
 //
@@ -54,6 +57,9 @@ func AsTableInOutFunction[S any](f TypedTableInOutFunc[S]) TableInOutFunction {
 		base.onInit = init.OnInit
 	}
 
+	if r, ok := any(f).(TypedTableInOutResumer[S]); ok {
+		return &typedTableInOutResumeAdapter[S]{typedTableInOutAdapter: base, resume: r}
+	}
 	return base
 }
 
@@ -109,4 +115,27 @@ func (a *typedTableInOutAdapter[S]) Finalize(ctx context.Context, params *Proces
 		return nil, fmt.Errorf("invalid state type: expected *%T, got %T", new(S), state)
 	}
 	return a.inner.Finalize(ctx, params, s)
+}
+
+// stateType reports S, so startup can check a resumable function's state.
+func (a *typedTableInOutAdapter[S]) stateType() reflect.Type {
+	return reflect.TypeFor[S]()
+}
+
+// typedTableInOutResumeAdapter is typedTableInOutAdapter for a function that
+// also implements TypedTableInOutResumer[S]. A separate type, so only such a
+// function satisfies TableInOutResumer.
+type typedTableInOutResumeAdapter[S any] struct {
+	*typedTableInOutAdapter[S]
+	resume TypedTableInOutResumer[S]
+}
+
+// Resume type-asserts the untyped state to *S and forwards to the wrapped
+// typed function's Resume, returning an error on a state type mismatch.
+func (a *typedTableInOutResumeAdapter[S]) Resume(ctx context.Context, params *ProcessParams, state interface{}, out *vgirpc.OutputCollector) error {
+	s, ok := state.(*S)
+	if !ok {
+		return fmt.Errorf("invalid state type: expected *%T, got %T", new(S), state)
+	}
+	return a.resume.Resume(ctx, params, s, out)
 }

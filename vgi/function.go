@@ -9,18 +9,22 @@ import "github.com/apache/arrow-go/v18/arrow"
 // "any"-typed arguments to specific type families (e.g., numeric types only).
 type TypeBoundPredicate func(arrow.DataType) bool
 
-// FunctionType identifies the kind of VGI function.
+// FunctionType identifies the kind of VGI function. The values are the
+// protocol enum member names (vgi.invocation.FunctionType /
+// vgi.metadata.CatalogFunctionType) that travel in the dictionary-encoded
+// function_type column; wire-protocol constants that must not be changed.
+// Decoders also accept the legacy lower-case spellings.
 type FunctionType string
 
 const (
 	// FunctionTypeScalar marks a scalar (row-to-row) function.
-	FunctionTypeScalar FunctionType = "scalar"
+	FunctionTypeScalar FunctionType = "SCALAR"
 	// FunctionTypeTable marks a table function (row generator).
-	FunctionTypeTable FunctionType = "table"
+	FunctionTypeTable FunctionType = "TABLE"
 	// FunctionTypeAggregate marks an aggregate function.
-	FunctionTypeAggregate FunctionType = "aggregate"
+	FunctionTypeAggregate FunctionType = "AGGREGATE"
 	// FunctionTypeTableBuffering marks a table-buffering (sink) function.
-	FunctionTypeTableBuffering FunctionType = "table_buffering"
+	FunctionTypeTableBuffering FunctionType = "TABLE_BUFFERING"
 )
 
 // FunctionStability describes when function results may change.
@@ -348,6 +352,12 @@ type FunctionMetadata struct {
 	// name for fixed args, positionally for varargs); named args stay bind-time
 	// scalars on ProcessParams.Args. Mirrors vgi-python's RowTransformFunction.
 	InputFromArgs bool
+	// InputRowsPerCall (InputFromArgs functions only) is the most input rows
+	// one worker call receives: the client's batched-LATERAL operator splits
+	// each input chunk, after dedup, into calls of at most this many rows. Nil
+	// (the default) sends a whole chunk per call. Must be positive; the worker
+	// refuses to start otherwise. Mirrors vgi-python's Meta.input_rows_per_call.
+	InputRowsPerCall *int64
 	// CacheControl opts the function into the extension's result cache: when
 	// set, its vgi.cache.* metadata is attached by the framework to every
 	// output batch of a SCALAR function and to every finalize batch of a

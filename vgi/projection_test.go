@@ -68,7 +68,7 @@ func TestProjectionAcceptanceContract(t *testing.T) {
 			case "secret":
 				f.accept.BindResult.SecretScopeRequest = []SecretLookup{{SecretType: "test"}}
 			}
-			response, err := w.vgiService().handleProjection(context.Background(), cc, req)
+			response, err := handleProjection(w.vgiService(), context.Background(), cc, req)
 			if name == "valid" || name == "decline" {
 				if err != nil {
 					t.Fatal(err)

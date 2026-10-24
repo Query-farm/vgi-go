@@ -2,7 +2,7 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 #
 # Run vgi-rpc's hosted-protocols conformance group against the example worker
-# on stdio, a unix socket and HTTP (with vgi_rpc.Identity.v1 opted in).
+# on stdio, a unix socket and HTTP (with vgi_rpc.Identity.v2 opted in).
 #
 # The worker hosts conformance.Secondary.v1 beside vgi.v2 through
 # vgi.WithHostedProtocols, so this is the acceptance test for that hook and for

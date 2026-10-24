@@ -93,7 +93,7 @@ func wireProjectionBind(result *BindResponse) (BindResponseWire, error) {
 	schema, err := SerializeSchema(result.OutputSchema)
 	return BindResponseWire{OutputSchema: schema, OpaqueData: result.OpaqueData, ProjectionExpressionProfiles: result.ProjectionExpressionProfiles, Repeatability: repeatability}, err
 }
-func (w workerService) handleProjection(ctx context.Context, cc *vgirpc.CallContext, req projectionDecodedRequest) (TableFunctionProjectionResponseWire, error) {
+func handleProjection(w workerService, ctx context.Context, cc *vgirpc.CallContext, req projectionDecodedRequest) (TableFunctionProjectionResponseWire, error) {
 	decline := TableFunctionProjectionResponseWire{AcceptedIndices: []int64{}}
 	if !strings.EqualFold(req.BindCall.FunctionType, string(FunctionTypeTable)) || req.BindCall.InputSchema != nil || req.BindCall.SchemaPath == nil {
 		return decline, fmt.Errorf("projection requires an ordinary table and explicit owner")
@@ -419,7 +419,7 @@ func (w workerService) TableFunctionProjection(ctx context.Context, cc *vgirpc.C
 	if err != nil {
 		return decline, err
 	}
-	result, err := w.handleProjection(ctx, cc, projectionDecodedRequest{BindCall: call, BindResult: bind, Expressions: raw.Expressions, ResultSchema: raw.ResultSchema})
+	result, err := handleProjection(w, ctx, cc, projectionDecodedRequest{BindCall: call, BindResult: bind, Expressions: raw.Expressions, ResultSchema: raw.ResultSchema})
 	if err != nil {
 		return decline, err
 	}

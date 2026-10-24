@@ -288,12 +288,14 @@ func buildDefaultValueBatch(mem memory.Allocator, schema *arrow.Schema, dt arrow
 
 // Worker is the main VGI worker that hosts functions and serves RPC.
 type Worker struct {
-	scalars         map[string][]ScalarFunction
-	tables          map[string][]TableFunction
-	tableInOuts     map[string][]TableInOutFunction
-	tableBufferings map[string][]TableBufferingFunction
-	aggregates      map[string][]AggregateFunction
-	aggStorage      *aggregateStorage
+	catalogSnapshotPolicy  *CatalogSnapshotPolicy
+	catalogSnapshotManager *CatalogSnapshotManager
+	scalars                map[string][]ScalarFunction
+	tables                 map[string][]TableFunction
+	tableInOuts            map[string][]TableInOutFunction
+	tableBufferings        map[string][]TableBufferingFunction
+	aggregates             map[string][]AggregateFunction
+	aggStorage             *aggregateStorage
 	// streamingSessions tracks per-execution_id state for streaming-partitioned
 	// aggregates (aggregate_streaming_open/_chunk/_close).
 	streamingSessions streamingSessionStore
@@ -369,7 +371,7 @@ type Worker struct {
 	attachWriteFunctionGetHandler AttachWriteFunctionGetHandler
 	catalogVersionHook            CatalogVersionHook
 	// hostedProtocols supplies the protocols hosted beside vgi.v2
-	// (WithHostedProtocols); identity opts into vgi_rpc.Identity.v1 over HTTP
+	// (WithHostedProtocols); identity opts into vgi_rpc.Identity.v2 over HTTP
 	// (WithIdentity). See hosting.go.
 	hostedProtocols HostedProtocolsFunc
 	identity        *vgirpc.IdentityConfig
@@ -1280,7 +1282,7 @@ const ProtocolName = "vgi.v2"
 // 2.0.0 represents every schema identity as a root-to-leaf list of components;
 // 2.1.0 adds supports_catalog_contents to CatalogAttachResult and the
 // catalog_contents RPC (the whole catalog in one call; see catalog_contents.go).
-const ProtocolVersion = "2.1.0"
+const ProtocolVersion = "2.2.0"
 
 // buildServer is the one place a worker's server is built, for every
 // transport; see hosting.go for what it hosts. An error means the worker must
@@ -1315,6 +1317,13 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 	// vgi_attach_ticket is reserved: a catalog declaring it would never see
 	// it, since catalog_attach reads it as a ticket first.
 	if err := w.checkReservedAttachOptions(); err != nil {
+		return nil, err
+	}
+
+	// A table-in-out registration the client cannot drive (Resume without a
+	// state to resume from, a bad InputRowsPerCall) refuses to start here,
+	// rather than failing the first query that calls it.
+	if err := w.checkTableInOutContracts(); err != nil {
 		return nil, err
 	}
 
@@ -1373,7 +1382,7 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 		return nil, err
 	}
 
-	// vgi_rpc.Identity.v1 only where callers are authenticated.
+	// vgi_rpc.Identity.v2 only where callers are authenticated.
 	if transport == transportHTTP {
 		if err := w.hostIdentity(s, grantKeys); err != nil {
 			return nil, err

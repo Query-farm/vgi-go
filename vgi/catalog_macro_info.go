@@ -17,14 +17,17 @@ import (
 	"github.com/Query-farm/vgi-go/vgi/generated"
 )
 
-// MacroType identifies the kind of macro.
+// MacroType identifies the kind of macro. The values are the protocol enum
+// member names (vgi.catalog.catalog_interface.MacroType) that travel in the
+// dictionary-encoded macro_type column; wire-protocol constants that must not
+// be changed.
 type MacroType string
 
 const (
 	// MacroTypeScalar marks a scalar macro (expands to a SQL expression).
-	MacroTypeScalar MacroType = "scalar"
+	MacroTypeScalar MacroType = "SCALAR"
 	// MacroTypeTable marks a table macro (expands to a SQL query).
-	MacroTypeTable MacroType = "table"
+	MacroTypeTable MacroType = "TABLE"
 )
 
 // macroKindFilter maps a schema_contents_macros "type" filter value (as sent
@@ -39,13 +42,25 @@ func macroKindFilter(s string) MacroType {
 	return ""
 }
 
+// canonicalMacroType maps a MacroType, including the legacy lower-case
+// spellings, to its protocol member name. Returns "" for an unknown value.
+func canonicalMacroType(t MacroType) MacroType {
+	switch t {
+	case MacroTypeScalar, "scalar":
+		return MacroTypeScalar
+	case MacroTypeTable, "table":
+		return MacroTypeTable
+	}
+	return ""
+}
+
 // CatalogMacro describes a macro to register in the catalog.
 type CatalogMacro struct {
 	// Overloads is a complete canonical family; simple-definition fields must be empty.
 	Overloads []generated.MacroOverload
 	// Name is the macro name visible in SQL.
 	Name string
-	// MacroType is "scalar" or "table".
+	// MacroType is MacroTypeScalar or MacroTypeTable.
 	MacroType MacroType
 	// Parameters lists the parameter names in order.
 	Parameters []string
@@ -80,6 +95,21 @@ var macroInfoSchema = generated.MacroInfoSchema
 
 // SerializeMacroInfo serializes a MacroInfo to IPC bytes.
 func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
+	record, err := buildMacroInfoRecord(info)
+	if err != nil {
+		return nil, err
+	}
+	defer record.Release()
+	return SerializeRecordBatch(record)
+}
+
+func buildMacroInfoRecord(info *MacroInfo) (arrow.RecordBatch, error) {
+	// macro_type is a dictionary-encoded enum column: it must carry the
+	// protocol member NAME (SCALAR or TABLE).
+	macroType := canonicalMacroType(info.MacroType)
+	if macroType == "" {
+		return nil, fmt.Errorf("macro %q has unknown macro_type %q", info.Name, info.MacroType)
+	}
 	mem := memory.NewGoAllocator()
 
 	// comment
@@ -119,7 +149,7 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 	// macro_type (dictionary encoded)
 	mtBuilder := array.NewDictionaryBuilder(mem, dictType)
 	defer mtBuilder.Release()
-	mtBuilder.(*array.BinaryDictionaryBuilder).AppendString(string(info.MacroType))
+	mtBuilder.(*array.BinaryDictionaryBuilder).AppendString(string(macroType))
 
 	if len(info.Overloads) == 0 {
 		return nil, fmt.Errorf("macro family must be nonempty")
@@ -150,23 +180,11 @@ func SerializeMacroInfo(info *MacroInfo) ([]byte, error) {
 		}
 	}()
 
-	batch := array.NewRecordBatch(macroInfoSchema, cols, 1)
-	defer batch.Release()
-
-	var buf bytes.Buffer
-	w := ipc.NewWriter(&buf, ipc.WithSchema(macroInfoSchema))
-	if err := w.Write(batch); err != nil {
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return array.NewRecordBatch(macroInfoSchema, cols, 1), nil
 }
 
 // macroInfoFromCatalogMacro builds the wire MacroInfo for a registered
-// CatalogMacro in the given schema, including the per-parameter arguments_schema
-// (carrying vgi_doc field metadata for documented parameters).
+// CatalogMacro in the given schema, including typed defaults and parameter docs.
 func macroInfoFromCatalogMacro(cm CatalogMacro, schemaPath SchemaPath) (*MacroInfo, error) {
 	family := cm.Overloads
 	if family != nil {
@@ -237,7 +255,7 @@ func macroInfoFromCatalogMacro(cm CatalogMacro, schemaPath SchemaPath) (*MacroIn
 			parameters = append(parameters, parameter)
 		}
 		family = []generated.MacroOverload{{Parameters: parameters, Definition: cm.Definition, Profile: "duckdb.macro.v1",
-			SchemaPath: schemaPath, MacroType: string(cm.MacroType), EvaluationContext: generated.QueryEvaluationContext{
+			SchemaPath: schemaPath, MacroType: strings.ToLower(string(canonicalMacroType(cm.MacroType))), EvaluationContext: generated.QueryEvaluationContext{
 				Timezone: "UTC", Collation: "binary", DefaultOrder: "asc", DefaultNullOrder: "nulls_last", PreserveInsertionOrder: true}}}
 	}
 	return &MacroInfo{Name: cm.Name, SchemaPath: schemaPath, Comment: cm.Comment, Tags: cm.Tags, MacroType: cm.MacroType, Overloads: family}, nil

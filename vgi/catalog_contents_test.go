@@ -31,7 +31,7 @@ type contentsClient struct {
 	client *vgirpc.HttpClient
 }
 
-func newContentsClient(t *testing.T, w *vgi.Worker) *contentsClient {
+func newContentsClient(t *testing.T, w *vgi.Worker, options ...vgirpc.HttpClientOption) *contentsClient {
 	t.Helper()
 	hs, err := w.NewHttpServerForTest()
 	if err != nil {
@@ -39,9 +39,10 @@ func newContentsClient(t *testing.T, w *vgi.Worker) *contentsClient {
 	}
 	ts := httptest.NewServer(hs)
 	t.Cleanup(ts.Close)
-	client, err := vgirpc.NewHttpClient(ts.URL,
+	options = append(options,
 		vgirpc.WithClientProtocol(vgi.ProtocolName),
 		vgirpc.WithClientProtocolVersion(vgi.ProtocolVersion))
+	client, err := vgirpc.NewHttpClient(ts.URL, options...)
 	if err != nil {
 		t.Fatalf("building the HTTP client: %v", err)
 	}
@@ -79,7 +80,7 @@ func (c *contentsClient) attach(name string) generated.CatalogAttachResult {
 
 // contents calls catalog_contents (with if_none_match when non-nil) and
 // decodes the response, list<struct<SchemaContents>> included.
-func (c *contentsClient) contents(attach []byte, ifNoneMatch *string) generated.CatalogContentsResponse {
+func (c *contentsClient) contents(attach []byte, ifNoneMatch *string) decodedCatalogContents {
 	t := c.t
 	t.Helper()
 	row := map[string]any{"attach_opaque_data": attach}
@@ -111,65 +112,52 @@ func (c *contentsClient) contentsErr(attach []byte, ifNoneMatch *string) error {
 
 // decodeContentsResponse decodes a catalog_contents result record, checking
 // its schema is the protocol's.
-func decodeContentsResponse(t *testing.T, rec arrow.RecordBatch) generated.CatalogContentsResponse {
+type decodedCatalogContents struct {
+	CatalogVersion int64
+	Etag           *string
+	NotModified    bool
+	Schemas        []generated.SchemaContents
+	Wire           generated.CatalogContentsResponse
+}
+
+func decodeContentsResponse(t *testing.T, rec arrow.RecordBatch) decodedCatalogContents {
 	t.Helper()
 	if !rec.Schema().Equal(generated.CatalogContentsResultSchema) {
-		t.Fatalf("catalog_contents result schema\n%v\nprotocol says\n%v", rec.Schema(), generated.CatalogContentsResultSchema)
+		t.Fatalf("incorrect catalog response schema: %v", rec.Schema())
 	}
-	out := generated.CatalogContentsResponse{
-		CatalogVersion: column[*array.Int64](t, rec, "catalog_version").Value(0),
-		NotModified:    column[*array.Boolean](t, rec, "not_modified").Value(0),
+	wire := generated.CatalogContentsResponse{CatalogVersion: column[*array.Int64](t, rec, "catalog_version").Value(0), NotModified: column[*array.Boolean](t, rec, "not_modified").Value(0)}
+	if col := column[*array.String](t, rec, "etag"); col.IsValid(0) {
+		value := col.Value(0)
+		wire.Etag = &value
 	}
-	if etag := column[*array.String](t, rec, "etag"); etag.IsValid(0) {
-		v := etag.Value(0)
-		out.Etag = &v
-	}
-	list := column[*array.List](t, rec, "schemas")
-	rows := list.ListValues().(*array.Struct)
-	field := func(name string) arrow.Array {
-		idx, ok := rows.DataType().(*arrow.StructType).FieldIdx(name)
-		if !ok {
-			t.Fatalf("SchemaContents has no field %q", name)
+	fields := []**[]byte{&wire.Schemas, &wire.Tables, &wire.Views, &wire.Functions, &wire.Macros, &wire.Indexes}
+	for i, name := range []string{"schemas", "tables", "views", "functions", "macros", "indexes"} {
+		col := column[*array.Binary](t, rec, name)
+		if col.IsValid(0) {
+			value := bytes.Clone(col.Value(0))
+			*fields[i] = &value
 		}
-		return rows.Field(idx)
 	}
-	strs := func(arr arrow.Array, i int) []string {
-		l := arr.(*array.List)
-		values := l.ListValues().(*array.String)
-		start, end := l.ValueOffsets(i)
-		out := make([]string, 0, end-start)
-		for j := start; j < end; j++ {
-			out = append(out, values.Value(int(j)))
-		}
-		return out
+	grouped, err := vgi.DecodeCatalogStreams(wire)
+	if err != nil {
+		t.Fatal(err)
 	}
-	bins := func(arr arrow.Array, i int) [][]byte {
-		l := arr.(*array.List)
-		values := l.ListValues().(*array.Binary)
-		start, end := l.ValueOffsets(i)
-		out := make([][]byte, 0, end-start)
-		for j := start; j < end; j++ {
-			out = append(out, bytes.Clone(values.Value(int(j))))
-		}
-		return out
+	return decodedCatalogContents{wire.CatalogVersion, wire.Etag, wire.NotModified, grouped, wire}
+}
+func sameCatalogItem(left, right []byte) bool {
+	a, err := vgi.DeserializeRecordBatch(left)
+	if err != nil {
+		return false
 	}
-	start, end := list.ValueOffsets(0)
-	out.Schemas = []generated.SchemaContents{}
-	for i := int(start); i < int(end); i++ {
-		out.Schemas = append(out.Schemas, generated.SchemaContents{
-			Path:               strs(field("path"), i),
-			Schema:             bytes.Clone(field("schema").(*array.Binary).Value(i)),
-			Tables:             bins(field("tables"), i),
-			Views:              bins(field("views"), i),
-			ScalarFunctions:    bins(field("scalar_functions"), i),
-			AggregateFunctions: bins(field("aggregate_functions"), i),
-			TableFunctions:     bins(field("table_functions"), i),
-			ScalarMacros:       bins(field("scalar_macros"), i),
-			TableMacros:        bins(field("table_macros"), i),
-			Indexes:            bins(field("indexes"), i),
-		})
+	defer a.Release()
+	b, err := vgi.DeserializeRecordBatch(right)
+	if err != nil {
+		return false
 	}
-	return out
+	defer b.Release()
+	x, _ := a.MarshalJSON()
+	y, _ := b.MarshalJSON()
+	return bytes.Equal(x, y) && a.Schema().Equal(b.Schema())
 }
 
 func (c *contentsClient) items(method string, params *arrow.Schema, row map[string]any) [][]byte {
@@ -279,7 +267,7 @@ func TestCatalogContentsMatchesPerSchemaRPCs(t *testing.T) {
 		if !slices.Equal(sc.Path, path) {
 			t.Errorf("schema %s: SchemaContents.path is %v", key, sc.Path)
 		}
-		if !bytes.Equal(sc.Schema, byPath[key]) {
+		if !sameCatalogItem(sc.Schema, byPath[key]) {
 			t.Errorf("schema %s: SchemaInfo item differs from catalog_schemas'", key)
 		}
 		// Parents first: a schema's parent was emitted before it.
@@ -310,7 +298,7 @@ func TestCatalogContentsMatchesPerSchemaRPCs(t *testing.T) {
 			{"scalar_macros", sc.ScalarMacros, c.items("catalog_schema_contents_macros", generated.CatalogSchemaContentsMacrosParamsSchema, typed("SCALAR_MACRO"))},
 			{"table_macros", sc.TableMacros, c.items("catalog_schema_contents_macros", generated.CatalogSchemaContentsMacrosParamsSchema, typed("TABLE_MACRO"))},
 		} {
-			if !slices.EqualFunc(cmp.got, cmp.want, bytes.Equal) {
+			if !slices.EqualFunc(cmp.got, cmp.want, sameCatalogItem) {
 				t.Errorf("schema %s %s: catalog_contents has %d items, the per-schema RPC %d, or their bytes differ",
 					key, cmp.kind, len(cmp.got), len(cmp.want))
 			}
@@ -395,7 +383,7 @@ func TestCatalogContentsContentHashEtag(t *testing.T) {
 	if full.Etag == nil || full.NotModified {
 		t.Fatalf("content-hash mode answered etag=%v not_modified=%v", full.Etag, full.NotModified)
 	}
-	if want := vgi.CatalogContentsDigest(full.Schemas); *full.Etag != want {
+	if want := vgi.CatalogStreamsDigest(full.Wire); *full.Etag != want {
 		t.Fatalf("etag %s is not the digest of the snapshot it came with (%s)", *full.Etag, want)
 	}
 	if len(*full.Etag) != 64 {
@@ -560,7 +548,7 @@ func TestCatalogContentsHandlerRules(t *testing.T) {
 			schemas, err := call.Contents()
 			return vgi.CatalogContentsResult{Schemas: schemas}, err
 		})))
-	if got := h.contents(h.attach("example").AttachOpaqueData, nil); got.Etag == nil || *got.Etag != vgi.CatalogContentsDigest(got.Schemas) {
+	if got := h.contents(h.attach("example").AttachOpaqueData, nil); got.Etag == nil || *got.Etag != vgi.CatalogStreamsDigest(got.Wire) {
 		t.Fatalf("content-hash mode over a handler with no etag: etag=%v", got.Etag)
 	}
 }

@@ -376,6 +376,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			// columns — the C++ extension reads this to register the function
 			// with real-typed args serving literal / column / LATERAL shapes.
 			fi.InputFromArgs = meta.InputFromArgs
+			fi.InputRowsPerCall = meta.InputRowsPerCall
 			place(kindTableInOut, name, i, fi)
 		}
 	}
@@ -555,6 +556,7 @@ func (w *Worker) serializedGlobalFunctions() (SerializedItems, error) {
 func readOnlyErr(op string) error {
 	return &vgirpc.RpcError{
 		Type:    "NotImplementedError",
+		Code:    string(vgirpc.CodeFailedPrecondition),
 		Message: fmt.Sprintf("catalog is read-only: %s not supported", op),
 	}
 }
@@ -658,6 +660,7 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 	if err := validateRequiredAttachOptions(req.Name, w.attachOptionsFor(req.Name), optionsIPC); err != nil {
 		return CatalogAttachResultWire{}, &vgirpc.RpcError{
 			Type:    "ValueError",
+			Code:    string(vgirpc.CodeInvalidArgument),
 			Message: err.Error(),
 		}
 	}
@@ -667,6 +670,7 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 		if _, ok := w.catalogAliases[req.Name]; !ok {
 			return CatalogAttachResultWire{}, &vgirpc.RpcError{
 				Type:    "ValueError",
+				Code:    string(vgirpc.CodeNotFound),
 				Message: fmt.Sprintf("No worker handles catalog '%s'", req.Name),
 			}
 		}
@@ -763,10 +767,7 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 	if w.attachValidator != nil {
 		decision, vErr := w.attachValidator(&req, callCtx)
 		if vErr != nil {
-			return CatalogAttachResultWire{}, &vgirpc.RpcError{
-				Type:    "ValueError",
-				Message: vErr.Error(),
-			}
+			return CatalogAttachResultWire{}, rewrapError("ValueError", vErr)
 		}
 		if decision != nil {
 			if decision.AttachOpaqueData != nil {
@@ -1048,10 +1049,7 @@ func (w workerService) CatalogTableGet(ctx context.Context, callCtx *vgirpc.Call
 	if w.attachTableGetHandler != nil {
 		data, handled, err := w.attachTableGetHandler(req.AttachOpaqueData, req.SchemaPath, req.Name, req.AtUnit, req.AtValue)
 		if err != nil {
-			return ItemsResponseWire{}, &vgirpc.RpcError{
-				Type:    "ValueError",
-				Message: err.Error(),
-			}
+			return ItemsResponseWire{}, rewrapError("ValueError", err)
 		}
 		if handled {
 			if data == nil {
@@ -1064,10 +1062,7 @@ func (w workerService) CatalogTableGet(ctx context.Context, callCtx *vgirpc.Call
 	if w.tableGetHandler != nil {
 		data, err := w.tableGetHandler(req.SchemaPath, req.Name, req.AtUnit, req.AtValue)
 		if err != nil {
-			return ItemsResponseWire{}, &vgirpc.RpcError{
-				Type:    "ValueError",
-				Message: err.Error(),
-			}
+			return ItemsResponseWire{}, rewrapError("ValueError", err)
 		}
 		if data != nil {
 			return ItemsResponseWire{Items: [][]byte{data}}, nil
@@ -1133,10 +1128,7 @@ func (w workerService) CatalogTableScanBranchesGet(ctx context.Context, callCtx 
 	if w.attachScanBranchesGetHandler != nil {
 		result, handled, err := w.attachScanBranchesGetHandler(req.AttachOpaqueData, req.SchemaPath, req.Name, req.AtUnit, req.AtValue)
 		if err != nil {
-			return TableScanBranchesGetResponseWire{}, &vgirpc.RpcError{
-				Type:    "ValueError",
-				Message: err.Error(),
-			}
+			return TableScanBranchesGetResponseWire{}, rewrapError("ValueError", err)
 		}
 		if handled {
 			return buildScanBranchesGetResponse(result)
@@ -1339,7 +1331,7 @@ func (w workerService) CatalogTableInsertFunctionGet(ctx context.Context, callCt
 		}
 	}
 	if w.writableByAttachOpaqueData(req.AttachOpaqueData) == nil {
-		return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_opaque_data=%x len=%d, extra_catalogs=%d)", req.SchemaPath, req.Name, req.AttachOpaqueData, len(req.AttachOpaqueData), len(w.extraCatalogs))}
+		return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Code: string(vgirpc.CodeFailedPrecondition), Message: fmt.Sprintf("table %s.%s is read-only (attach_opaque_data=%x len=%d, extra_catalogs=%d)", req.SchemaPath, req.Name, req.AttachOpaqueData, len(req.AttachOpaqueData), len(w.extraCatalogs))}
 	}
 	return buildScanFunctionGetResponse(&ScanFunctionResult{
 		FunctionName: writableInsertFunctionName,
@@ -1362,7 +1354,7 @@ func (w workerService) CatalogTableUpdateFunctionGet(ctx context.Context, callCt
 		}
 	}
 	if w.writableByAttachOpaqueData(req.AttachOpaqueData) == nil {
-		return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_opaque_data=%x len=%d, extra_catalogs=%d)", req.SchemaPath, req.Name, req.AttachOpaqueData, len(req.AttachOpaqueData), len(w.extraCatalogs))}
+		return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Code: string(vgirpc.CodeFailedPrecondition), Message: fmt.Sprintf("table %s.%s is read-only (attach_opaque_data=%x len=%d, extra_catalogs=%d)", req.SchemaPath, req.Name, req.AttachOpaqueData, len(req.AttachOpaqueData), len(w.extraCatalogs))}
 	}
 	return buildScanFunctionGetResponse(&ScanFunctionResult{
 		FunctionName: writableUpdateFunctionName,
@@ -1385,7 +1377,7 @@ func (w workerService) CatalogTableDeleteFunctionGet(ctx context.Context, callCt
 		}
 	}
 	if w.writableByAttachOpaqueData(req.AttachOpaqueData) == nil {
-		return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Message: fmt.Sprintf("table %s.%s is read-only (attach_opaque_data=%x len=%d, extra_catalogs=%d)", req.SchemaPath, req.Name, req.AttachOpaqueData, len(req.AttachOpaqueData), len(w.extraCatalogs))}
+		return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Code: string(vgirpc.CodeFailedPrecondition), Message: fmt.Sprintf("table %s.%s is read-only (attach_opaque_data=%x len=%d, extra_catalogs=%d)", req.SchemaPath, req.Name, req.AttachOpaqueData, len(req.AttachOpaqueData), len(w.extraCatalogs))}
 	}
 	return buildScanFunctionGetResponse(&ScanFunctionResult{
 		FunctionName: writableDeleteFunctionName,
@@ -1537,6 +1529,14 @@ func validateRequiredFilters(tableName string, columns *arrow.Schema, groups [][
 
 // serializeCatalogTable converts a CatalogTable into serialized TableInfo bytes.
 func (w *Worker) serializeCatalogTable(schemaPath SchemaPath, ct *CatalogTable) ([]byte, error) {
+	info, err := w.catalogTableInfo(schemaPath, ct)
+	if err != nil {
+		return nil, err
+	}
+	return SerializeTableInfo(info)
+}
+
+func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*TableInfo, error) {
 	if len(ct.NotNull)+len(ct.Unique)+len(ct.PrimaryKey)+len(ct.Check)+len(ct.ForeignKey) > 0 {
 		return nil, methodNotImplemented("legacy constraint metadata requires explicit canonical records")
 	}
@@ -1623,7 +1623,7 @@ func (w *Worker) serializeCatalogTable(schemaPath SchemaPath, ct *CatalogTable) 
 		info.BindResult = brBytes
 	}
 
-	return SerializeTableInfo(info)
+	return info, nil
 }
 
 // fkSchema is the generated wire format for a single foreign key constraint.
@@ -1772,7 +1772,7 @@ func (w *Worker) resolveScanFunction(req CatalogTableScanFunctionGetParams) (*Sc
 	if w.attachScanFunctionGetHandler != nil {
 		result, handled, err := w.attachScanFunctionGetHandler(req.AttachOpaqueData, req.SchemaPath, req.Name, req.AtUnit, req.AtValue)
 		if err != nil {
-			return nil, &vgirpc.RpcError{Type: "ValueError", Message: err.Error()}
+			return nil, rewrapError("ValueError", err)
 		}
 		if handled {
 			return result, nil
@@ -1781,13 +1781,14 @@ func (w *Worker) resolveScanFunction(req CatalogTableScanFunctionGetParams) (*Sc
 	if w.scanFunctionGetHandler != nil {
 		result, err := w.scanFunctionGetHandler(req.SchemaPath, req.Name, req.AtUnit, req.AtValue)
 		if err != nil {
-			return nil, &vgirpc.RpcError{Type: "ValueError", Message: err.Error()}
+			return nil, rewrapError("ValueError", err)
 		}
 		return result, nil
 	}
 
 	return nil, &vgirpc.RpcError{
 		Type:    "NotImplementedError",
+		Code:    string(vgirpc.CodeUnimplemented),
 		Message: fmt.Sprintf("table_scan_function_get not implemented for %s.%s", req.SchemaPath, req.Name),
 	}
 }

@@ -183,6 +183,15 @@ Pick the typed variants (`TypedScalarFunc`, `TypedTableFunc`) when you want
 the framework to derive `ArgumentSpecs` from a Go struct with `vgi:"..."`
 tags. See `examples/scalar/add_values.go` and `examples/table/sequence.go`.
 
+A table-in-out function answers each input batch with one emit. To answer one
+input with several (one upstream API page per reply), emit each but the last
+with `vgi.WithMoreOutput(true)` and implement `Resume` (`TypedTableInOutResumer[S]`):
+the framework calls it for each next reply. `Resume` gets no input, so the
+state `S` holds the resume position; over HTTP it travels in the stream's state
+token, so keep positions there, not output rows. A blended function
+(`InputFromArgs`) may also cap the input rows per call with
+`FunctionMetadata.InputRowsPerCall`. See `examples/table_in_out/paged.go`.
+
 ## Logging
 
 Workers emit structured logs through named slog loggers (`vgi`, `vgi.worker`,
@@ -245,7 +254,7 @@ change `vgi.v2`: every request routes on its protocol name. A returned protocol
 named under the reserved `vgi_rpc.` prefix, named `vgi.v2`, or named twice
 stops the worker from starting, with an error naming the hook.
 
-## Identity (`vgi_rpc.Identity.v1`)
+## Identity (`vgi_rpc.Identity.v2`)
 
 A worker can resolve opaque bearer credentials to principals for a reverse
 proxy (`introspect_token`), and mint short-lived grants for the calling user
@@ -314,6 +323,12 @@ worker at startup.
   it does not recognise, or the grant verifier is never reached.
 
 ## Attach tickets (`vgi.attach_tickets.v1`)
+
+Protocol version `2.0.0`: `seal_attach` returns `ticket` (utf8) and
+`expires_at`, a nullable `timestamp[us, tz="UTC"]` (`*time.Time` in
+`vgi.AttachTicketWire`). Version `1.0.0` carried a float64 of unix seconds
+with `+Inf` for "no expiry"; the exact major.minor check rejects a `1.0.0`
+peer.
 
 A grant says *who* attaches; an attach ticket says *what*. While a user is
 attached and logged in, a client calls `seal_attach` and the worker seals the

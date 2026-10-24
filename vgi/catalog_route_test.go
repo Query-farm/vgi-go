@@ -342,7 +342,7 @@ func TestMemoryCatalogContentHashEtag(t *testing.T) {
 		t.Fatal(err)
 	}
 	full := c.contents(a, nil)
-	if full.Etag == nil || len(*full.Etag) != 64 || *full.Etag != vgi.CatalogContentsDigest(full.Schemas) {
+	if full.Etag == nil || len(*full.Etag) != 64 || *full.Etag != vgi.CatalogStreamsDigest(full.Wire) {
 		t.Fatalf("etag %v is not the snapshot's digest", full.Etag)
 	}
 	if nm := c.contents(a, full.Etag); !nm.NotModified {

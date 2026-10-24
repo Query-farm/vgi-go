@@ -103,10 +103,7 @@ func Emit(out *vgirpc.OutputCollector, batch arrow.RecordBatch, opts ...EmitOpti
 	if err != nil {
 		return err
 	}
-	if md == nil {
-		return out.Emit(batch)
-	}
-	return out.EmitWithMetadata(batch, md)
+	return emitAnnotated(out, batch, md)
 }
 
 // EmitBatchIndex emits a batch tagged with vgi_batch_index. Use it from a
@@ -119,7 +116,7 @@ func EmitBatchIndex(out *vgirpc.OutputCollector, batch arrow.RecordBatch, batchI
 	if err != nil {
 		return err
 	}
-	return out.EmitWithMetadata(batch, md)
+	return emitAnnotated(out, batch, md)
 }
 
 // EmitParentRows emits a batch declaring, per output row, which input row
@@ -147,6 +144,17 @@ func EmitParentRows(out *vgirpc.OutputCollector, batch arrow.RecordBatch, parent
 			"EmitParentRows length %d != batch.NumRows %d; parentRows must carry exactly one input-row index per emitted output row",
 			len(parentRows), batch.NumRows())
 	}
+	// Under auto-applied filters in a table-in-out exchange, provenance is per
+	// output row, so it must lose the rows the filter drops: filter both here
+	// with one mask (the exchange's interceptor then leaves the batch alone).
+	if t := replyTrackerFor(out); t != nil && t.filters != nil && batch.NumRows() > 0 {
+		filtered, kept, err := filterParentRows(t.ctx, t.filters, batch, parentRows)
+		if err != nil {
+			return err
+		}
+		batch, parentRows = filtered, kept
+		t.prefiltered = true
+	}
 	if batch.NumRows() == 0 {
 		// Nothing to map; skip the base64+pack for an empty emit.
 		return Emit(out, batch, opts...)
@@ -161,7 +169,7 @@ func EmitParentRows(out *vgirpc.OutputCollector, batch arrow.RecordBatch, parent
 	if err != nil {
 		return err
 	}
-	return out.EmitWithMetadata(batch, md)
+	return emitAnnotated(out, batch, md)
 }
 
 // PartitionValue is the (min, max) pair for one partition column. Values are Go
@@ -253,7 +261,7 @@ func EmitPartitioned(out *vgirpc.OutputCollector, batch arrow.RecordBatch, parti
 	if err != nil {
 		return err
 	}
-	return out.EmitWithMetadata(batch, md)
+	return emitAnnotated(out, batch, md)
 }
 
 // columnMinMax returns the min and max of a non-null Arrow column, plus whether

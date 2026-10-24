@@ -102,7 +102,7 @@ func TestIdentityWithoutAnAllowlistRefusesToStart(t *testing.T) {
 }
 
 // Sealed-grant keys: a malformed VGI_RPC_GRANT_KEYS stops the worker on every
-// transport; well-formed keys alone host Identity.v1 (issue_grant) over HTTP;
+// transport; well-formed keys alone host Identity.v2 (issue_grant) over HTTP;
 // an explicit WithGrantKeys(nil) turns grants off whatever the environment says.
 func TestGrantKeysFromTheEnvironment(t *testing.T) {
 	t.Setenv(vgirpc.GrantKeysEnv, "not-a-key")

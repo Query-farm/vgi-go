@@ -110,6 +110,14 @@ func (w *Worker) rehydrateTableProducer(s *TableProducerState) error {
 }
 
 func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
+	// Output is pending: the state is Resume's position, so there must be one.
+	// A token with none (a raw TableInOutResumer whose NewState returned nil,
+	// so GobEncode wrote no state) must not fall back to a fresh NewState,
+	// which would silently restart or end the input's output.
+	if s.MorePending && len(s.UserStateBytes) == 0 {
+		return fmt.Errorf("%s: output is pending but the state token carries no state; continued output must resume from its saved state", s.Recipe.FunctionName)
+	}
+
 	fn, params, err := w.rebuildProcessParams(&s.Recipe)
 	if err != nil {
 		return err
@@ -134,6 +142,11 @@ func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
 	// Restore user state from gob bytes
 	if len(s.UserStateBytes) > 0 {
 		userState, err := gobDecode(s.UserStateBytes)
+		if err != nil && s.MorePending {
+			// Output is pending: the state is Resume's position. A fresh state
+			// would silently restart or end the input's output.
+			return fmt.Errorf("%s: restoring the state continued output resumes from: %w", s.Recipe.FunctionName, err)
+		}
 		if err != nil {
 			LogRPC.Debug("rehydrate: gob decode user state failed, calling NewState", "err", err)
 			userState, err = tioFn.NewState(params)
@@ -224,7 +237,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 	// name comes off the same UUID-stripped plaintext OnBind saw.
 	fn, err := w.resolveFunction(functionLookup{
 		Name:        recipe.FunctionName,
-		Type:        recipe.FunctionType,
+		Type:        normalizeFunctionType(recipe.FunctionType),
 		Schema:      schemaPathKey(bindParams.SchemaPath),
 		Catalog:     w.catalogOfAttach(attachScope),
 		Args:        bindParams.Args,
@@ -251,7 +264,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 
 	params := &ProcessParams{
 		FunctionName:     recipe.FunctionName,
-		FunctionType:     recipe.FunctionType,
+		FunctionType:     normalizeFunctionType(recipe.FunctionType),
 		Args:             bindParams.Args,
 		OutputSchema:     processOutputSchema,
 		BindOutputSchema: outputSchema,

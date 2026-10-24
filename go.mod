@@ -10,11 +10,12 @@ go 1.26.0
 replace github.com/apache/arrow-go/v18 => github.com/Query-farm/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4
 
 require (
-	github.com/Query-farm/vgi-rpc-go v0.32.0
+	github.com/Query-farm/vgi-rpc-go v0.35.0
 	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.0
 	github.com/apache/arrow-go/v18 v18.7.0
 	github.com/duckdb/duckdb-go/v2 v2.10505.0
 	github.com/google/uuid v1.6.0
+	github.com/klauspost/compress v1.19.2
 	golang.org/x/crypto v0.55.0
 	modernc.org/sqlite v1.56.0
 )
@@ -37,7 +38,6 @@ require (
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/klauspost/asmfmt v1.3.2 // indirect
-	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/minio/asm2plan9s v0.0.0-20200509001527-cdd76441f9d8 // indirect

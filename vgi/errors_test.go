@@ -4,9 +4,11 @@ package vgi
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
@@ -104,5 +106,43 @@ func TestAsRpcError_TypeMapping(t *testing.T) {
 		if got.Type != c.want {
 			t.Errorf("err=%T: got Type=%q, want %q", c.err, got.Type, c.want)
 		}
+	}
+}
+
+func TestErrorCodes(t *testing.T) {
+	cases := []struct {
+		err  error
+		want vgirpc.Code
+	}{
+		{&ArgumentError{Detail: "x"}, vgirpc.CodeInvalidArgument},
+		{&TypeBoundError{}, vgirpc.CodeInvalidArgument},
+		{&FunctionShapeMismatchError{}, vgirpc.CodeInvalidArgument},
+		{&UnknownFunctionError{}, vgirpc.CodeNotFound},
+		{&CatalogReadOnlyError{}, vgirpc.CodeFailedPrecondition},
+		// Worker bugs stay unclassified.
+		{&SchemaValidationError{}, vgirpc.CodeUnknown},
+		{&WorkerPanicError{}, vgirpc.CodeUnknown},
+		{errors.New("misc"), vgirpc.CodeUnknown},
+	}
+	for _, c := range cases {
+		if got := vgirpc.ErrorCodeOf(c.err); got != c.want {
+			t.Errorf("%T: code %q, want %q", c.err, got, c.want)
+		}
+		// Wrapping with %w keeps the code (vgirpc looks it up with errors.As).
+		if got := vgirpc.ErrorCodeOf(fmt.Errorf("ctx: %w", c.err)); got != c.want {
+			t.Errorf("wrapped %T: code %q, want %q", c.err, got, c.want)
+		}
+		// AsRpcError carries it over.
+		wantName := string(c.want)
+		if c.want == vgirpc.CodeUnknown {
+			wantName = ""
+		}
+		if got := AsRpcError(c.err).Code; got != wantName {
+			t.Errorf("AsRpcError(%T).Code = %q, want %q", c.err, got, wantName)
+		}
+	}
+	// A hook's coded error keeps its code when the SDK rewraps it.
+	if got := rewrapError("ValueError", &ArgumentError{Detail: "x"}); got.Code != string(vgirpc.CodeInvalidArgument) || got.Type != "ValueError" {
+		t.Errorf("rewrapError: %+v", got)
 	}
 }

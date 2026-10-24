@@ -447,10 +447,14 @@ type TableInOutExchangeState struct {
 	// replayed after HTTP rehydration (see filter_delta_history.go).
 	FilterDeltaIPC       [][]byte
 	FilterPredicateOrder []string
-	fn                   TableInOutFunction // transient
-	params               *ProcessParams     // transient
-	state                interface{}        // transient
-	autoApply            *PushdownFilters   // transient
+	// MorePending is whether the last reply said HAVE_MORE_OUTPUT, so the next
+	// input must be a continuation tick (see continuation.go). Serialized: over
+	// HTTP the next turn learns it from the state token.
+	MorePending bool
+	fn          TableInOutFunction // transient
+	params      *ProcessParams     // transient
+	state       interface{}        // transient
+	autoApply   *PushdownFilters   // transient
 }
 
 // filterHistory is the stream's dynamic-filter bookkeeping.
@@ -480,10 +484,52 @@ func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.Reco
 	// transports surface that metadata on callCtx.InputMetadata; the HTTP
 	// exchange path does not, so also read it off the batch itself (the IPC
 	// reader preserves it as a RecordBatchWithMetadata).
-	applyTickValidators(s.params, callCtx.InputMetadata)
+	//
+	// A continuation tick asks for the next reply of the last input's output
+	// and is the only valid input while that output is pending. The status
+	// rides the input's metadata, found where the validators are.
+	var inputMeta arrow.Metadata
 	if bwm, ok := input.(arrow.RecordBatchWithMetadata); ok {
-		applyTickValidators(s.params, bwm.Metadata())
+		inputMeta = bwm.Metadata()
 	}
+	tick := isContinuationTick(callCtx.InputMetadata) || isContinuationTick(inputMeta)
+	name := s.Recipe.FunctionName
+	switch {
+	case tick && !s.MorePending:
+		return fmt.Errorf("%s: continuation tick received, but no output is pending", name)
+	case tick && input.NumRows() != 0:
+		return fmt.Errorf("%s: a continuation tick must have no rows, got %d", name, input.NumRows())
+	case !tick && s.MorePending:
+		return fmt.Errorf("%s: input received while output is pending; expected a continuation tick", name)
+	}
+	// The validators belong to one input and apply to its first reply only: a
+	// later input the client holds no entry for must not see the previous
+	// one's, and a tick (which never carries them) must not offer them to
+	// Resume.
+	s.params.IfNoneMatch, s.params.IfModifiedSince = nil, nil
+	applyTickValidators(s.params, callCtx.InputMetadata)
+	applyTickValidators(s.params, inputMeta)
+	activeFilters := func() *PushdownFilters {
+		applied := s.autoApply
+		if applied != nil && s.params.CurrentPushdownFilters != nil {
+			applied = s.params.CurrentPushdownFilters
+		}
+		return applied
+	}
+	resumeFn, resumer := s.fn.(TableInOutResumer)
+	if tick && !resumer {
+		// Only an HTTP state token can get here: a reply said more (MorePending),
+		// but the function resolved for this turn has no Resume to answer it.
+		return fmt.Errorf("%s: continuation tick received, but the function does not implement Resume", name)
+	}
+	tracker := &replyTracker{
+		name:         name,
+		resumable:    resumer,
+		continuation: tick,
+		ctx:          ctx,
+		filters:      activeFilters(),
+	}
+	defer trackReplies(out, tracker)()
 	// Apply filters to the function's full unprojected batch, then narrow the
 	// surviving rows to the requested wire schema. This preserves filter-only
 	// columns that are absent from the projection.
@@ -491,11 +537,8 @@ func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.Reco
 	if needsProject || s.autoApply != nil {
 		out.EmitInterceptor = func(batch arrow.RecordBatch) (arrow.RecordBatch, error) {
 			b := batch
-			applied := s.autoApply
-			if applied != nil && s.params.CurrentPushdownFilters != nil {
-				applied = s.params.CurrentPushdownFilters
-			}
-			if applied != nil {
+			// EmitParentRows already filtered the batch with its provenance.
+			if applied := activeFilters(); applied != nil && !tracker.prefiltered {
 				filtered, err := applied.Apply(ctx, b)
 				if err != nil {
 					return nil, err
@@ -518,7 +561,25 @@ func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.Reco
 			return b, nil
 		}
 	}
-	return s.fn.Process(ctx, s.params, s.state, input, out)
+	if tick {
+		err = resumeFn.Resume(ctx, s.params, s.state, out)
+	} else {
+		err = s.fn.Process(ctx, s.params, s.state, input, out)
+	}
+	if err != nil {
+		return err
+	}
+	if err := checkReplyStatus(out, tracker); err != nil {
+		return err
+	}
+	if tracker.more && s.state == nil {
+		// Resume gets nothing but the state, and over HTTP only the serialized
+		// state reaches the next turn: a nil state has nowhere to keep the
+		// position, so the tick could only restart or end the output.
+		return fmt.Errorf("%s: emitted WithMoreOutput(true) with a nil state; continued output must resume from its saved state (NewState must return one)", name)
+	}
+	s.MorePending = tracker.more
+	return nil
 }
 
 // selectColumnsByName builds a batch containing only the columns named in
@@ -834,7 +895,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	// Build init params
 	initParams := &InitParams{
 		FunctionName: bindReq.FunctionName,
-		FunctionType: FunctionType(bindReq.FunctionType),
+		FunctionType: normalizeFunctionType(FunctionType(bindReq.FunctionType)),
 		Args:         bindParams.Args,
 		OutputSchema: outputSchema,
 		InputSchema:  bindParams.InputSchema,
@@ -945,7 +1006,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 	// Build process params
 	processParams := &ProcessParams{
 		FunctionName:     bindReq.FunctionName,
-		FunctionType:     FunctionType(bindReq.FunctionType),
+		FunctionType:     normalizeFunctionType(FunctionType(bindReq.FunctionType)),
 		Args:             bindParams.Args,
 		OutputSchema:     processOutputSchema,
 		BindOutputSchema: outputSchema,
@@ -974,7 +1035,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		BindCall:        req.BindCall,
 		OutputSchemaIPC: req.OutputSchema,
 		FunctionName:    bindReq.FunctionName,
-		FunctionType:    FunctionType(bindReq.FunctionType),
+		FunctionType:    normalizeFunctionType(FunctionType(bindReq.FunctionType)),
 		ProjectionIDs:   initParams.ProjectionIDs,
 		ExecutionID:     initParams.ExecutionID,
 		BindOpaqueData:  initParams.BindOpaqueData,
@@ -1545,7 +1606,7 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 
 	params := &BindParams{
 		FunctionName: req.FunctionName,
-		FunctionType: FunctionType(req.FunctionType),
+		FunctionType: normalizeFunctionType(FunctionType(req.FunctionType)),
 		Args:         args,
 	}
 	if req.SchemaPath != nil {
@@ -1646,7 +1707,7 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 func (w *Worker) lookupFor(req *BindRequestWire, params *BindParams) functionLookup {
 	return functionLookup{
 		Name:        req.FunctionName,
-		Type:        FunctionType(req.FunctionType),
+		Type:        normalizeFunctionType(FunctionType(req.FunctionType)),
 		Schema:      schemaPathKey(params.SchemaPath),
 		Catalog:     w.catalogOfAttach(params.AttachOpaqueData),
 		Args:        params.Args,
@@ -1654,7 +1715,10 @@ func (w *Worker) lookupFor(req *BindRequestWire, params *BindParams) functionLoo
 	}
 }
 
-// normalizeFunctionType converts DuckDB function type strings to our canonical values.
+// normalizeFunctionType converts a function type string — the protocol member
+// name, DuckDB's *_FUNCTION catalog type, or a legacy lower-case spelling — to
+// the canonical FunctionType constant (the protocol member name). Unknown
+// values are returned unchanged.
 func normalizeFunctionType(ft FunctionType) FunctionType {
 	switch ft {
 	case "SCALAR", "SCALAR_FUNCTION", "scalar":

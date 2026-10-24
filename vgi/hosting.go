@@ -16,7 +16,7 @@ import (
 //  2. The worker's hosted protocols (WithHostedProtocols), in the order the
 //     hook returns them -- on EVERY transport.
 //  3. vgi_rpc.Reflection.v1 -- on every transport.
-//  4. vgi_rpc.Identity.v1 -- HTTP only, and only when WithIdentity supplies a
+//  4. vgi_rpc.Identity.v2 -- HTTP only, and only when WithIdentity supplies a
 //     resolve and/or mint hook, or grant keys are configured.
 //  5. vgi.attach_tickets.v1 -- HTTP only, and only when the signing key is
 //     configured explicitly and the worker can issue grants (attach_ticket.go).
@@ -51,7 +51,7 @@ func WithHostedProtocols(fn HostedProtocolsFunc) WorkerOption {
 	}
 }
 
-// WithIdentity opts the worker into hosting vgi_rpc.Identity.v1 over HTTP.
+// WithIdentity opts the worker into hosting vgi_rpc.Identity.v2 over HTTP.
 //
 // cfg.ResolveToken backs introspect_token and cfg.MintGrant backs issue_grant;
 // a hook left nil leaves its method absent rather than hosted-and-refusing,
@@ -88,7 +88,7 @@ func WithIdentity(cfg vgirpc.IdentityConfig) WorkerOption {
 // VGI_RPC_GRANT_MAX_TTL_SECONDS; the example workers also accept repeated
 // --grant-key flags. Nil turns grants off regardless of the environment.
 //
-// With keys configured, over HTTP the worker hosts vgi_rpc.Identity.v1's
+// With keys configured, over HTTP the worker hosts vgi_rpc.Identity.v2's
 // issue_grant -- minting sealed grants unless WithIdentity supplies MintGrant
 // -- and accepts its own grants back as bearer credentials, after the
 // authenticator set with SetAuthenticate. A grant authenticates as domain
@@ -148,7 +148,7 @@ func (w *Worker) hostProtocols(s *vgirpc.Server) error {
 			return fmt.Errorf(
 				"%s: entry %d is named %q, which claims the reserved \"vgi_rpc.\" prefix. Framework protocols "+
 					"are not supplied through this hook: reflection is hosted automatically, and "+
-					"vgi_rpc.Identity.v1 is enabled with vgi.WithIdentity", owner, i, name)
+					"vgi_rpc.Identity.v2 is enabled with vgi.WithIdentity", owner, i, name)
 		}
 		if name == ProtocolName {
 			return fmt.Errorf("%s: entry %d is named %q, the worker's own protocol; give it a distinct name",
@@ -166,7 +166,7 @@ func (w *Worker) hostProtocols(s *vgirpc.Server) error {
 	return nil
 }
 
-// hostIdentity hosts vgi_rpc.Identity.v1 on s when the worker opted in --
+// hostIdentity hosts vgi_rpc.Identity.v2 on s when the worker opted in --
 // with WithIdentity hooks, or with sealed-grant keys alone, which host
 // issue_grant minting sealed grants.
 func (w *Worker) hostIdentity(s *vgirpc.Server, grantKeys *vgirpc.GrantKeys) error {

@@ -392,6 +392,7 @@ func (w *Worker) scopeToHome(cands []candidate, name, schema, catalog string) ([
 		if len(inCatalog) == 0 {
 			return nil, &vgirpc.RpcError{
 				Type:    "ValueError",
+				Code:    string(vgirpc.CodeNotFound),
 				Message: fmt.Sprintf("Function '%s' is not available in catalog '%s'", name, catalog),
 			}
 		}
@@ -408,6 +409,7 @@ func (w *Worker) scopeToHome(cands []candidate, name, schema, catalog string) ([
 		if len(inSchema) == 0 {
 			return nil, &vgirpc.RpcError{
 				Type: "ValueError",
+				Code: string(vgirpc.CodeNotFound),
 				Message: fmt.Sprintf("Function '%s' is not registered in schema '%s'. It is available in: %v",
 					name, schema, schemasOf(cands)),
 			}
@@ -456,6 +458,7 @@ func (w *Worker) resolveAggregate(name, schema, catalog string) (AggregateFuncti
 	if len(cands) == 0 {
 		return nil, &vgirpc.RpcError{
 			Type:    "ValueError",
+			Code:    string(vgirpc.CodeNotFound),
 			Message: fmt.Sprintf("aggregate function %q is not registered", name),
 		}
 	}
@@ -486,6 +489,7 @@ func (w *Worker) resolveFunction(lk functionLookup) (interface{}, error) {
 	if len(cands) == 0 {
 		return nil, &vgirpc.RpcError{
 			Type:    "ValueError",
+			Code:    string(vgirpc.CodeNotFound),
 			Message: fmt.Sprintf("Unknown function: '%s'", lk.Name),
 		}
 	}
@@ -514,6 +518,7 @@ func (w *Worker) resolveFunction(lk functionLookup) (interface{}, error) {
 	if fn == nil {
 		return nil, &vgirpc.RpcError{
 			Type:    "ValueError",
+			Code:    string(vgirpc.CodeInvalidArgument),
 			Message: fmt.Sprintf("No matching overload for function '%s'", lk.Name),
 		}
 	}
