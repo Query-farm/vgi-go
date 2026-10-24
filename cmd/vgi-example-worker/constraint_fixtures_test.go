@@ -11,6 +11,7 @@ import (
 	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
 func fixtureBatch(t *testing.T, encoded []byte) arrow.RecordBatch {
@@ -21,6 +22,102 @@ func fixtureBatch(t *testing.T, encoded []byte) arrow.RecordBatch {
 	}
 	t.Cleanup(batch.Release)
 	return batch
+}
+
+func TestConstraintFixtureInvalidRowsCannotEstablishFacts(t *testing.T) {
+	cases := []struct {
+		name, table, field, want string
+		version                  int64
+		values                   []any
+	}{
+		{"not_null", "departments", "name", "fixture NOT NULL violated: name", 0, []any{"a", nil, "c"}},
+		{"primary", "products", "id", "fixture PRIMARY_KEY contains duplicate key", 0, []any{int64(1), int64(1), int64(3)}},
+		{"unique", "departments", "name", "fixture UNIQUE contains duplicate key", 0, []any{"a", "a", "c"}},
+		{"composite", "projects", "project_code", "fixture PRIMARY_KEY contains duplicate key", 0, []any{"P001", "P001", "P003"}},
+		{"foreign", "employees", "department_id", "fixture FOREIGN KEY missing referenced row", 0, []any{int64(1), int64(1), int64(2), int64(2), int64(99)}},
+		{"check", "departments", "budget", "fixture CHECK budget >= 0 violated", 0, []any{float64(0), float64(-1), float64(100)}},
+		{"historical_unique", "versioned_constraints", "email", "fixture UNIQUE contains duplicate key", 2, []any{"a", "a", "c"}},
+		{"historical_foreign", "versioned_constraints", "department_id", "fixture FOREIGN KEY missing referenced row", 3, []any{int64(1), int64(99), int64(1)}},
+		{"nullable_foreign", "employees", "department_id", "", 0, []any{int64(1), int64(1), int64(2), int64(2), nil}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := table.ConstraintFixtureRows(tc.table, tc.version)
+			defer source.Release()
+			index := source.Schema().FieldIndices(tc.field)[0]
+			builder := array.NewBuilder(memory.DefaultAllocator, source.Schema().Field(index).Type)
+			defer builder.Release()
+			for _, value := range tc.values {
+				if value == nil {
+					builder.AppendNull()
+					continue
+				}
+				switch b := builder.(type) {
+				case *array.Int64Builder:
+					b.Append(value.(int64))
+				case *array.StringBuilder:
+					b.Append(value.(string))
+				case *array.Float64Builder:
+					b.Append(value.(float64))
+				default:
+					t.Fatal("unexpected test builder")
+				}
+			}
+			replacement := builder.NewArray()
+			defer replacement.Release()
+			columns := append([]arrow.Array(nil), source.Columns()...)
+			columns[index] = replacement
+			mutated := array.NewRecordBatch(source.Schema(), columns, source.NumRows())
+			defer mutated.Release()
+			err := validateFixtureRows(mutated, fixtureDefinitions(tc.table, tc.version))
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || err.Error() != tc.want {
+				t.Fatalf("got %v, want %s", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestConstraintFixtureAttachSelectsOnlyOfferedReadProfiles(t *testing.T) {
+	profiles := []string{"vgi.constraint.records.read.v1", "vgi.expression.duckdb.scalar.v1"}
+	for count := -1; count <= 3; count++ {
+		req := &vgi.CatalogAttachRequestWire{Name: "example"}
+		if count >= 0 {
+			offered := profiles[:min(count, 2)]
+			if count == 3 {
+				offered = profiles[1:]
+			}
+			offer := fixtureRecord(generated.CatalogCapabilitiesSchema, map[string]any{"read": offered, "ddl": []string{}, "write": []string{}, "transaction": []string{}})
+			client := fixtureRecord(generated.ClientCapabilitiesSchema, map[string]any{"engine": "duckdb", "native_formats": []string{}, "catalogs": []string{}, "can_stream": true, "filter_encodings": []string{}, "catalog": offer, "query_pushdown": nil})
+			req.ClientCapabilities = &client
+		}
+		decision, err := fixtureAttachValidator(req, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		selected := fixtureBatch(t, decision.SelectedCapabilities)
+		read := fixtureColumn(t, selected, "read").(*array.List)
+		a, b := read.ValueOffsets(0)
+		expected := max(count, 0)
+		if count == 3 {
+			expected = 0
+		}
+		if int(b-a) != expected {
+			t.Fatal("selection ignored client offer")
+		}
+		write := fixtureColumn(t, selected, "write").(*array.List)
+		a, b = write.ValueOffsets(0)
+		if b != a {
+			t.Fatal("read-only fixture advertised mutation enforcement")
+		}
+	}
+	decision, err := fixtureAttachValidator(&vgi.CatalogAttachRequestWire{Name: "unrelated"}, nil)
+	if err != nil || decision != nil {
+		t.Fatal("unrelated catalog was changed")
+	}
 }
 
 func fixtureColumn(t *testing.T, batch arrow.RecordBatch, name string) arrow.Array {
@@ -38,7 +135,7 @@ func fixtureEnum(t *testing.T, batch arrow.RecordBatch, name string) string {
 	return values.Dictionary().(*array.String).Value(values.GetValueIndex(0))
 }
 
-func TestConstraintFixtureDiscoveryIsMetadataOnly(t *testing.T) {
+func TestConstraintFixtureDiscoveryIsValidatedReadOnly(t *testing.T) {
 	cases := []struct {
 		name   string
 		schema *arrow.Schema
@@ -54,7 +151,7 @@ func TestConstraintFixtureDiscoveryIsMetadataOnly(t *testing.T) {
 			records := fixtureConstraints(entry.name, 0)
 			encoded, err := vgi.SerializeTableInfo(&vgi.TableInfo{
 				Name: entry.name, SchemaPath: []string{"data"},
-				Columns: fixtureNullableSchema(entry.schema), Constraints: records,
+				Columns: fixtureSchema(entry.schema, entry.name, 0), Constraints: records,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -64,11 +161,10 @@ func TestConstraintFixtureDiscoveryIsMetadataOnly(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, field := range columns.Fields() {
-				if !field.Nullable {
-					t.Fatalf("metadata-only field %s claims nonnull", field.Name)
-				}
+			if !columns.Equal(entry.schema) {
+				t.Fatal("catalog and actual scan nullability differ")
 			}
+
 			constraints := fixtureColumn(t, info, "constraints").(*array.List)
 			items := constraints.ListValues().(*array.Binary)
 			if items.Len() != entry.count {
@@ -80,8 +176,8 @@ func TestConstraintFixtureDiscoveryIsMetadataOnly(t *testing.T) {
 				if !constraint.Schema().Equal(generated.ConstraintInfoSchema) {
 					t.Fatal("wrong canonical record schema")
 				}
-				if fixtureEnum(t, constraint, "enforcement") != "METADATA_ONLY" || fixtureEnum(t, constraint, "validation") != "UNVALIDATED" {
-					t.Fatal("fixture claims enforcement or validation")
+				if fixtureEnum(t, constraint, "enforcement") != "ENFORCED" || fixtureEnum(t, constraint, "validation") != "ALL_ROWS" {
+					t.Fatal("fixture lost validated read-only guarantees")
 				}
 				ref := fixtureBatch(t, fixtureColumn(t, constraint, "ref").(*array.Binary).Value(0))
 				key := fixtureColumn(t, ref, "name").(*array.String).Value(0)
@@ -114,13 +210,20 @@ func TestConstraintFixtureHistoricalSnapshotsRetainStableKeys(t *testing.T) {
 	previous := [][]byte{}
 	for version := int64(1); version <= 3; version++ {
 		records := fixtureConstraints("versioned_constraints", version)
-		if len(records) != int(version)+2 {
+		expected := int(version) + 2
+		if version == 1 {
+			expected = 1
+		}
+		if len(records) != expected {
 			t.Fatalf("version %d has wrong definition set", version)
 		}
 		for i := range previous {
 			if !bytes.Equal(previous[i], records[i]) {
 				t.Fatal("surviving constraint identity or definition changed")
 			}
+		}
+		if !fixtureSchema(table.VersionedConstraintsSchema(version), "versioned_constraints", version).Equal(table.VersionedConstraintsSchema(version)) {
+			t.Fatal("historical schema flags differ")
 		}
 		previous = records
 	}

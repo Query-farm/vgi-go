@@ -55,22 +55,22 @@ var countSchema = arrow.NewSchema([]arrow.Field{
 // userSchemas holds the user-visible columns (no rowid) of each table.
 var userSchemas = map[string]*arrow.Schema{
 	"items": arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimitiveTypes.Int64},
-		{Name: "name", Type: arrow.BinaryTypes.String},
-		{Name: "qty", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: "qty", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 	}, nil),
 	"items_no_returning": arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimitiveTypes.Int64},
-		{Name: "name", Type: arrow.BinaryTypes.String},
-		{Name: "qty", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: "qty", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 	}, nil),
 	"items_insert_only": arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimitiveTypes.Int64},
-		{Name: "name", Type: arrow.BinaryTypes.String},
+		{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
 	}, nil),
 	"items_broken_returning": arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimitiveTypes.Int64},
-		{Name: "name", Type: arrow.BinaryTypes.String},
+		{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
 	}, nil),
 }
 

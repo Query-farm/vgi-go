@@ -5,6 +5,8 @@ package main
 import (
 	"fmt"
 
+	"github.com/Query-farm/vgi-go/examples/table"
+
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -12,8 +14,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
-// These fixed fixture identities describe metadata, not storage guarantees.
-// This worker does not implement constraint enforcement or validation.
+// Fixed provider identities for immutable, validated read-only fixture rows.
 func fixtureConstraintRef(table, key string) []byte {
 	return fixtureRecord(generated.CatalogObjectRefSchema, map[string]any{
 		"kind": "constraint", "schema_path": []string{"data"}, "name": key, "owner_table": table,
@@ -35,7 +36,7 @@ func fixtureConstraint(table, key, kind string, paths [][]string, check, foreign
 	})
 	return fixtureRecord(generated.ConstraintInfoSchema, map[string]any{
 		"ref": fixtureConstraintRef(table, key), "definition": definition,
-		"enforcement": "METADATA_ONLY", "validation": "UNVALIDATED", "referenced_constraint": referenced,
+		"enforcement": "ENFORCED", "validation": "ALL_ROWS", "referenced_constraint": referenced,
 	})
 }
 
@@ -49,7 +50,7 @@ func fixtureDepartmentForeignKey() []byte {
 	})
 }
 
-func fixtureConstraints(table string, version int64) [][]byte {
+func fixtureDefinitions(table string, version int64) [][]byte {
 	switch table {
 	case "departments":
 		check := fixtureRecord(generated.SqlExpressionSchema, map[string]any{
@@ -94,11 +95,12 @@ func fixtureConstraints(table string, version int64) [][]byte {
 		}
 		result := [][]byte{
 			fixtureConstraint(table, "fixture:versioned_constraints:nn:id", "NOT_NULL", [][]string{{"id"}}, nil, nil),
-			fixtureConstraint(table, "fixture:versioned_constraints:nn:name", "NOT_NULL", [][]string{{"name"}}, nil, nil),
-			fixtureConstraint(table, "fixture:versioned_constraints:primary", "PRIMARY_KEY", [][]string{{"id"}}, nil, nil),
 		}
 		if version >= 2 {
-			result = append(result, fixtureConstraint(table, "fixture:versioned_constraints:unique:email", "UNIQUE", [][]string{{"email"}}, nil, nil))
+			result = append(result,
+				fixtureConstraint(table, "fixture:versioned_constraints:nn:name", "NOT_NULL", [][]string{{"name"}}, nil, nil),
+				fixtureConstraint(table, "fixture:versioned_constraints:primary", "PRIMARY_KEY", [][]string{{"id"}}, nil, nil),
+				fixtureConstraint(table, "fixture:versioned_constraints:unique:email", "UNIQUE", [][]string{{"email"}}, nil, nil))
 		}
 		if version >= 3 {
 			result = append(result, fixtureConstraint(table, "fixture:versioned_constraints:fk:department", "FOREIGN_KEY", [][]string{{"department_id"}}, nil, fixtureDepartmentForeignKey()))
@@ -109,12 +111,35 @@ func fixtureConstraints(table string, version int64) [][]byte {
 	}
 }
 
-// Metadata-only constraints cannot strengthen SQL field nullability. Preserve
-// types and metadata while making this fixture's user columns nullable.
-func fixtureNullableSchema(schema *arrow.Schema) *arrow.Schema {
+// Validation uses the arrays the scan actually emits, before trusted metadata
+// is registered. These tables have no write endpoints.
+func fixtureConstraints(name string, version int64) [][]byte {
+	batch := table.ConstraintFixtureRows(name, version)
+	defer batch.Release()
+	definitions := fixtureDefinitions(name, version)
+	if err := validateFixtureRows(batch, definitions); err != nil {
+		panic(err)
+	}
+	return definitions
+}
+
+func fixtureSchema(schema *arrow.Schema, name string, version int64) *arrow.Schema {
+	required := map[string]bool{}
+	for _, encoded := range fixtureDefinitions(name, version) {
+		info := fixtureDecode(encoded)
+		definition := fixtureDecode(fixtureValue(info, "definition").(*array.Binary).Value(0))
+		kind := fixtureEnumValue(definition, "kind")
+		if kind == "NOT_NULL" || kind == "PRIMARY_KEY" {
+			for _, field := range fixturePathNames(definition, "column_paths") {
+				required[field] = true
+			}
+		}
+		definition.Release()
+		info.Release()
+	}
 	fields := schema.Fields()
 	for i := range fields {
-		fields[i].Nullable = true
+		fields[i].Nullable = !required[fields[i].Name]
 	}
 	metadata := schema.Metadata()
 	return arrow.NewSchema(fields, &metadata)

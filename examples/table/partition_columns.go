@@ -120,7 +120,7 @@ var trailingPartitionSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "seq", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 	{Name: "label", Type: arrow.BinaryTypes.String, Nullable: true},
 	{Name: "sales", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-	pcCountryField,
+	vgi.PartitionField("country", arrow.BinaryTypes.String, true),
 }, nil)
 
 type trailingPartitionArgs struct {
