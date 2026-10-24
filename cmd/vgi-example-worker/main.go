@@ -193,6 +193,7 @@ func main() {
 	// table-bufferings, aggregates, schema_reconcile). Catalog tables, secret
 	// types, and settings remain wired below — they're fixture-specific.
 	all.RegisterAll(w)
+	w.RegisterCatalogTable("main", vgi.CatalogTable{Name: "projection_rows", Function: &table.ProjectionSequence{}})
 
 	// Register the accumulate fixture (catalog-scoped, so it is invisible under
 	// the example catalog and preserves its function inventory).

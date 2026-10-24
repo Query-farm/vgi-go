@@ -9,6 +9,8 @@ import (
 
 // ProcessParams holds the parameters available during the process phase.
 type ProcessParams struct {
+	// BindOpaqueData is the complete provider state returned by bind or projection acceptance.
+	BindOpaqueData []byte
 	// FunctionName is the name of the function.
 	FunctionName string
 

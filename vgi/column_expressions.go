@@ -124,7 +124,7 @@ func validateGeneratedExpression(encoded string, owner []string) error {
 	path := row.Column(2).(*array.List)
 	start, end := path.ValueOffsets(0)
 	parts := path.ListValues().(*array.String)
-	if end-start == 0 || end-start > 32 {
+	if end-start > 32 {
 		return fmt.Errorf("invalid expression owner")
 	}
 	names := make([]string, 0, end-start)

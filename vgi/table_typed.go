@@ -256,3 +256,11 @@ type typedTableAdapterWithCard[S any] struct {
 func (a *typedTableAdapterWithCard[S]) Cardinality(params *BindParams) (*TableCardinality, error) {
 	return a.card.Cardinality(params)
 }
+
+// Projection forwards an optional typed provider hook; ordinary functions decline.
+func (a *typedTableAdapter[S]) Projection(params *BindParams, proposal *ProjectionProposal) (*ProjectionAcceptance, error) {
+	if provider, ok := any(a.inner).(TableFunctionWithProjection); ok {
+		return provider.Projection(params, proposal)
+	}
+	return nil, nil
+}

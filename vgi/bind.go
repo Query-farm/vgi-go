@@ -102,6 +102,8 @@ func (t *TransactionStorage) PutOne(key, value []byte) error {
 
 // BindResponse is returned by a function's OnBind method.
 type BindResponse struct {
+	// ProjectionExpressionProfiles is an explicit per-bind offer; empty disables expression proposals.
+	ProjectionExpressionProfiles []string
 	// OutputSchema is the Arrow schema for the function's output.
 	OutputSchema *arrow.Schema
 	// OpaqueData is optional opaque data passed to the init phase.

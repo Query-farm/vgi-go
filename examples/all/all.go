@@ -118,6 +118,7 @@ func registerScalars(w *vgi.Worker) {
 }
 
 func registerTables(w *vgi.Worker) {
+	w.RegisterTable(&table.ProjectionSequence{})
 	w.RegisterTable(table.NewConstantColumnsFunction())
 	w.RegisterTable(table.NewFilterEchoFunction())
 	w.RegisterTable(table.NewBoolFilterEchoFunction())

@@ -166,11 +166,12 @@ func (BindRequestWire) ArrowSchema() *arrow.Schema {
 
 // BindResponseWire is the wire format for bind responses.
 type BindResponseWire struct {
-	OutputSchema      []byte   `vgirpc:"output_schema"`
-	OpaqueData        []byte   `vgirpc:"opaque_data,nullable"`
-	LookupSecretTypes []string `vgirpc:"lookup_secret_types"`
-	LookupScopes      []string `vgirpc:"lookup_scopes"`
-	LookupNames       []string `vgirpc:"lookup_names"`
+	OutputSchema                 []byte   `vgirpc:"output_schema"`
+	OpaqueData                   []byte   `vgirpc:"opaque_data,nullable"`
+	LookupSecretTypes            []string `vgirpc:"lookup_secret_types"`
+	LookupScopes                 []string `vgirpc:"lookup_scopes"`
+	LookupNames                  []string `vgirpc:"lookup_names"`
+	ProjectionExpressionProfiles []string `vgirpc:"projection_expression_profiles"`
 }
 
 // InitRequestWire is the wire format for init requests.
@@ -762,14 +763,18 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		}, nil
 	}
 
+	if err := validateProjectionProfiles(bindResp.ProjectionExpressionProfiles); err != nil {
+		return BindResponseWire{}, err
+	}
 	outputSchemaBytes, err := SerializeSchema(bindResp.OutputSchema)
 	if err != nil {
 		return BindResponseWire{}, fmt.Errorf("serializing output schema: %w", err)
 	}
 
 	resp = BindResponseWire{
-		OutputSchema: outputSchemaBytes,
-		OpaqueData:   bindResp.OpaqueData,
+		OutputSchema:                 outputSchemaBytes,
+		OpaqueData:                   bindResp.OpaqueData,
+		ProjectionExpressionProfiles: bindResp.ProjectionExpressionProfiles,
 	}
 	return resp, nil
 }
@@ -936,6 +941,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		Args:             bindParams.Args,
 		OutputSchema:     processOutputSchema,
 		BindOutputSchema: outputSchema,
+		BindOpaqueData:   initParams.BindOpaqueData,
 		InputSchema:      bindParams.InputSchema,
 		ProjectionIDs:    initParams.ProjectionIDs,
 		Settings:         bindParams.Settings,

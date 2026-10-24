@@ -94,6 +94,7 @@ func derivedRecordCases() []derivedRecordCase {
 		{"GlobalInitResponse", reflect.TypeOf(GlobalInitResponseWire{}), generated.GlobalInitResponseSchema},
 		{"CatalogAttachRequest", reflect.TypeOf(CatalogAttachRequestWire{}), generated.CatalogAttachRequestSchema},
 		{"TableFunctionCardinalityRequest", reflect.TypeOf(CardinalityRequestWire{}), generated.TableFunctionCardinalityRequestSchema},
+		{"TableFunctionProjectionRequest", reflect.TypeOf(TableFunctionProjectionRequestWire{}), generated.TableFunctionProjectionRequestSchema},
 		{"TableFunctionPlanRequest", reflect.TypeOf(PlanRequestWire{}), generated.TableFunctionPlanRequestSchema},
 		{"TableFunctionStatisticsRequest", reflect.TypeOf(CardinalityRequestWire{}), generated.TableFunctionStatisticsRequestSchema},
 		{"TableFunctionDynamicToStringRequest", reflect.TypeOf(TableFunctionDynamicToStringRequestWire{}), generated.TableFunctionDynamicToStringRequestSchema},
