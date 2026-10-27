@@ -1772,7 +1772,7 @@ func (w *Worker) getArgSpecs(fn interface{}) []ArgSpec {
 // generated registry's vgiInitHeaderSchema, used both to advertise the header
 // and to serialize it, so the two cannot drift apart. It was once spelled out by hand
 // with max_workers before opaque_data, which put the advertised header out of
-// the generated order and so changed vgi.v2's protocol hash.
+// the generated order and so changed vgi.v3's protocol hash.
 var globalInitResponseWireSchema = vgiInitHeaderSchema
 
 // ArrowSchema returns the Arrow schema used to serialize a GlobalInitResponseWire.

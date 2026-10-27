@@ -13,8 +13,8 @@ import (
 	"testing"
 )
 
-// vgiV2Unimplemented is every vgi.v2 method this SDK hosts only to refuse.
-var vgiV2Unimplemented = []string{
+// vgiV3Unimplemented is every vgi.v3 method this SDK hosts only to refuse.
+var vgiV3Unimplemented = []string{
 	"CatalogDependencies",
 	"CatalogIndexCreate",
 	"CatalogIndexDrop",
@@ -36,9 +36,9 @@ var vgiV2Unimplemented = []string{
 // workerService embeds unimplementedVgiService, so a method it fails to
 // declare -- forgotten, or misspelled -- compiles fine and silently answers
 // UNIMPLEMENTED. Pin the set: every vgiService method is declared on
-// workerService except exactly vgiV2Unimplemented, and workerService declares
-// nothing that is not a vgi.v2 method.
-func TestVgiV2UnimplementedSet(t *testing.T) {
+// workerService except exactly vgiV3Unimplemented, and workerService declares
+// nothing that is not a vgi.v3 method.
+func TestVgiV3UnimplementedSet(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
@@ -74,10 +74,10 @@ func TestVgiV2UnimplementedSet(t *testing.T) {
 	}
 	for _, name := range declared {
 		if !slices.Contains(protocol, name) {
-			t.Errorf("workerService.%s is not a vgi.v2 method (misspelled? the protocol's name wins, and answers UNIMPLEMENTED)", name)
+			t.Errorf("workerService.%s is not a vgi.v3 method (misspelled? the protocol's name wins, and answers UNIMPLEMENTED)", name)
 		}
 	}
-	if !slices.Equal(missing, vgiV2Unimplemented) {
-		t.Errorf("vgi.v2 methods workerService leaves UNIMPLEMENTED = %v, want %v", missing, vgiV2Unimplemented)
+	if !slices.Equal(missing, vgiV3Unimplemented) {
+		t.Errorf("vgi.v3 methods workerService leaves UNIMPLEMENTED = %v, want %v", missing, vgiV3Unimplemented)
 	}
 }

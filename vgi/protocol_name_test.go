@@ -8,9 +8,12 @@ import "testing"
 // vgi-java, vgi-csharp, vgi-typescript, vgi-rust and the DuckDB C++ extension
 // all route on the same string. Changing it here silently would make this port
 // unreachable to every client, so pin the literal rather than the symbol.
-func TestProtocolNameIsVgiV2(t *testing.T) {
-	if ProtocolName != "vgi.v2" {
-		t.Fatalf("ProtocolName = %q, want %q", ProtocolName, "vgi.v2")
+func TestProtocolIdentityIsVgiV3(t *testing.T) {
+	if ProtocolVersion != "3.0.0" {
+		t.Fatalf("ProtocolVersion = %q, want %q", ProtocolVersion, "3.0.0")
+	}
+	if ProtocolName != "vgi.v3" {
+		t.Fatalf("ProtocolName = %q, want %q", ProtocolName, "vgi.v3")
 	}
 }
 

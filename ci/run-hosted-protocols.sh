@@ -4,9 +4,9 @@
 # Run vgi-rpc's hosted-protocols conformance group against the example worker
 # on stdio, a unix socket and HTTP (with vgi_rpc.Identity.v2 opted in).
 #
-# The worker hosts conformance.Secondary.v1 beside vgi.v2 through
+# The worker hosts conformance.Secondary.v1 beside vgi.v3 through
 # vgi.WithHostedProtocols, so this is the acceptance test for that hook and for
-# vgi.WithIdentity. The expected list, vgi.v2,conformance.Secondary.v1, is not
+# vgi.WithIdentity. The expected list, vgi.v3,conformance.Secondary.v1, is not
 # alphabetical, which is what lets it catch a server that sorts its listing.
 #
 # Environment: PYTHON (interpreter with vgi-rpc[http,conformance], pytest,
@@ -15,7 +15,7 @@ set -euo pipefail
 
 PYTHON="${PYTHON:-python3}"
 WORKER="${WORKER:-$(pwd)/vgi-example-worker-go}"
-EXPECT="vgi.v2,conformance.Secondary.v1"
+EXPECT="vgi.v3,conformance.Secondary.v1"
 hosted() { "$PYTHON" -m vgi_rpc.conformance.hosted_protocols "$@" -- -q; }
 
 pids=()

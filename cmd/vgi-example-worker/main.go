@@ -1095,10 +1095,10 @@ func main() {
 		return nil, fmt.Errorf("no scan function for %s.%s", schemaPath, tableName)
 	})
 
-	// conformance.Secondary.v1 beside vgi.v2, on every transport, through the
+	// conformance.Secondary.v1 beside vgi.v3, on every transport, through the
 	// SDK's hosted-protocols hook -- what vgi-rpc's hosted-protocols
 	// conformance group (vgi-rpc-test-hosted) asserts against this worker.
-	// Additive: it cannot change vgi.v2 dispatch, because every request routes
+	// Additive: it cannot change vgi.v3 dispatch, because every request routes
 	// on its protocol name.
 	vgi.WithHostedProtocols(func() ([]*vgirpc.Server, error) {
 		return []*vgirpc.Server{conformance.NewSecondary()}, nil

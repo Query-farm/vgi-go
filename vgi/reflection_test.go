@@ -20,7 +20,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/array"
 )
 
-// Browser clients first list protocols and describe vgi.v2; serving a current
+// Browser clients first list protocols and describe vgi.v3; serving a current
 // bundle is insufficient when the worker never registered Reflection.v1.
 func TestWorkerReflectionDiscovery(t *testing.T) {
 	w := vgi.NewWorker(vgi.WithCatalogName("example"))
@@ -57,17 +57,17 @@ func TestWorkerReflectionDiscovery(t *testing.T) {
 	}
 }
 
-// vgiV2ReferenceProtocolHash is the vgi.v2 protocol hash vgi-python 0.43.0 (the
-// reference) reports through vgi_rpc.Reflection.v1: SHA-256 over every vgi.v2
+// vgiV3ReferenceProtocolHash is the vgi.v3 protocol hash the current vgi-python
+// reference reports through vgi_rpc.Reflection.v1: SHA-256 over every vgi.v3
 // method's name, type and params/result/header schemas (WIRE_PROTOCOL.md §14).
-// Every SDK hosts the whole of vgi.v2 with exactly the reference's schemas, so
+// Every SDK hosts the whole of vgi.v3 with exactly the reference's schemas, so
 // every SDK reports this hash. Update only after the combined protocol schema
 // change is confirmed against the reference reflection endpoint.
-const vgiV2ReferenceProtocolHash = "41f61f37c7ce42f63f3ca47f8861508f3f356d2422a5b8a0bab48ff92c0857a8"
+const vgiV3ReferenceProtocolHash = "50e9404173bee3262e96b8939eb5c425463336abca2a17916812d68b6e0f6cad"
 
-// describeVgiV2 starts an HTTP worker and returns vgi.v2's Reflection.v1
+// describeVgiV3 starts an HTTP worker and returns vgi.v3's Reflection.v1
 // description.
-func describeVgiV2(t *testing.T) arrow.RecordBatch {
+func describeVgiV3(t *testing.T) arrow.RecordBatch {
 	t.Helper()
 	w := vgi.NewWorker(vgi.WithCatalogName("example"))
 	hs, err := w.NewHttpServerForTest()
@@ -93,21 +93,21 @@ func describeVgiV2(t *testing.T) arrow.RecordBatch {
 	return result
 }
 
-// The hosted vgi.v2 surface is byte-identical to the reference's.
-func TestVgiV2ProtocolHash(t *testing.T) {
-	result := describeVgiV2(t)
+// The hosted vgi.v3 surface is byte-identical to the reference's.
+func TestVgiV3ProtocolHash(t *testing.T) {
+	result := describeVgiV3(t)
 	got := result.Column(result.Schema().FieldIndices("protocol_hash")[0]).(*array.String).Value(0)
-	if got != vgiV2ReferenceProtocolHash {
-		t.Fatalf("vgi.v2 protocol hash = %s, want the reference's %s: a method or schema drifted from vgi-python's vgi.v2", got, vgiV2ReferenceProtocolHash)
+	if got != vgiV3ReferenceProtocolHash {
+		t.Fatalf("vgi.v3 protocol hash = %s, want the reference's %s: a method or schema drifted from vgi-python's vgi.v3", got, vgiV3ReferenceProtocolHash)
 	}
 }
 
-// vgi.v2 methods this SDK hosts but does not implement refuse every call with
+// vgi.v3 methods this SDK hosts but does not implement refuse every call with
 // UNIMPLEMENTED / method_not_implemented, never a silent success -- for this
 // worker's own catalog and for a routed sub-catalog alike. The catalog_*
 // stubs are registered through the same routing as every catalog method, so
 // they are called with a real attach.
-func TestUnimplementedVgiV2MethodsRefuse(t *testing.T) {
+func TestUnimplementedVgiV3MethodsRefuse(t *testing.T) {
 	parent := vgi.NewWorker(vgi.WithCatalogName("example"))
 	parent.RegisterSubCatalog(staticChild("kid"))
 	c := newContentsClient(t, parent)

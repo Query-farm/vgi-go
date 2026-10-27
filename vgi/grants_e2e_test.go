@@ -21,7 +21,7 @@ import (
 
 // The sealed-grant loop, end to end over the worker's real HTTP handler:
 // issue_grant as a freshly authenticated caller, then present the grant as an
-// ordinary bearer on a vgi.v2 method, which runs authenticated as the grant's
+// ordinary bearer on a vgi.v3 method, which runs authenticated as the grant's
 // owner. Until vgi-rpc-go 0.32 no worker accepted its own grant.
 
 const grantE2EPrincipalHeader = "X-Test-Principal"
@@ -102,7 +102,7 @@ func TestSealedGrantAuthenticatesAVgiCall(t *testing.T) {
 		t.Fatalf("issue_grant returned %.12q..., not a sealed grant", token)
 	}
 
-	// 2. Call a vgi.v2 method -- catalog_attach -- presenting only the grant.
+	// 2. Call a vgi.v3 method -- catalog_attach -- presenting only the grant.
 	vgiClient, err := vgirpc.NewHttpClient(ts.URL,
 		vgirpc.WithClientProtocol(vgi.ProtocolName),
 		vgirpc.WithClientProtocolVersion(vgi.ProtocolVersion),
@@ -128,7 +128,7 @@ func TestSealedGrantAuthenticatesAVgiCall(t *testing.T) {
 	}
 	auth := seen[0]
 	if !auth.Authenticated || auth.Principal != "alice" || auth.Domain != vgirpc.GrantAuthDomain {
-		t.Fatalf("vgi.v2 call ran as %+v; want alice authenticated by her grant", auth)
+		t.Fatalf("vgi.v3 call ran as %+v; want alice authenticated by her grant", auth)
 	}
 	if auth.Claims["purpose"] != "nightly" {
 		t.Errorf("grant claims %v", auth.Claims)
