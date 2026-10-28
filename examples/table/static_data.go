@@ -48,14 +48,12 @@ func (f *DepartmentsScanFunction) NewState(params *vgi.ProcessParams) (*staticDo
 
 func (f *DepartmentsScanFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *staticDone, out *vgirpc.OutputCollector) error {
 	if state.Done {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	state.Done = true
 
 	batch := departmentsFixtureRows()
-	out.Emit(batch)
-	return nil
+	return out.Emit(batch)
 }
 
 func NewDepartmentsScanFunction() vgi.TableFunction {
@@ -99,14 +97,12 @@ func (f *EmployeesScanFunction) NewState(params *vgi.ProcessParams) (*staticDone
 
 func (f *EmployeesScanFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *staticDone, out *vgirpc.OutputCollector) error {
 	if state.Done {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	state.Done = true
 
 	batch := employeesFixtureRows()
-	out.Emit(batch)
-	return nil
+	return out.Emit(batch)
 }
 
 func NewEmployeesScanFunction() vgi.TableFunction {
@@ -149,14 +145,12 @@ func (f *ProjectsScanFunction) NewState(params *vgi.ProcessParams) (*staticDone,
 
 func (f *ProjectsScanFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *staticDone, out *vgirpc.OutputCollector) error {
 	if state.Done {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	state.Done = true
 
 	batch := projectsFixtureRows()
-	out.Emit(batch)
-	return nil
+	return out.Emit(batch)
 }
 
 func NewProjectsScanFunction() vgi.TableFunction {
@@ -200,14 +194,12 @@ func (f *ProductsScanFunction) NewState(params *vgi.ProcessParams) (*staticDone,
 
 func (f *ProductsScanFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *staticDone, out *vgirpc.OutputCollector) error {
 	if state.Done {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	state.Done = true
 
 	batch := productsFixtureRows()
-	out.Emit(batch)
-	return nil
+	return out.Emit(batch)
 }
 
 func NewProductsScanFunction() vgi.TableFunction {

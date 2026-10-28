@@ -107,7 +107,9 @@ func (t *TransactionStorage) PutOne(key, value []byte) error {
 type BindRepeatability string
 
 const (
-	BindRepeatabilityUnknown           BindRepeatability = "UNKNOWN"
+	// BindRepeatabilityUnknown makes no promise about repeated scans.
+	BindRepeatabilityUnknown BindRepeatability = "UNKNOWN"
+	// BindRepeatabilityStableWithinQuery promises stable results for repeated scans of this bind.
 	BindRepeatabilityStableWithinQuery BindRepeatability = "STABLE_WITHIN_QUERY"
 )
 

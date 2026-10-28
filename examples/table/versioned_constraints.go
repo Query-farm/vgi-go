@@ -122,15 +122,12 @@ func (f *VersionedConstraintsScanFunction) NewState(params *vgi.ProcessParams) (
 
 func (f *VersionedConstraintsScanFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *versionedConstraintsState, out *vgirpc.OutputCollector) error {
 	if state.Done {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	state.Done = true
 
 	batch := versionedConstraintRows(state.Version)
-	out.Emit(batch)
-
-	return nil
+	return out.Emit(batch)
 }
 
 func NewVersionedConstraintsScanFunction() vgi.TableFunction {

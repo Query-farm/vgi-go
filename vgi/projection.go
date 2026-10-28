@@ -1,4 +1,5 @@
 // Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 package vgi
 
 import (
@@ -28,6 +29,8 @@ type projectionDecodedRequest struct {
 	Expressions  [][]byte         `vgirpc:"expressions,elem=large_binary"`
 	ResultSchema []byte           `vgirpc:"result_schema"`
 }
+
+// TableFunctionProjectionRequestWire carries a canonical scalar projection proposal.
 type TableFunctionProjectionRequestWire struct {
 	BindCall     []byte   `vgirpc:"bind_call"`
 	BindResult   []byte   `vgirpc:"bind_result"`
@@ -43,11 +46,13 @@ func (TableFunctionProjectionRequestWire) VgiRpcMaxWrappedRequestBytes() int {
 	return 8 * 1024 * 1024
 }
 
+// TableFunctionProjectionResponseWire identifies accepted expressions and their replacement bind.
 type TableFunctionProjectionResponseWire struct {
 	AcceptedIndices []int64           `vgirpc:"accepted_indices"`
 	BindResult      *BindResponseWire `vgirpc:"bind_result"`
 }
 
+// ArrowSchema returns the canonical bind-result record schema.
 func (BindResponseWire) ArrowSchema() *arrow.Schema { return generated.BindResultSchema }
 
 // ProjectionProposal is read-only planning input. No execution resources may be
@@ -57,6 +62,8 @@ type ProjectionProposal struct {
 	Expressions  [][]byte
 	ResultSchema *arrow.Schema
 }
+
+// ProjectionAcceptance selects proposal expressions and supplies their bound output.
 type ProjectionAcceptance struct {
 	AcceptedIndices []int64
 	BindResult      *BindResponse
@@ -65,6 +72,7 @@ type ProjectionAcceptance struct {
 // TableFunctionWithProjection is optional. An absent hook or nil acceptance
 // declines; the engine retains ordinary local expression evaluation.
 type TableFunctionWithProjection interface {
+	// Projection accepts supported expressions or declines without consuming rows.
 	Projection(*BindParams, *ProjectionProposal) (*ProjectionAcceptance, error)
 }
 
@@ -381,6 +389,8 @@ func encodeProjectionBind(value BindResponseWire) ([]byte, error) {
 	defer row.Release()
 	return SerializeRecordBatch(row)
 }
+
+// TableFunctionProjection validates and dispatches a scalar projection proposal.
 func (w workerService) TableFunctionProjection(ctx context.Context, cc *vgirpc.CallContext, raw TableFunctionProjectionRequestWire) (response TableFunctionProjectionResponseWire, err error) {
 	defer RecoverPanic("projection", "", &err)
 	decline := TableFunctionProjectionResponseWire{AcceptedIndices: []int64{}}

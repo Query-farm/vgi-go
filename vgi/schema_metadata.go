@@ -1,4 +1,5 @@
 // Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 package vgi
 
 import (
@@ -163,7 +164,7 @@ func restoreColumnType(t arrow.DataType, nodes []ipcFieldMetadata) (arrow.DataTy
 		return arrow.FixedSizeListOfField(value.Len(), children[0]), nil
 	case *arrow.MapType:
 		if children[0].Metadata.Len() != 0 {
-			return nil, fmt.Errorf("Arrow Go cannot preserve MAP entries field metadata")
+			return nil, fmt.Errorf("arrow-go cannot preserve MAP entries field metadata")
 		}
 		pair := children[0].Type.(*arrow.StructType)
 		out := arrow.MapOfFields(pair.Field(0), pair.Field(1))

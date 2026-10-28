@@ -65,8 +65,7 @@ func (*ProjectionSequence) NewState(p *vgi.ProcessParams) (interface{}, error) {
 func (*ProjectionSequence) Process(_ context.Context, p *vgi.ProcessParams, state interface{}, out *vgirpc.OutputCollector) error {
 	s := state.(*projectionSequenceState)
 	if s.Done {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	s.Done = true
 	// Emit one batch; finish on the next tick so the batch is not discarded.

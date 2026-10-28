@@ -1,4 +1,5 @@
 // Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
 package vgi
 
 import (
@@ -16,7 +17,10 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
+// GeneratedExpressionKey stores a canonical serialized generated-column expression.
 const GeneratedExpressionKey = "vgi.column.generated.v1"
+
+// GenerationKey identifies the generated column evaluation category.
 const GenerationKey = "vgi.column.generation.v1"
 const scalarExpressionProfile = "vgi.expression.duckdb.scalar.v1"
 
@@ -31,8 +35,7 @@ func ValidateColumnExpressions(schema *arrow.Schema, owner []string, allowGenera
 		return nil
 	}
 	var visitType func(arrow.DataType) error
-	var visit func(arrow.Field) error
-	visit = func(field arrow.Field) error {
+	visit := func(field arrow.Field) error {
 		values := field.Metadata.ToMap()
 		for key := range values {
 			if (strings.HasPrefix(key, "vgi.column.generated.") && key != GeneratedExpressionKey) || (strings.HasPrefix(key, "vgi.column.generation.") && key != GenerationKey) {

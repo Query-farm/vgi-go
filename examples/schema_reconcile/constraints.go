@@ -5,6 +5,7 @@ package schema_reconcile
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -227,19 +228,19 @@ func validateValue(field arrow.Field, values arrow.Array, row int) error {
 	return nil
 }
 
-func validateStoredRows(spec tableSpec) error {
+func validateStoredRows(spec tableSpec) (resultErr error) {
 	storageMu.Lock()
 	defer storageMu.Unlock()
 	db, err := openDB()
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { resultErr = errors.Join(resultErr, db.Close()) }()
 	rows, err := db.Query("SELECT payload_blob FROM " + spec.storageName)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	for rows.Next() {
 		var payload []byte
 		if err := rows.Scan(&payload); err != nil {
