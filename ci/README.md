@@ -215,3 +215,16 @@ worker against what users can install today. If `VGI_REF` points at a commit
 whose tests exercise a protocol feature the published extension doesn't yet ship
 (or vice-versa), that test can fail or skip — bump `VGI_REF` deliberately and
 re-validate against the current community extension.
+
+### Strict Arrow IPC producer regression
+
+Every worker built by this repository uses the pinned FlatBuffers replacement in
+`go.mod`. `go test ./vgi -run TestFlatbuffersVtableObjectSize` catches the original
+object-size bug, and `ci/check-consumer-flatbuffers.sh` proves that an independent
+consumer applies the documented replacement (Go does not inherit it).
+
+`go run ./ci/fixtures/flatbuffers-schema > schema.arrow` emits a schema-only IPC
+stream with two dictionary fields surrounding a metadata-bearing integer field.
+It reproduces google/flatbuffers#9413 with the old dependency and is used by the
+native strict-reader regression. The generator writes binary IPC to stdout and
+errors to stderr.

@@ -28,7 +28,20 @@ in an external worker process over Arrow IPC.
 go get github.com/Query-farm/vgi-go/vgi
 ```
 
-Requires Go 1.25+. The default stdio and HTTP transports run on upstream
+Requires Go 1.26+. All transports require the pinned FlatBuffers producer fix
+below until [google/flatbuffers#9414](https://github.com/google/flatbuffers/pull/9414)
+is released. Without it, dictionary fields combined with Arrow metadata can
+produce invalid IPC schemas that strict readers reject.
+
+Go does **not** inherit a dependency's `replace` directives. Add this replacement
+to your application's own `go.mod`, including for stdio and HTTP workers:
+
+```go
+replace github.com/google/flatbuffers => github.com/rustyconover/flatbuffers v25.12.20-0.20261026151427-0acd09bcd1ff+incompatible
+```
+
+This immutable pin is the fix submitted upstream, not a wire-protocol change.
+The default stdio and HTTP transports can use upstream
 `github.com/apache/arrow-go/v18`.
 
 ### Shared-memory transport (optional)
@@ -42,7 +55,8 @@ importers, a project that enables SHM must add the replace to its **own** `go.mo
 replace github.com/apache/arrow-go/v18 => github.com/Query-farm/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4
 ```
 
-stdio and HTTP need no fork.
+The Arrow replacement is additional to the FlatBuffers replacement above.
+stdio and HTTP do not require the Arrow fork.
 
 ## Quickstart
 

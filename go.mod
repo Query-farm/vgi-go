@@ -9,11 +9,17 @@ go 1.26.0
 // SHM must add this same replace to their own go.mod.
 replace github.com/apache/arrow-go/v18 => github.com/Query-farm/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4
 
+// Required on every transport until google/flatbuffers#9414 is released.
+// The Go builder must compare object sizes when deduplicating vtables.
+// Consumers must add this replacement to their own go.mod; it is not inherited.
+replace github.com/google/flatbuffers => github.com/rustyconover/flatbuffers v25.12.20-0.20261026151427-0acd09bcd1ff+incompatible
+
 require (
 	github.com/Query-farm/vgi-rpc-go v0.36.0
 	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.0
 	github.com/apache/arrow-go/v18 v18.7.0
 	github.com/duckdb/duckdb-go/v2 v2.10505.0
+	github.com/google/flatbuffers v25.12.19+incompatible
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.19.2
 	golang.org/x/crypto v0.55.0
@@ -36,7 +42,6 @@ require (
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
-	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/klauspost/asmfmt v1.3.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
