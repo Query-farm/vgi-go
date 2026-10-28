@@ -190,7 +190,11 @@ func TestMacroTypeWireValues(t *testing.T) {
 		{"table", "TABLE"},
 	}
 	for _, tc := range cases {
-		data, err := SerializeMacroInfo(&MacroInfo{Name: "m", MacroType: tc.in, Definition: "1"})
+		info, err := macroInfoFromCatalogMacro(CatalogMacro{Name: "m", MacroType: tc.in, Definition: "1"}, SchemaPath{"main"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := SerializeMacroInfo(info)
 		if err != nil {
 			t.Fatalf("SerializeMacroInfo(%q): %v", tc.in, err)
 		}
@@ -246,41 +250,45 @@ func minimalWireRecordCases() []wireRecordCase {
 	return []wireRecordCase{
 		{"CatalogInfo", generated.CatalogInfoSchema, func() ([]byte, error) {
 			return SerializeCatalogInfo(&CatalogInfo{Name: "c"})
-		}},
+		}, nil},
 		{"SchemaInfo", generated.SchemaInfoSchema, func() ([]byte, error) {
 			return SerializeSchemaInfo(&SchemaInfo{Path: SchemaPath{"main"}})
-		}},
+		}, nil},
 		{"TableInfo", generated.TableInfoSchema, func() ([]byte, error) {
 			return SerializeTableInfo(&TableInfo{Name: "t", SchemaPath: []string{"main"},
 				Columns: arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64}}, nil)})
-		}},
+		}, nil},
 		{"ViewInfo", generated.ViewInfoSchema, func() ([]byte, error) {
 			return SerializeViewInfo(&ViewInfo{Name: "v", Definition: "SELECT 1"})
-		}},
+		}, nil},
 		{"FunctionInfo", generated.FunctionInfoSchema, func() ([]byte, error) {
 			return SerializeFunctionInfo(&FunctionInfo{Name: "f", FunctionType: FunctionTypeTable})
-		}},
+		}, nil},
 		{"MacroInfo", generated.MacroInfoSchema, func() ([]byte, error) {
-			return SerializeMacroInfo(&MacroInfo{Name: "m", MacroType: MacroTypeTable, Definition: "SELECT 1"})
-		}},
+			info, err := macroInfoFromCatalogMacro(CatalogMacro{Name: "m", MacroType: MacroTypeTable, Definition: "SELECT 1"}, SchemaPath{"main"})
+			if err != nil {
+				return nil, err
+			}
+			return SerializeMacroInfo(info)
+		}, nil},
 		{"CopyFromFormatInfo", generated.CopyFromFormatInfoSchema, func() ([]byte, error) {
 			return SerializeCopyFromFormatInfo(copyFromFormatRecord{formatName: "x", handler: "h", direction: "from"})
-		}},
+		}, nil},
 		{"ScanFunctionResult", generated.ScanFunctionResultSchema, func() ([]byte, error) {
 			return SerializeScanFunctionResult(&ScanFunctionResult{FunctionName: "read_parquet"})
-		}},
+		}, nil},
 		{"ScanBranch", generated.ScanBranchSchema, func() ([]byte, error) {
 			return SerializeScanBranch(&ScanBranch{FunctionName: "read_parquet"})
-		}},
+		}, nil},
 		{"ScanSplit", generated.ScanSplitSchema, func() ([]byte, error) {
 			return SerializeScanSplit(&ScanSplit{})
-		}},
+		}, nil},
 		{"ForeignKeyInfo", generated.ForeignKeyInfoSchema, func() ([]byte, error) {
 			return serializeForeignKey(SchemaPath{"main"}, &ForeignKeyConstraint{ReferencedTable: "t"})
-		}},
+		}, nil},
 		{"AttachCatalogInfo", generated.AttachCatalogInfoSchema, func() ([]byte, error) {
 			return SerializeAttachCatalogInfo(AttachCatalogInfo{Alias: "a", Target: "x", DBType: "duckdb"})
-		}},
+		}, nil},
 	}
 }
 

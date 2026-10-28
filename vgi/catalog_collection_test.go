@@ -3,7 +3,10 @@ package vgi
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/Query-farm/vgi-go/vgi/generated"
@@ -229,6 +232,9 @@ func TestFunctionInfoDictionaryNullAndEmptyValidation(t *testing.T) {
 }
 
 func TestCatalogCollectionIndexesAcrossSchemas(t *testing.T) {
+	fixture := readSingleRecord(t, "IndexInfo", catalogCollectionFixture(t, "index_info"))
+	defer fixture.Release()
+	options := fixture.Column(fixture.Schema().FieldIndices("options")[0]).(*array.Binary).Value(0)
 	var inventory []generated.SchemaContents
 	for _, path := range []string{"left", "right"} {
 		info, err := SerializeSchemaInfo(&SchemaInfo{Path: []string{path}})
@@ -241,14 +247,8 @@ func TestCatalogCollectionIndexesAcrossSchemas(t *testing.T) {
 		builder.Field(2).(*array.StringBuilder).Append("idx_" + path)
 		builder.Field(3).(*array.ListBuilder).Append(true)
 		builder.Field(3).(*array.ListBuilder).ValueBuilder().(*array.StringBuilder).Append(path)
-		builder.Field(4).(*array.StringBuilder).Append("items")
-		builder.Field(5).(*array.StringBuilder).Append("ART")
-		if err := builder.Field(6).(*array.BinaryDictionaryBuilder).AppendString("NONE"); err != nil {
-			t.Fatal(err)
-		}
-		builder.Field(7).(*array.ListBuilder).Append(true)
-		builder.Field(7).(*array.ListBuilder).ValueBuilder().(*array.StringBuilder).Append("id")
-		builder.Field(8).(*array.MapBuilder).Append(true)
+		builder.Field(4).(*array.BinaryBuilder).Append(catalogCollectionFixture(t, "index_definition"))
+		builder.Field(5).(*array.BinaryBuilder).Append(options)
 		record := builder.NewRecordBatch()
 		data, err := SerializeRecordBatch(record)
 		record.Release()
@@ -285,9 +285,36 @@ func TestCatalogCollectionIndexesAcrossSchemas(t *testing.T) {
 			t.Fatal("index row missing")
 		}
 		name := reader.RecordBatch().Column(2).(*array.String).Value(0)
+		if !bytes.Equal(reader.RecordBatch().Column(4).(*array.Binary).Value(0), catalogCollectionFixture(t, "index_definition")) ||
+			!bytes.Equal(reader.RecordBatch().Column(5).(*array.Binary).Value(0), options) {
+			t.Fatal("canonical index definition or options changed")
+		}
 		reader.Release()
 		if name != "idx_"+schema.Path[0] {
 			t.Fatal("index fields changed")
 		}
 	}
+}
+
+func catalogCollectionFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile("../conformance/catalog-contracts.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Records map[string]string `json:"records"`
+	}
+	if err := json.Unmarshal(data, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	encoded, ok := corpus.Records[name]
+	if !ok {
+		t.Fatalf("missing catalog fixture %s", name)
+	}
+	result, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }

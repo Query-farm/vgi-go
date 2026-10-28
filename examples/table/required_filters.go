@@ -28,8 +28,8 @@ import (
 // ---------------------------------------------------------------------------
 
 var RffSimpleSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "a", Type: arrow.PrimitiveTypes.Int64},
-	{Name: "b", Type: arrow.PrimitiveTypes.Int64},
+	{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	{Name: "b", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 }, nil)
 
 type RffSimpleScanFunction struct{}
@@ -78,8 +78,8 @@ func NewRffSimpleScanFunction() vgi.TableFunction {
 // ---------------------------------------------------------------------------
 
 var RffNoneSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "a", Type: arrow.PrimitiveTypes.Int64},
-	{Name: "b", Type: arrow.PrimitiveTypes.Int64},
+	{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	{Name: "b", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 }, nil)
 
 type RffNoneScanFunction struct{}
@@ -128,13 +128,13 @@ func NewRffNoneScanFunction() vgi.TableFunction {
 // ---------------------------------------------------------------------------
 
 var rffStructStructType = arrow.StructOf(
-	arrow.Field{Name: "a", Type: arrow.PrimitiveTypes.Int64},
-	arrow.Field{Name: "b", Type: arrow.PrimitiveTypes.Int64},
+	arrow.Field{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	arrow.Field{Name: "b", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 )
 
 var RffStructSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "s", Type: rffStructStructType},
-	{Name: "other", Type: arrow.PrimitiveTypes.Int64},
+	{Name: "s", Type: rffStructStructType, Nullable: true},
+	{Name: "other", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 }, nil)
 
 type RffStructScanFunction struct{}
@@ -197,15 +197,15 @@ func NewRffStructScanFunction() vgi.TableFunction {
 // ---------------------------------------------------------------------------
 
 var rffNestedMidType = arrow.StructOf(
-	arrow.Field{Name: "leaf", Type: arrow.PrimitiveTypes.Int64},
+	arrow.Field{Name: "leaf", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 )
 
 var rffNestedWrapperType = arrow.StructOf(
-	arrow.Field{Name: "mid", Type: rffNestedMidType},
+	arrow.Field{Name: "mid", Type: rffNestedMidType, Nullable: true},
 )
 
 var RffNestedSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "wrapper", Type: rffNestedWrapperType},
+	{Name: "wrapper", Type: rffNestedWrapperType, Nullable: true},
 }, nil)
 
 type RffNestedScanFunction struct{}
@@ -266,13 +266,13 @@ func NewRffNestedScanFunction() vgi.TableFunction {
 // ---------------------------------------------------------------------------
 
 var rffMultiStructType = arrow.StructOf(
-	arrow.Field{Name: "a", Type: arrow.PrimitiveTypes.Int64},
-	arrow.Field{Name: "b", Type: arrow.PrimitiveTypes.Int64},
+	arrow.Field{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	arrow.Field{Name: "b", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 )
 
 var RffMultiSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "s", Type: rffMultiStructType},
-	{Name: "top", Type: arrow.PrimitiveTypes.Int64},
+	{Name: "s", Type: rffMultiStructType, Nullable: true},
+	{Name: "top", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 }, nil)
 
 type RffMultiScanFunction struct{}
@@ -346,16 +346,16 @@ func NewRffMultiScanFunction() vgi.TableFunction {
 var rffRowidMetadata = arrow.NewMetadata([]string{"is_row_id"}, []string{""})
 
 var rffRowidBboxType = arrow.StructOf(
-	arrow.Field{Name: "xmin", Type: arrow.PrimitiveTypes.Float32},
-	arrow.Field{Name: "ymin", Type: arrow.PrimitiveTypes.Float32},
-	arrow.Field{Name: "xmax", Type: arrow.PrimitiveTypes.Float32},
-	arrow.Field{Name: "ymax", Type: arrow.PrimitiveTypes.Float32},
+	arrow.Field{Name: "xmin", Type: arrow.PrimitiveTypes.Float32, Nullable: true},
+	arrow.Field{Name: "ymin", Type: arrow.PrimitiveTypes.Float32, Nullable: true},
+	arrow.Field{Name: "xmax", Type: arrow.PrimitiveTypes.Float32, Nullable: true},
+	arrow.Field{Name: "ymax", Type: arrow.PrimitiveTypes.Float32, Nullable: true},
 )
 
 var RffRowidSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "row_id", Type: arrow.PrimitiveTypes.Int64, Metadata: rffRowidMetadata},
-	{Name: "bbox", Type: rffRowidBboxType},
-	{Name: "other", Type: arrow.PrimitiveTypes.Int64},
+	{Name: "bbox", Type: rffRowidBboxType, Nullable: true},
+	{Name: "other", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 }, nil)
 
 type RffRowidScanFunction struct{}

@@ -20,17 +20,17 @@ const currentVersion = 3
 // versionedSchemas maps version numbers to their Arrow schemas.
 var versionedSchemas = map[int64]*arrow.Schema{
 	1: arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "id", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
 	}, nil),
 	2: arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimitiveTypes.Int64},
-		{Name: "name", Type: arrow.BinaryTypes.String},
-		{Name: "score", Type: arrow.PrimitiveTypes.Float64},
-		{Name: "active", Type: &arrow.BooleanType{}},
+		{Name: "id", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
+		{Name: "name", Nullable: true, Type: arrow.BinaryTypes.String},
+		{Name: "score", Nullable: true, Type: arrow.PrimitiveTypes.Float64},
+		{Name: "active", Nullable: true, Type: &arrow.BooleanType{}},
 	}, nil),
 	3: arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimitiveTypes.Int64},
-		{Name: "score", Type: arrow.PrimitiveTypes.Float64},
+		{Name: "id", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
+		{Name: "score", Nullable: true, Type: arrow.PrimitiveTypes.Float64},
 	}, nil),
 }
 

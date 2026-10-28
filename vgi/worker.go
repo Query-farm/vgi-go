@@ -370,7 +370,7 @@ type Worker struct {
 	attachScanBranchesGetHandler  AttachScanBranchesGetHandler
 	attachWriteFunctionGetHandler AttachWriteFunctionGetHandler
 	catalogVersionHook            CatalogVersionHook
-	// hostedProtocols supplies the protocols hosted beside vgi.v2
+	// hostedProtocols supplies the protocols hosted beside vgi.v3
 	// (WithHostedProtocols); identity opts into vgi_rpc.Identity.v2 over HTTP
 	// (WithIdentity). See hosting.go.
 	hostedProtocols HostedProtocolsFunc
@@ -585,6 +585,12 @@ type AttachDecision struct {
 	ResolvedDataVersion           string
 	ResolvedImplementationVersion string
 	AttachOpaqueData              []byte
+	// CatalogCapabilities and SelectedCapabilities carry canonical
+	// CatalogCapabilities IPC records. The provider must select only profiles
+	// supported by this attachment and offered by the client, with their
+	// prerequisites. Nil preserves the default catalog's absent agreement.
+	CatalogCapabilities  []byte
+	SelectedCapabilities []byte
 }
 
 // AttachValidator is invoked by the default catalog_attach handler. It may
@@ -1261,9 +1267,9 @@ const (
 //
 // The major version is part of the name on purpose: an incompatible major
 // becomes a *different* name, and therefore a routing 404 rather than a
-// mysterious deserialization failure, and vgi.v2 can be served beside a future
-// vgi.v3 while clients migrate.
-const ProtocolName = "vgi.v2"
+// mysterious deserialization failure, and vgi.v2 can be served beside vgi.v3
+// while clients migrate.
+const ProtocolName = "vgi.v3"
 
 // ProtocolVersion is the VGI application protocol surface version this SDK
 // implements — the Go counterpart of VGI_PROTOCOL_VERSION in vgi-rust /
@@ -1282,7 +1288,8 @@ const ProtocolName = "vgi.v2"
 // 2.0.0 represents every schema identity as a root-to-leaf list of components;
 // 2.1.0 adds supports_catalog_contents to CatalogAttachResult and the
 // catalog_contents RPC (the whole catalog in one call; see catalog_contents.go).
-const ProtocolVersion = "2.2.0"
+// 3.0.0 is the combined breaking catalog/query successor, routed as vgi.v3.
+const ProtocolVersion = "3.0.0"
 
 // buildServer is the one place a worker's server is built, for every
 // transport; see hosting.go for what it hosts. An error means the worker must
@@ -1359,17 +1366,17 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 		// no cleanup hook (concurrent connections, like unix)
 	}
 
-	// Host vgi.v2: every method, from the generated registration table. What
+	// Host vgi.v3: every method, from the generated registration table. What
 	// the SDK does not implement answers UNIMPLEMENTED (vgi_service.go).
 	registerVgiService(w, s, w.vgiService())
 
-	// The worker's additional protocols, after vgi.v2 and on every transport.
+	// The worker's additional protocols, after vgi.v3 and on every transport.
 	if err := w.hostProtocols(s); err != nil {
 		return nil, err
 	}
 
 	// Browser clients discover the application protocol through Reflection.v1.
-	// Register it after the application methods so vgi.v2 remains primary.
+	// Register it after the application methods so vgi.v3 remains primary.
 	if err := vgirpc.RegisterReflection(s); err != nil {
 		return nil, fmt.Errorf("register VGI reflection: %w", err)
 	}

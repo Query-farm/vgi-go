@@ -4,6 +4,7 @@ package vgi
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -12,8 +13,8 @@ import (
 )
 
 // readRequiredFilters round-trips the serialized TableInfo IPC bytes and
-// extracts the trailing required_filters column (list<list<utf8>>) as [][]string.
-func readRequiredFilters(t *testing.T, info *TableInfo) [][]string {
+// extracts the required_filters column (list<list<list<utf8>>>) as [][][]string.
+func readRequiredFilters(t *testing.T, info *TableInfo) [][][]string {
 	t.Helper()
 	data, err := SerializeTableInfo(info)
 	if err != nil {
@@ -29,28 +30,35 @@ func readRequiredFilters(t *testing.T, info *TableInfo) [][]string {
 	}
 	rec := reader.RecordBatch()
 
-	field := rec.Schema().Field(rec.Schema().NumFields() - 1)
-	if field.Name != "required_filters" {
-		t.Fatalf("trailing field = %q, want required_filters", field.Name)
+	indices := rec.Schema().FieldIndices("required_filters")
+	if len(indices) != 1 {
+		t.Fatalf("expected exactly one required_filters field, got %v", indices)
 	}
-	if !arrow.TypeEqual(field.Type, arrow.ListOf(arrow.ListOf(arrow.BinaryTypes.String))) {
-		t.Fatalf("required_filters type = %s, want list<list<utf8>>", field.Type)
+	field := rec.Schema().Field(indices[0])
+	if !arrow.TypeEqual(field.Type, arrow.ListOf(arrow.ListOf(arrow.ListOf(arrow.BinaryTypes.String)))) {
+		t.Fatalf("required_filters type = %s, want list<list<list<utf8>>>", field.Type)
 	}
 
-	outer := rec.Column(rec.Schema().NumFields() - 1).(*array.List)
+	outer := rec.Column(indices[0]).(*array.List)
 	if outer.IsNull(0) {
 		return nil
 	}
 	start, end := outer.ValueOffsets(0)
 	inner := outer.ListValues().(*array.List)
-	strs := inner.ListValues().(*array.String)
+	paths := inner.ListValues().(*array.List)
+	strs := paths.ListValues().(*array.String)
 
-	var groups [][]string
+	var groups [][][]string
 	for g := start; g < end; g++ {
 		gs, ge := inner.ValueOffsets(int(g))
-		group := make([]string, 0, ge-gs)
+		group := make([][]string, 0, ge-gs)
 		for i := gs; i < ge; i++ {
-			group = append(group, strs.Value(int(i)))
+			ps, pe := paths.ValueOffsets(int(i))
+			path := make([]string, 0, pe-ps)
+			for k := ps; k < pe; k++ {
+				path = append(path, strs.Value(int(k)))
+			}
+			group = append(group, path)
 		}
 		groups = append(groups, group)
 	}
@@ -63,13 +71,13 @@ func TestSerializeTableInfoRequiredFiltersCNF(t *testing.T) {
 	info := &TableInfo{
 		Name:       "filings",
 		SchemaPath: []string{"company"},
-		RequiredFilters: [][]string{
-			{"accession_number"},
-			{"ticker", "cik"},
+		RequiredFilters: [][][]string{
+			{{"accession_number"}},
+			{{"ticker"}, {"cik"}},
 		},
 	}
 	got := readRequiredFilters(t, info)
-	want := [][]string{{"accession_number"}, {"ticker", "cik"}}
+	want := [][][]string{{{"accession_number"}}, {{"ticker"}, {"cik"}}}
 	if len(got) != len(want) {
 		t.Fatalf("got %d groups, want %d: %v", len(got), len(want), got)
 	}
@@ -78,7 +86,7 @@ func TestSerializeTableInfoRequiredFiltersCNF(t *testing.T) {
 			t.Fatalf("group %d = %v, want %v", gi, got[gi], want[gi])
 		}
 		for pi := range want[gi] {
-			if got[gi][pi] != want[gi][pi] {
+			if !reflect.DeepEqual(got[gi][pi], want[gi][pi]) {
 				t.Fatalf("group %d path %d = %q, want %q", gi, pi, got[gi][pi], want[gi][pi])
 			}
 		}
@@ -104,10 +112,10 @@ func TestValidateRequiredFilters(t *testing.T) {
 	}, nil)
 
 	// Valid: singleton group, OR-group, and a struct-subfield path.
-	if err := validateRequiredFilters("t", columns, [][]string{
-		{"accession_number"},
-		{"ticker", "cik"},
-		{"bbox.xmin"},
+	if err := validateRequiredFilters("t", columns, [][][]string{
+		{{"accession_number"}},
+		{{"ticker"}, {"cik"}},
+		{{"bbox", "xmin"}},
 	}); err != nil {
 		t.Fatalf("valid CNF rejected: %v", err)
 	}
@@ -118,17 +126,17 @@ func TestValidateRequiredFilters(t *testing.T) {
 	}
 
 	// Empty group is rejected.
-	if err := validateRequiredFilters("t", columns, [][]string{{}}); err == nil {
+	if err := validateRequiredFilters("t", columns, [][][]string{{}}); err == nil {
 		t.Fatal("expected error for empty group")
 	}
 
 	// Empty string path is rejected.
-	if err := validateRequiredFilters("t", columns, [][]string{{""}}); err == nil {
+	if err := validateRequiredFilters("t", columns, [][][]string{{{""}}}); err == nil {
 		t.Fatal("expected error for empty string path")
 	}
 
 	// Unknown leading column is rejected.
-	if err := validateRequiredFilters("t", columns, [][]string{{"nope.field"}}); err == nil {
+	if err := validateRequiredFilters("t", columns, [][][]string{{{"nope", "field"}}}); err == nil {
 		t.Fatal("expected error for unknown column")
 	}
 }

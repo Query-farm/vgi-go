@@ -110,9 +110,15 @@ func staticCatalog(name string, opts ...vgi.WorkerOption) *vgi.Worker {
 	c.RegisterScalar(scalar.NewDouble())
 	c.RegisterAggregate(&aggregate.SumFunction{})
 	c.RegisterTable(sequence)
+	// These SQL tables declare no NOT NULL constraints. The direct sequence
+	// function's nonnullable physical output does not create catalog constraints.
+	columns := arrow.NewSchema([]arrow.Field{
+		{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	}, nil)
 
 	c.RegisterCatalogTable("main", vgi.CatalogTable{
 		Name:     "ten",
+		Columns:  columns,
 		Comment:  "Integers 0..9",
 		Function: sequence,
 		FuncArgs: []vgi.CatalogTableArg{{Position: 0, Value: int64(10), Type: arrow.PrimitiveTypes.Int64}},
@@ -130,6 +136,7 @@ func staticCatalog(name string, opts ...vgi.WorkerOption) *vgi.Worker {
 	})
 	c.RegisterCatalogTable("extra", vgi.CatalogTable{
 		Name:     "five",
+		Columns:  columns,
 		Comment:  "Integers 0..4",
 		Function: sequence,
 		FuncArgs: []vgi.CatalogTableArg{{Position: 0, Value: int64(5), Type: arrow.PrimitiveTypes.Int64}},

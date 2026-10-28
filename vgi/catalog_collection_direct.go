@@ -101,7 +101,7 @@ func (w *Worker) directCatalogContents(attach []byte, version int64, ifNoneMatch
 		}
 		if enabled("view") {
 			for _, view := range si.views {
-				record, err := buildViewInfoRecord(&ViewInfo{Name: view.Name, SchemaPath: info.Path, Comment: view.Comment, Tags: view.Tags, Definition: view.Definition, ColumnComments: view.ColumnComments})
+				record, err := buildViewInfoRecord(&ViewInfo{Name: view.Name, SchemaPath: info.Path, Comment: descriptorComment(view.Comment), Tags: view.Tags, Definition: view.Definition, ColumnComments: view.ColumnComments, Aliases: view.Aliases, Security: view.Security})
 				if err = add(2, record, err); err != nil {
 					return out, err
 				}
@@ -128,7 +128,7 @@ func (w *Worker) directCatalogContents(attach []byte, version int64, ifNoneMatch
 		if enabled("macro") {
 			for _, kind := range []MacroType{MacroTypeScalar, MacroTypeTable} {
 				for _, macro := range si.macros {
-					if macro.MacroType != kind {
+					if canonicalMacroType(macro.MacroType) != kind {
 						continue
 					}
 					value, err := macroInfoFromCatalogMacro(macro, info.Path)

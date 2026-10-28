@@ -122,12 +122,24 @@ func (w *Worker) writableSchemaDrop(c *WritableCatalog, path SchemaPath, ignoreN
 }
 
 func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestWire) error {
+	if len(req.ConstraintDefinitions) > 0 {
+		return methodNotImplemented("catalog_table_create: canonical constraint enforcement")
+	}
 	if len(req.Columns) == 0 {
 		return fmt.Errorf("catalog_table_create: missing columns schema")
 	}
 	schema, err := DeserializeSchema(req.Columns)
 	if err != nil {
 		return fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
+	}
+	if err := ValidateColumnExpressions(schema, req.SchemaPath, false); err != nil {
+		return err
+	}
+	if err := ValidateColumnMetadata(schema); err != nil {
+		return err
+	}
+	if err := requireUnconstrainedCreateSchema(schema); err != nil {
+		return err
 	}
 
 	schemaKey := schemaPathKey(req.SchemaPath)
@@ -158,10 +170,6 @@ func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestW
 	t := &writableTable{
 		name:          req.Name,
 		schema:        schema,
-		notNull:       columnsByIndex(schema, req.NotNullConstraints),
-		primaryKey:    columnGroupsByIndex(schema, req.PrimaryKeyConstraints),
-		unique:        columnGroupsByIndex(schema, req.UniqueConstraints),
-		check:         req.CheckConstraints,
 		defaults:      defaultsFromSchemaMetadata(schema),
 		columnComment: map[string]string{},
 	}
@@ -284,6 +292,7 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 		serializedAttachCatalogs = [][]byte{}
 	}
 
+	defaultSchema := "main"
 	return CatalogAttachResultWire{
 		AttachOpaqueData:         attachOpaqueData,
 		SupportsTransactions:     true,
@@ -291,7 +300,7 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 		CatalogVersionFrozen:     false,
 		CatalogVersion:           version,
 		AttachOpaqueDataRequired: true,
-		DefaultSchema:            "main",
+		DefaultSchema:            &defaultSchema,
 		Settings:                 serializedSettings,
 		SecretTypes:              serializedSecretTypes,
 		AttachCatalogs:           serializedAttachCatalogs,
@@ -318,7 +327,7 @@ func (w *Worker) writableSchemaInfos(c *WritableCatalog) ([]*SchemaInfo, error) 
 	}
 	out := make([]*SchemaInfo, 0, len(list))
 	for _, s := range list {
-		out = append(out, &SchemaInfo{Path: strings.Split(s.Name, "\x00"), Comment: s.Comment, AttachOpaqueData: c.attachOpaqueData})
+		out = append(out, &SchemaInfo{Path: strings.Split(s.Name, "\x00"), Comment: descriptorComment(s.Comment), AttachOpaqueData: c.attachOpaqueData})
 	}
 	return out, nil
 }

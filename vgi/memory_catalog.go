@@ -14,6 +14,8 @@ import (
 
 	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 )
 
 // MemoryCatalog is an in-memory catalog that accepts DDL — CREATE / DROP
@@ -52,7 +54,8 @@ type memoryState struct {
 
 type memorySchema struct {
 	path    SchemaPath
-	comment string
+	comment *string
+	tags    map[string]string
 	// Serialized TableInfo / ViewInfo items, keyed by lower-cased name.
 	tables map[string]memoryObject
 	views  map[string]memoryObject
@@ -128,6 +131,8 @@ func NewMemoryCatalog(name string, opts ...MemoryCatalogOption) *MemoryCatalog {
 		"catalog_view_get":                  memoryMethod(m.viewGet),
 		"catalog_view_create":               memoryVoid(m.viewCreate),
 		"catalog_view_drop":                 memoryVoid(m.viewDrop),
+		"catalog_view_comment_set":          memoryVoid(m.viewCommentSet),
+		"catalog_view_column_comment_set":   memoryVoid(m.viewColumnCommentSet),
 		"catalog_macro_get":                 memoryMethod(m.macroGet),
 	}
 	return m
@@ -192,16 +197,17 @@ func (m *MemoryCatalog) attach(_ *vgirpc.CallContext, req *CatalogAttachRequestW
 	}
 	attach := []byte(m.name + "\x00" + hex.EncodeToString(token[:]))
 	st := &memoryState{version: 1, schemas: map[string]*memorySchema{}}
-	st.schemas["main"] = newMemorySchema(SchemaPath{"main"}, "")
+	st.schemas["main"] = newMemorySchema(SchemaPath{"main"}, nil, nil)
 	m.mu.Lock()
 	m.attaches[string(attach)] = st
 	version := m.reportedVersion(st)
 	m.mu.Unlock()
+	defaultSchema := "main"
 	res := CatalogAttachResultWire{
 		AttachOpaqueData:         attach,
 		CatalogVersion:           version,
 		AttachOpaqueDataRequired: true,
-		DefaultSchema:            "main",
+		DefaultSchema:            &defaultSchema,
 		Settings:                 [][]byte{},
 		SecretTypes:              [][]byte{},
 		AttachCatalogs:           [][]byte{},
@@ -216,8 +222,8 @@ func (m *MemoryCatalog) attach(_ *vgirpc.CallContext, req *CatalogAttachRequestW
 	return res, nil
 }
 
-func newMemorySchema(path SchemaPath, comment string) *memorySchema {
-	return &memorySchema{path: slices.Clone(path), comment: comment,
+func newMemorySchema(path SchemaPath, comment *string, tags map[string]string) *memorySchema {
+	return &memorySchema{path: slices.Clone(path), comment: comment, tags: maps.Clone(tags),
 		tables: map[string]memoryObject{}, views: map[string]memoryObject{}}
 }
 
@@ -320,7 +326,7 @@ func objectItems(objs map[string]memoryObject) [][]byte {
 }
 
 func (m *MemoryCatalog) schemaItem(attach []byte, s *memorySchema) ([]byte, error) {
-	return SerializeSchemaInfo(&SchemaInfo{Path: s.path, Comment: s.comment, Tags: map[string]string{}, AttachOpaqueData: attach})
+	return SerializeSchemaInfo(&SchemaInfo{Path: s.path, Comment: s.comment, Tags: s.tags, AttachOpaqueData: attach})
 }
 
 // schema looks up one schema of an attach; m.mu must be held.
@@ -365,6 +371,9 @@ func (m *MemoryCatalog) schemaGet(_ *vgirpc.CallContext, req *CatalogSchemaGetPa
 }
 
 func (m *MemoryCatalog) schemaCreate(req *CatalogSchemaCreateParams) error {
+	if req.Options != nil {
+		return methodNotImplemented("catalog_schema_create options require negotiated vgi.schema.options.create.v1")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	existing, st, err := m.schema(req.AttachOpaqueData, req.Path)
@@ -384,11 +393,7 @@ func (m *MemoryCatalog) schemaCreate(req *CatalogSchemaCreateParams) error {
 			return memoryErr("Schema %s does not exist", schemaPathDisplay(req.Path[:len(req.Path)-1]))
 		}
 	}
-	comment := ""
-	if req.Comment != nil {
-		comment = *req.Comment
-	}
-	st.schemas[schemaPathKey(req.Path)] = newMemorySchema(req.Path, comment)
+	st.schemas[schemaPathKey(req.Path)] = newMemorySchema(req.Path, req.Comment, optionalMetadataMap(req.Tags))
 	st.version++
 	return nil
 }
@@ -558,6 +563,12 @@ func (m *MemoryCatalog) dropObject(attach []byte, path SchemaPath, name, kind st
 }
 
 func (m *MemoryCatalog) tableCreate(req *TableCreateRequestWire) error {
+	if len(req.ConstraintDefinitions) > 0 {
+		return methodNotImplemented("catalog_table_create: canonical constraint enforcement")
+	}
+	if req.Comment != nil || req.Tags != nil || req.Options != nil || req.Layout != nil {
+		return methodNotImplemented("catalog_table_create")
+	}
 	if len(req.Columns) == 0 {
 		return memoryErr("catalog_table_create: missing columns schema")
 	}
@@ -565,15 +576,14 @@ func (m *MemoryCatalog) tableCreate(req *TableCreateRequestWire) error {
 	if err != nil {
 		return fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
 	}
+	if err := requireUnconstrainedCreateSchema(columns); err != nil {
+		return err
+	}
 	item, err := SerializeTableInfo(&TableInfo{
-		Name:                  req.Name,
-		SchemaPath:            slices.Clone(req.SchemaPath),
-		Columns:               columns,
-		NotNullConstraints:    req.NotNullConstraints,
-		UniqueConstraints:     req.UniqueConstraints,
-		CheckConstraints:      req.CheckConstraints,
-		PrimaryKeyConstraints: req.PrimaryKeyConstraints,
-		ForeignKeyConstraints: req.ForeignKeyConstraints,
+		Name:        req.Name,
+		SchemaPath:  slices.Clone(req.SchemaPath),
+		Columns:     columns,
+		Constraints: [][]byte{},
 	})
 	if err != nil {
 		return err
@@ -586,7 +596,21 @@ func (m *MemoryCatalog) tableDrop(req *CatalogTableDropParams) error {
 }
 
 func (m *MemoryCatalog) viewCreate(req *CatalogViewCreateParams) error {
-	item, err := SerializeViewInfo(&ViewInfo{Name: req.Name, SchemaPath: slices.Clone(req.SchemaPath), Definition: req.Definition})
+	if req.Security != "regular" {
+		return fmt.Errorf("view security mode %q is unsupported", req.Security)
+	}
+	if req.ColumnComments != nil {
+		for name := range *req.ColumnComments {
+			if name == "" || strings.ContainsRune(name, 0) {
+				return memoryErr("view column comments require raw output identifiers")
+			}
+		}
+	}
+	var aliases []string
+	if req.Aliases != nil {
+		aliases = slices.Clone(*req.Aliases)
+	}
+	item, err := SerializeViewInfo(&ViewInfo{Name: req.Name, SchemaPath: slices.Clone(req.SchemaPath), Definition: req.Definition, Aliases: aliases, Comment: req.Comment, Tags: optionalMetadataMap(req.Tags), ColumnComments: optionalMetadataMap(req.ColumnComments)})
 	if err != nil {
 		return err
 	}
@@ -595,4 +619,86 @@ func (m *MemoryCatalog) viewCreate(req *CatalogViewCreateParams) error {
 
 func (m *MemoryCatalog) viewDrop(req *CatalogViewDropParams) error {
 	return m.dropObject(req.AttachOpaqueData, req.SchemaPath, req.Name, "View", req.IgnoreNotFound, true)
+}
+
+func optionalMetadataMap(values *map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	return maps.Clone(*values)
+}
+
+func (m *MemoryCatalog) viewCommentSet(req *CatalogViewCommentSetParams) error {
+	return m.changeViewComment(req.AttachOpaqueData, req.SchemaPath, req.Name, nil, req.Comment, req.IgnoreNotFound)
+}
+
+func (m *MemoryCatalog) viewColumnCommentSet(req *CatalogViewColumnCommentSetParams) error {
+	if len(req.ColumnPath) != 1 || req.ColumnPath[0] == "" || strings.ContainsRune(req.ColumnPath[0], 0) {
+		return memoryErr("view column comments require one raw output identifier")
+	}
+	return m.changeViewComment(req.AttachOpaqueData, req.SchemaPath, req.Name, req.ColumnPath, req.Comment, req.IgnoreNotFound)
+}
+
+func (m *MemoryCatalog) changeViewComment(attach []byte, path []string, name string, columnPath []string, comment *string, ignore bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	schema, state, err := m.schema(attach, path)
+	if err != nil {
+		return err
+	}
+	key := strings.ToLower(name)
+	var view memoryObject
+	var found bool
+	if schema != nil {
+		view, found = schema.views[key]
+	}
+	if !found {
+		if ignore {
+			return nil
+		}
+		return memoryErr("View with name %s does not exist", name)
+	}
+	batch, err := DeserializeRecordBatch(view.item)
+	if err != nil {
+		return err
+	}
+	defer batch.Release()
+	field := "comment"
+	info := &ViewInfo{Comment: comment}
+	if columnPath != nil {
+		field = "column_comments"
+		values := batch.Column(batch.Schema().FieldIndices(field)[0]).(*array.Map)
+		keys, items := values.Keys().(*array.String), values.Items().(*array.String)
+		begin, end := values.ValueOffsets(0)
+		info.ColumnComments = map[string]string{}
+		for i := begin; i < end; i++ {
+			info.ColumnComments[keys.Value(int(i))] = items.Value(int(i))
+		}
+		if comment == nil {
+			delete(info.ColumnComments, columnPath[0])
+		} else {
+			info.ColumnComments[columnPath[0]] = *comment
+		}
+	}
+	encoded, err := SerializeViewInfo(info)
+	if err != nil {
+		return err
+	}
+	replacement, err := DeserializeRecordBatch(encoded)
+	if err != nil {
+		return err
+	}
+	defer replacement.Release()
+	columns := append([]arrow.Array(nil), batch.Columns()...)
+	index := batch.Schema().FieldIndices(field)[0]
+	columns[index] = replacement.Column(replacement.Schema().FieldIndices(field)[0])
+	updated := array.NewRecordBatch(batch.Schema(), columns, batch.NumRows())
+	defer updated.Release()
+	view.item, err = SerializeRecordBatch(updated)
+	if err != nil {
+		return err
+	}
+	schema.views[key] = view
+	state.version++
+	return nil
 }

@@ -362,7 +362,7 @@ func (m *CatalogSnapshotManager) Key(id SnapshotIdentity) (string, error) {
 	if id.CatalogNamespace == "" || id.SourceRevision == "" || id.VisibilityScope == "" || m.policy.Repository == nil {
 		return "", fmt.Errorf("published catalogs require repository, namespace, source revision and visibility scope")
 	}
-	body, _ := json.Marshal([]any{"vgi.v2", "2.2", publicationContractHash(), catalogCodecRevision, id, m.policy.Repository.Profile(), m.policy.Compression})
+	body, _ := json.Marshal([]any{"vgi.v3", "3.0", publicationContractHash(), catalogCodecRevision, id, m.policy.Repository.Profile(), m.policy.Compression})
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:]), nil
 }
@@ -476,7 +476,7 @@ var catalogOuterSchema = arrow.NewSchema([]arrow.Field{{Name: "result", Type: ar
 
 func (m *CatalogSnapshotManager) validate(p CatalogPublicationManifest, key string, id SnapshotIdentity, expected *generated.CatalogContentsResponse) error {
 	rawCap, storedCap := m.limits()
-	if p.CacheKey != key || p.ManifestID == "" || p.ProtocolName != "vgi.v2" || p.WireRevision != "2.2" || p.ContractHash != publicationContractHash() || p.CodecRevision != catalogCodecRevision || p.FormatVersion != 1 || p.ValidatorRevision != 1 || p.CatalogVersion != id.CatalogVersion || p.RawSize <= 0 || p.RawSize > rawCap || p.StoredSize <= 0 || p.StoredSize > storedCap || len(p.SHA256) != 64 || !m.usable(p) {
+	if p.CacheKey != key || p.ManifestID == "" || p.ProtocolName != "vgi.v3" || p.WireRevision != "3.0" || p.ContractHash != publicationContractHash() || p.CodecRevision != catalogCodecRevision || p.FormatVersion != 1 || p.ValidatorRevision != 1 || p.CatalogVersion != id.CatalogVersion || p.RawSize <= 0 || p.RawSize > rawCap || p.StoredSize <= 0 || p.StoredSize > storedCap || len(p.SHA256) != 64 || !m.usable(p) {
 		return fmt.Errorf("invalid or expired catalog publication manifest")
 	}
 	ref, err := vgirpc.NewExternalRef(p.URL, p.SHA256)
@@ -684,7 +684,7 @@ func (m *CatalogSnapshotManager) recoverOrPublish(key string, id SnapshotIdentit
 		return CatalogPublicationManifest{}, err
 	}
 	idHash := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", ref.URL(), time.Now().UnixNano())))
-	p := CatalogPublicationManifest{CacheKey: key, ManifestID: hex.EncodeToString(idHash[:]), ProtocolName: "vgi.v2", WireRevision: "2.2", ContractHash: publicationContractHash(), CodecRevision: catalogCodecRevision, CatalogVersion: id.CatalogVersion, Etag: *response.Etag, SHA256: ref.SHA256(), RawSize: bounded.rawSize, StoredSize: bounded.storedSize, URL: ref.URL(), ObjectID: location.ObjectID, ExpiresAt: location.ExpiresAt, RetainUntil: location.RetainUntil, Stable: location.Stable, FormatVersion: 1, ValidatorRevision: 1}
+	p := CatalogPublicationManifest{CacheKey: key, ManifestID: hex.EncodeToString(idHash[:]), ProtocolName: "vgi.v3", WireRevision: "3.0", ContractHash: publicationContractHash(), CodecRevision: catalogCodecRevision, CatalogVersion: id.CatalogVersion, Etag: *response.Etag, SHA256: ref.SHA256(), RawSize: bounded.rawSize, StoredSize: bounded.storedSize, URL: ref.URL(), ObjectID: location.ObjectID, ExpiresAt: location.ExpiresAt, RetainUntil: location.RetainUntil, Stable: location.Stable, FormatVersion: 1, ValidatorRevision: 1}
 	if err = m.validate(p, key, id, &response); err != nil {
 		return p, err
 	}

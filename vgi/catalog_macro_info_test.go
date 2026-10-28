@@ -3,6 +3,10 @@
 package vgi
 
 import (
+	"bytes"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -120,10 +124,9 @@ func TestMacroArgumentsSchema_NoParameters(t *testing.T) {
 	}
 }
 
-// TestMacroInfoFromCatalogMacro_PopulatesArgumentsSchema verifies the listing/get
-// path populates MacroInfo.ArgumentsSchema with the per-parameter docs and that
-// it serializes (the generated MacroInfoSchema has the slot).
-func TestMacroInfoFromCatalogMacro_PopulatesArgumentsSchema(t *testing.T) {
+// TestMacroInfoFromCatalogMacro_PopulatesCanonicalDocumentation verifies the listing/get
+// path populates canonical parameters and serializes the required family.
+func TestMacroInfoFromCatalogMacro_PopulatesCanonicalDocumentation(t *testing.T) {
 	cm := CatalogMacro{
 		Name:       "clamp",
 		MacroType:  MacroTypeScalar,
@@ -138,20 +141,80 @@ func TestMacroInfoFromCatalogMacro_PopulatesArgumentsSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("macroInfoFromCatalogMacro: %v", err)
 	}
-	if info.ArgumentsSchema == nil {
-		t.Fatal("expected ArgumentsSchema to be populated")
+	if len(info.Overloads) != 1 || info.Overloads[0].Parameters[0].Documentation == nil || *info.Overloads[0].Parameters[0].Documentation != "the input value" {
+		t.Fatal("canonical family lost parameter documentation")
 	}
-
-	docs, err := MacroParameterDocsFromSchema(info.ArgumentsSchema)
-	if err != nil {
-		t.Fatalf("MacroParameterDocsFromSchema: %v", err)
-	}
-	if len(docs) != 1 || docs["x"] != "the input value" {
-		t.Errorf("docs: got %v want {x:the input value}", docs)
+	if info.Overloads[0].Parameters[0].DeclaredType != nil {
+		t.Fatal("untyped parameter acquired a declaration")
 	}
 
 	// The full MacroInfo must serialize into the generated schema slot.
 	if _, err := SerializeMacroInfo(info); err != nil {
 		t.Fatalf("SerializeMacroInfo: %v", err)
+	}
+}
+
+func TestMacroCanonicalDefaultPreservesNullMetadataAndEmptyDocumentation(t *testing.T) {
+	fieldMetadata := arrow.MetadataFrom(map[string]string{"logical": "field annotation"})
+	schemaMetadata := arrow.MetadataFrom(map[string]string{"logical": "schema annotation"})
+	schema := arrow.NewSchema([]arrow.Field{{Name: "x", Type: arrow.PrimitiveTypes.Int64, Nullable: true, Metadata: fieldMetadata}}, &schemaMetadata)
+	values := array.NewInt64Builder(memory.DefaultAllocator)
+	values.AppendNull()
+	column := values.NewArray()
+	values.Release()
+	batch := array.NewRecordBatch(schema, []arrow.Array{column}, 1)
+	column.Release()
+	defer batch.Release()
+	defaults, err := SerializeRecordBatch(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := macroInfoFromCatalogMacro(CatalogMacro{Name: "m", MacroType: MacroTypeScalar,
+		Parameters: []string{"x"}, Definition: "x", ParameterDefaultValues: defaults,
+		ParameterDocs: map[string]string{"x": ""}}, SchemaPath{"sales.archive"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := info.Overloads[0].Parameters[0]
+	if p.DeclaredType != nil || p.DefaultExpression != nil || p.DefaultValue == nil || p.Documentation == nil || *p.Documentation != "" {
+		t.Fatal("default, type or documentation presence changed")
+	}
+	reader, err := ipc.NewReader(bytes.NewReader(*p.DefaultValue))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Release()
+	if !reader.Next() {
+		t.Fatal("missing default")
+	}
+	got := reader.RecordBatch()
+	if !got.Schema().Equal(schema) || !got.Schema().Metadata().Equal(schemaMetadata) || !got.Column(0).IsNull(0) {
+		t.Fatalf("typed NULL or metadata lost: %v", got)
+	}
+	// Direct families preserve all overloads and embedded payloads, never the first only.
+	second := info.Overloads[0]
+	second.Parameters = nil
+	second.Definition = "1"
+	family := append(info.Overloads, second)
+	direct, err := macroInfoFromCatalogMacro(CatalogMacro{Name: "m", MacroType: MacroTypeScalar, Overloads: family}, SchemaPath{"sales.archive"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := SerializeMacroInfo(direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer, err := ipc.NewReader(bytes.NewReader(wire))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outer.Release()
+	if !outer.Next() {
+		t.Fatal("missing macro info")
+	}
+	record := outer.RecordBatch()
+	start, end := record.Column(5).(*array.List).ValueOffsets(0)
+	if record.NumCols() != 6 || end-start != 2 {
+		t.Fatal("family projected or legacy fields emitted")
 	}
 }

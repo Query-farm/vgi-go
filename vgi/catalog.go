@@ -159,35 +159,28 @@ type TableScanBranchesGetResponseWire struct {
 
 // MacroCreateRequestWire is for catalog_macro_create.
 type MacroCreateRequestWire struct {
-	AttachOpaqueData       []byte   `vgirpc:"attach_opaque_data"`
-	SchemaPath             []string `vgirpc:"schema_path"`
-	Name                   string   `vgirpc:"name"`
-	MacroType              string   `vgirpc:"macro_type,enum"`
-	Parameters             []string `vgirpc:"parameters"`
-	Definition             string   `vgirpc:"definition"`
-	OnConflict             string   `vgirpc:"on_conflict,enum"`
-	ParameterDefaultValues *[]byte  `vgirpc:"parameter_default_values"`
-	// ArgumentsSchema is the optional macro arguments schema (Arrow IPC schema
-	// bytes): one nullable field per parameter, in Parameters order, each
-	// carrying its description via the vgi_doc field-metadata key. nil when no
-	// per-parameter docs are supplied. Decode with MacroParameterDocsFromSchema.
-	ArgumentsSchema       *[]byte `vgirpc:"arguments_schema"`
-	TransactionOpaqueData *[]byte `vgirpc:"transaction_opaque_data"`
+	AttachOpaqueData      []byte                    `vgirpc:"attach_opaque_data"`
+	SchemaPath            []string                  `vgirpc:"schema_path"`
+	Name                  string                    `vgirpc:"name"`
+	MacroType             string                    `vgirpc:"macro_type,enum"`
+	Overloads             []generated.MacroOverload `vgirpc:"overloads"`
+	OnConflict            string                    `vgirpc:"on_conflict,enum"`
+	TransactionOpaqueData *[]byte                   `vgirpc:"transaction_opaque_data"`
 }
 
 // TableCreateRequestWire is for catalog_table_create.
 type TableCreateRequestWire struct {
-	AttachOpaqueData      []byte    `vgirpc:"attach_opaque_data"`
-	SchemaPath            []string  `vgirpc:"schema_path"`
-	Name                  string    `vgirpc:"name"`
-	Columns               []byte    `vgirpc:"columns"`
-	OnConflict            string    `vgirpc:"on_conflict,enum"`
-	NotNullConstraints    []int32   `vgirpc:"not_null_constraints"`
-	UniqueConstraints     [][]int32 `vgirpc:"unique_constraints"`
-	CheckConstraints      []string  `vgirpc:"check_constraints"`
-	PrimaryKeyConstraints [][]int32 `vgirpc:"primary_key_constraints"`
-	ForeignKeyConstraints [][]byte  `vgirpc:"foreign_key_constraints"`
-	TransactionOpaqueData *[]byte   `vgirpc:"transaction_opaque_data"`
+	AttachOpaqueData      []byte             `vgirpc:"attach_opaque_data"`
+	SchemaPath            []string           `vgirpc:"schema_path"`
+	Name                  string             `vgirpc:"name"`
+	Columns               []byte             `vgirpc:"columns"`
+	OnConflict            string             `vgirpc:"on_conflict,enum"`
+	ConstraintDefinitions [][]byte           `vgirpc:"constraint_definitions"`
+	TransactionOpaqueData *[]byte            `vgirpc:"transaction_opaque_data"`
+	Comment               *string            `vgirpc:"comment"`
+	Tags                  *map[string]string `vgirpc:"tags"`
+	Options               *[]byte            `vgirpc:"options"`
+	Layout                *[]byte            `vgirpc:"layout"`
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +246,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		si := &catalogSchemaInfo{
 			info: &SchemaInfo{
 				Path:    strings.Split(name, "\x00"),
-				Comment: comment,
+				Comment: descriptorComment(comment),
 			},
 		}
 		cat.schemas[name] = si
@@ -437,7 +430,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 			continue
 		}
 		cat.schemas[name] = &catalogSchemaInfo{
-			info: &SchemaInfo{Path: strings.Split(name, "\x00"), Comment: comment},
+			info: &SchemaInfo{Path: strings.Split(name, "\x00"), Comment: descriptorComment(comment)},
 		}
 	}
 
@@ -568,7 +561,7 @@ func readOnlyErr(op string) error {
 	}
 }
 
-// CatalogCatalogs serves vgi.v2 catalog_catalogs.
+// CatalogCatalogs serves vgi.v3 catalog_catalogs.
 func (w workerService) CatalogCatalogs(ctx context.Context, callCtx *vgirpc.CallContext, _ CatalogCatalogsParams) (CatalogsResponseWire, error) {
 	info := &CatalogInfo{Name: w.catalogName}
 	if w.catalogInfoOverride != nil {
@@ -631,7 +624,7 @@ func (w workerService) CatalogCatalogs(ctx context.Context, callCtx *vgirpc.Call
 	return CatalogsResponseWire{Items: items}, nil
 }
 
-// CatalogAttach serves vgi.v2 catalog_attach.
+// CatalogAttach serves vgi.v3 catalog_attach.
 func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogAttachRequestWire) (CatalogAttachResultWire, error) {
 	// A vgi_attach_ticket is redeemed before anything else -- before
 	// routing, so the sealed catalog name picks the catalog, and
@@ -771,12 +764,21 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 	// to embed the chosen version into attach_opaque_data.
 	attachOpaqueDataRequired := false
 	var resolvedData, resolvedImpl *string
+	var catalogCapabilities, selectedCapabilities *[]byte
 	if w.attachValidator != nil {
 		decision, vErr := w.attachValidator(&req, callCtx)
 		if vErr != nil {
 			return CatalogAttachResultWire{}, rewrapError("ValueError", vErr)
 		}
 		if decision != nil {
+			if decision.CatalogCapabilities != nil {
+				value := append([]byte(nil), decision.CatalogCapabilities...)
+				catalogCapabilities = &value
+			}
+			if decision.SelectedCapabilities != nil {
+				value := append([]byte(nil), decision.SelectedCapabilities...)
+				selectedCapabilities = &value
+			}
 			if decision.AttachOpaqueData != nil {
 				attachOpaqueData = decision.AttachOpaqueData
 				attachOpaqueDataRequired = true
@@ -831,6 +833,7 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 		}
 		globalFunctionPrefix = w.globalFunctionPrefix
 	}
+	defaultSchema := "main"
 	result := CatalogAttachResultWire{
 		AttachOpaqueData:              attachOpaqueData,
 		SupportsTransactions:          w.supportsTransactions,
@@ -838,7 +841,7 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 		CatalogVersionFrozen:          true,
 		CatalogVersion:                version,
 		AttachOpaqueDataRequired:      attachOpaqueDataRequired,
-		DefaultSchema:                 "main",
+		DefaultSchema:                 &defaultSchema,
 		Settings:                      serializedSettings,
 		SecretTypes:                   serializedSecretTypes,
 		AttachCatalogs:                serializedAttachCatalogs,
@@ -848,6 +851,8 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 		GlobalFunctionPrefix:          globalFunctionPrefix,
 		ResolvedDataVersion:           resolvedData,
 		ResolvedImplementationVersion: resolvedImpl,
+		CatalogCapabilities:           catalogCapabilities,
+		SelectedCapabilities:          selectedCapabilities,
 		// The default catalog is static and version-frozen, so the
 		// whole of it can be served in one catalog_contents call.
 		SupportsCatalogContents: !w.catalogContentsDisabled,
@@ -873,12 +878,12 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 	return result, nil
 }
 
-// CatalogDetach serves vgi.v2 catalog_detach.
+// CatalogDetach serves vgi.v3 catalog_detach.
 func (w workerService) CatalogDetach(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogDetachParams) error {
 	return nil
 }
 
-// CatalogVersion serves vgi.v2 catalog_version.
+// CatalogVersion serves vgi.v3 catalog_version.
 func (w workerService) CatalogVersion(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogVersionParams) (CatalogVersionResponseWire, error) {
 	version, err := w.catalogVersionOf(req.AttachOpaqueData, callCtx)
 	if err != nil {
@@ -887,14 +892,14 @@ func (w workerService) CatalogVersion(ctx context.Context, callCtx *vgirpc.CallC
 	return CatalogVersionResponseWire{Version: version}, nil
 }
 
-// CatalogContents serves vgi.v2 catalog_contents — every schema and all of its
+// CatalogContents serves vgi.v3 catalog_contents — every schema and all of its
 // contents in one call (protocol 2.1.0). Composed from the same listings the
 // per-schema RPCs below serve; see catalog_contents.go.
 func (w workerService) CatalogContents(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogContentsParams) (generated.CatalogContentsResponse, error) {
 	return w.catalogContents(req, callCtx)
 }
 
-// CatalogTransactionBegin serves vgi.v2 catalog_transaction_begin — allocate a
+// CatalogTransactionBegin serves vgi.v3 catalog_transaction_begin — allocate a
 // fresh transaction id when the worker advertises transaction support, so
 // DuckDB threads it through bind/scan inside BEGIN/COMMIT (enables
 // transaction-scoped storage).
@@ -913,21 +918,21 @@ func (w workerService) CatalogTransactionBegin(ctx context.Context, callCtx *vgi
 	return TransactionBeginResponseWire{TransactionOpaqueData: &tx}, nil
 }
 
-// CatalogTransactionCommit serves vgi.v2 catalog_transaction_commit — clear
+// CatalogTransactionCommit serves vgi.v3 catalog_transaction_commit — clear
 // per-transaction storage.
 func (w workerService) CatalogTransactionCommit(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTransactionCommitParams) error {
 	w.clearTransactionState(req.TransactionOpaqueData)
 	return nil
 }
 
-// CatalogTransactionRollback serves vgi.v2 catalog_transaction_rollback — same
+// CatalogTransactionRollback serves vgi.v3 catalog_transaction_rollback — same
 // cleanup path as commit.
 func (w workerService) CatalogTransactionRollback(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTransactionRollbackParams) error {
 	w.clearTransactionState(req.TransactionOpaqueData)
 	return nil
 }
 
-// CatalogSchemas serves vgi.v2 catalog_schemas.
+// CatalogSchemas serves vgi.v3 catalog_schemas.
 func (w workerService) CatalogSchemas(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogSchemasParams) (ItemsResponseWire, error) {
 	infos, err := w.listSchemaInfos(req.AttachOpaqueData)
 	if err != nil {
@@ -944,7 +949,7 @@ func (w workerService) CatalogSchemas(ctx context.Context, callCtx *vgirpc.CallC
 	return ItemsResponseWire{Items: items}, nil
 }
 
-// CatalogSchemaGet serves vgi.v2 catalog_schema_get.
+// CatalogSchemaGet serves vgi.v3 catalog_schema_get.
 func (w workerService) CatalogSchemaGet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogSchemaGetParams) (ItemsResponseWire, error) {
 	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 		items, err := w.writableSchemaGet(wc, req.Path)
@@ -971,15 +976,21 @@ func (w workerService) CatalogSchemaGet(ctx context.Context, callCtx *vgirpc.Cal
 	return ItemsResponseWire{Items: [][]byte{data}}, nil
 }
 
-// CatalogSchemaCreate serves vgi.v2 catalog_schema_create.
+// CatalogSchemaCreate serves vgi.v3 catalog_schema_create.
 func (w workerService) CatalogSchemaCreate(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogSchemaCreateParams) error {
+	if req.Options != nil {
+		return methodNotImplemented("catalog_schema_create options require negotiated vgi.schema.options.create.v1")
+	}
 	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
+		if (req.Tags != nil && len(*req.Tags) != 0) || req.Comment != nil && *req.Comment == "" {
+			return methodNotImplemented("writable schema tags and empty comments are not supported")
+		}
 		return w.writableSchemaCreate(wc, req.Path, parseOnConflict(req.OnConflict), req.Comment)
 	}
 	return readOnlyErr("catalog_schema_create")
 }
 
-// CatalogSchemaDrop serves vgi.v2 catalog_schema_drop.
+// CatalogSchemaDrop serves vgi.v3 catalog_schema_drop.
 func (w workerService) CatalogSchemaDrop(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogSchemaDropParams) error {
 	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 		return w.writableSchemaDrop(wc, req.Path, req.IgnoreNotFound, req.Cascade)
@@ -987,7 +998,7 @@ func (w workerService) CatalogSchemaDrop(ctx context.Context, callCtx *vgirpc.Ca
 	return readOnlyErr("catalog_schema_drop")
 }
 
-// CatalogSchemaContentsTables serves vgi.v2 catalog_schema_contents_tables.
+// CatalogSchemaContentsTables serves vgi.v3 catalog_schema_contents_tables.
 func (w workerService) CatalogSchemaContentsTables(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogSchemaContentsTablesParams) (ItemsResponseWire, error) {
 	items, err := w.listTableItems(req.AttachOpaqueData, req.Path)
 	if err != nil {
@@ -996,7 +1007,7 @@ func (w workerService) CatalogSchemaContentsTables(ctx context.Context, callCtx 
 	return ItemsResponseWire{Items: items}, nil
 }
 
-// CatalogSchemaContentsViews serves vgi.v2 catalog_schema_contents_views.
+// CatalogSchemaContentsViews serves vgi.v3 catalog_schema_contents_views.
 func (w workerService) CatalogSchemaContentsViews(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogSchemaContentsViewsParams) (ItemsResponseWire, error) {
 	items, err := w.listViewItems(req.AttachOpaqueData, req.Path)
 	if err != nil {
@@ -1005,7 +1016,7 @@ func (w workerService) CatalogSchemaContentsViews(ctx context.Context, callCtx *
 	return ItemsResponseWire{Items: items}, nil
 }
 
-// CatalogSchemaContentsFunctions serves vgi.v2
+// CatalogSchemaContentsFunctions serves vgi.v3
 // catalog_schema_contents_functions.
 func (w workerService) CatalogSchemaContentsFunctions(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogSchemaContentsFunctionsParams) (ItemsResponseWire, error) {
 	LogCatalog.Debug("catalog: listing functions", "schema", schemaPathDisplay(req.Path), "type", req.Type)
@@ -1016,7 +1027,7 @@ func (w workerService) CatalogSchemaContentsFunctions(ctx context.Context, callC
 	return ItemsResponseWire{Items: items}, nil
 }
 
-// CatalogCopyFromFormats serves vgi.v2 catalog_copy_from_formats — list custom
+// CatalogCopyFromFormats serves vgi.v3 catalog_copy_from_formats — list custom
 // COPY ... FROM formats advertised by this catalog (catalog-level, not
 // schema-scoped). Returns an empty list when the worker registers no copy-from
 // formats. The VGI extension registers one DuckDB CopyFunction per returned
@@ -1033,7 +1044,7 @@ func (w workerService) CatalogCopyFromFormats(ctx context.Context, callCtx *vgir
 	return ItemsResponseWire{Items: items}, nil
 }
 
-// CatalogTableGet serves vgi.v2 catalog_table_get.
+// CatalogTableGet serves vgi.v3 catalog_table_get.
 func (w workerService) CatalogTableGet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableGetParams) (ItemsResponseWire, error) {
 	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 		items, err := w.writableTableGet(wc, req.SchemaPath, req.Name)
@@ -1088,15 +1099,21 @@ func (w workerService) CatalogTableGet(ctx context.Context, callCtx *vgirpc.Call
 	return ItemsResponseWire{Items: [][]byte{}}, nil
 }
 
-// CatalogTableCreate serves vgi.v2 catalog_table_create.
+// CatalogTableCreate serves vgi.v3 catalog_table_create.
 func (w workerService) CatalogTableCreate(ctx context.Context, callCtx *vgirpc.CallContext, req TableCreateRequestWire) error {
+	if len(req.ConstraintDefinitions) > 0 {
+		return methodNotImplemented("catalog_table_create: canonical constraint enforcement")
+	}
+	if req.Comment != nil || req.Tags != nil || req.Options != nil || req.Layout != nil {
+		return methodNotImplemented("catalog_table_create")
+	}
 	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 		return w.writableTableCreate(wc, req)
 	}
 	return readOnlyErr("catalog_table_create")
 }
 
-// CatalogTableDrop serves vgi.v2 catalog_table_drop.
+// CatalogTableDrop serves vgi.v3 catalog_table_drop.
 func (w workerService) CatalogTableDrop(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableDropParams) error {
 	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 		return w.writableTableDrop(wc, req.SchemaPath, req.Name, req.IgnoreNotFound, req.Cascade)
@@ -1104,7 +1121,7 @@ func (w workerService) CatalogTableDrop(ctx context.Context, callCtx *vgirpc.Cal
 	return readOnlyErr("catalog_table_drop")
 }
 
-// CatalogTableScanFunctionGet serves vgi.v2 catalog_table_scan_function_get.
+// CatalogTableScanFunctionGet serves vgi.v3 catalog_table_scan_function_get.
 func (w workerService) CatalogTableScanFunctionGet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableScanFunctionGetParams) (TableScanFunctionGetResponseWire, error) {
 	result, err := w.resolveScanFunction(req)
 	if err != nil {
@@ -1113,7 +1130,7 @@ func (w workerService) CatalogTableScanFunctionGet(ctx context.Context, callCtx 
 	return buildScanFunctionGetResponse(result)
 }
 
-// CatalogTableScanBranchesGet serves vgi.v2 catalog_table_scan_branches_get —
+// CatalogTableScanBranchesGet serves vgi.v3 catalog_table_scan_branches_get —
 // multi-branch (UNION-of-sources) tables. For non-branch tables it wraps the
 // single scan_function_get result as a one-branch list, mirroring vgi-python's
 // default implementation, so the method is always implemented (never triggers a
@@ -1149,62 +1166,62 @@ func (w workerService) CatalogTableScanBranchesGet(ctx context.Context, callCtx 
 	})
 }
 
-// CatalogTableCommentSet serves vgi.v2 catalog_table_comment_set (read-only).
+// CatalogTableCommentSet serves vgi.v3 catalog_table_comment_set (read-only).
 func (w workerService) CatalogTableCommentSet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableCommentSetParams) error {
 	return readOnlyErr("catalog_table_comment_set")
 }
 
-// CatalogTableRename serves vgi.v2 catalog_table_rename (read-only).
+// CatalogTableRename serves vgi.v3 catalog_table_rename (read-only).
 func (w workerService) CatalogTableRename(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableRenameParams) error {
 	return readOnlyErr("catalog_table_rename")
 }
 
-// CatalogTableColumnAdd serves vgi.v2 catalog_table_column_add (read-only).
+// CatalogTableColumnAdd serves vgi.v3 catalog_table_column_add (read-only).
 func (w workerService) CatalogTableColumnAdd(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableColumnAddParams) error {
 	return readOnlyErr("catalog_table_column_add")
 }
 
-// CatalogTableColumnDrop serves vgi.v2 catalog_table_column_drop (read-only).
+// CatalogTableColumnDrop serves vgi.v3 catalog_table_column_drop (read-only).
 func (w workerService) CatalogTableColumnDrop(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableColumnDropParams) error {
 	return readOnlyErr("catalog_table_column_drop")
 }
 
-// CatalogTableColumnRename serves vgi.v2 catalog_table_column_rename
+// CatalogTableColumnRename serves vgi.v3 catalog_table_column_rename
 // (read-only).
 func (w workerService) CatalogTableColumnRename(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableColumnRenameParams) error {
 	return readOnlyErr("catalog_table_column_rename")
 }
 
-// CatalogTableColumnDefaultSet serves vgi.v2 catalog_table_column_default_set
+// CatalogTableColumnDefaultSet serves vgi.v3 catalog_table_column_default_set
 // (read-only).
 func (w workerService) CatalogTableColumnDefaultSet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableColumnDefaultSetParams) error {
 	return readOnlyErr("catalog_table_column_default_set")
 }
 
-// CatalogTableColumnDefaultDrop serves vgi.v2 catalog_table_column_default_drop
+// CatalogTableColumnDefaultDrop serves vgi.v3 catalog_table_column_default_drop
 // (read-only).
 func (w workerService) CatalogTableColumnDefaultDrop(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableColumnDefaultDropParams) error {
 	return readOnlyErr("catalog_table_column_default_drop")
 }
 
-// CatalogTableColumnTypeChange serves vgi.v2 catalog_table_column_type_change
+// CatalogTableColumnTypeChange serves vgi.v3 catalog_table_column_type_change
 // (read-only).
 func (w workerService) CatalogTableColumnTypeChange(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableColumnTypeChangeParams) error {
 	return readOnlyErr("catalog_table_column_type_change")
 }
 
-// CatalogTableNotNullSet serves vgi.v2 catalog_table_not_null_set (read-only).
+// CatalogTableNotNullSet serves vgi.v3 catalog_table_not_null_set (read-only).
 func (w workerService) CatalogTableNotNullSet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableNotNullSetParams) error {
 	return readOnlyErr("catalog_table_not_null_set")
 }
 
-// CatalogTableNotNullDrop serves vgi.v2 catalog_table_not_null_drop
+// CatalogTableNotNullDrop serves vgi.v3 catalog_table_not_null_drop
 // (read-only).
 func (w workerService) CatalogTableNotNullDrop(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableNotNullDropParams) error {
 	return readOnlyErr("catalog_table_not_null_drop")
 }
 
-// CatalogViewGet serves vgi.v2 catalog_view_get.
+// CatalogViewGet serves vgi.v3 catalog_view_get.
 func (w workerService) CatalogViewGet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogViewGetParams) (ItemsResponseWire, error) {
 	if w.catalog == nil {
 		return ItemsResponseWire{Items: [][]byte{}}, nil
@@ -1216,11 +1233,14 @@ func (w workerService) CatalogViewGet(ctx context.Context, callCtx *vgirpc.CallC
 	for _, cv := range si.views {
 		if cv.Name == req.Name {
 			info := &ViewInfo{
-				Name:       cv.Name,
-				SchemaPath: req.SchemaPath,
-				Comment:    cv.Comment,
-				Tags:       cv.Tags,
-				Definition: cv.Definition,
+				Name:           cv.Name,
+				SchemaPath:     req.SchemaPath,
+				Comment:        descriptorComment(cv.Comment),
+				Tags:           cv.Tags,
+				Definition:     cv.Definition,
+				Aliases:        slices.Clone(cv.Aliases),
+				Security:       cv.Security,
+				ColumnComments: cv.ColumnComments,
 			}
 			data, err := SerializeViewInfo(info)
 			if err != nil {
@@ -1232,27 +1252,32 @@ func (w workerService) CatalogViewGet(ctx context.Context, callCtx *vgirpc.CallC
 	return ItemsResponseWire{Items: [][]byte{}}, nil
 }
 
-// CatalogViewCreate serves vgi.v2 catalog_view_create (read-only).
+// CatalogViewCreate serves vgi.v3 catalog_view_create (read-only).
 func (w workerService) CatalogViewCreate(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogViewCreateParams) error {
 	return readOnlyErr("catalog_view_create")
 }
 
-// CatalogViewDrop serves vgi.v2 catalog_view_drop (read-only).
+// CatalogViewDrop serves vgi.v3 catalog_view_drop (read-only).
 func (w workerService) CatalogViewDrop(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogViewDropParams) error {
 	return readOnlyErr("catalog_view_drop")
 }
 
-// CatalogViewRename serves vgi.v2 catalog_view_rename (read-only).
+// CatalogViewRename serves vgi.v3 catalog_view_rename (read-only).
 func (w workerService) CatalogViewRename(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogViewRenameParams) error {
 	return readOnlyErr("catalog_view_rename")
 }
 
-// CatalogViewCommentSet serves vgi.v2 catalog_view_comment_set (read-only).
+// CatalogViewColumnCommentSet serves the read-only descriptor catalog.
+func (w workerService) CatalogViewColumnCommentSet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogViewColumnCommentSetParams) error {
+	return readOnlyErr("catalog_view_column_comment_set")
+}
+
+// CatalogViewCommentSet serves vgi.v3 catalog_view_comment_set (read-only).
 func (w workerService) CatalogViewCommentSet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogViewCommentSetParams) error {
 	return readOnlyErr("catalog_view_comment_set")
 }
 
-// CatalogMacroGet serves vgi.v2 catalog_macro_get.
+// CatalogMacroGet serves vgi.v3 catalog_macro_get.
 func (w workerService) CatalogMacroGet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogMacroGetParams) (ItemsResponseWire, error) {
 	if w.catalog == nil {
 		return ItemsResponseWire{Items: [][]byte{}}, nil
@@ -1277,7 +1302,7 @@ func (w workerService) CatalogMacroGet(ctx context.Context, callCtx *vgirpc.Call
 	return ItemsResponseWire{Items: [][]byte{}}, nil
 }
 
-// CatalogSchemaContentsMacros serves vgi.v2 catalog_schema_contents_macros.
+// CatalogSchemaContentsMacros serves vgi.v3 catalog_schema_contents_macros.
 func (w workerService) CatalogSchemaContentsMacros(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogSchemaContentsMacrosParams) (ItemsResponseWire, error) {
 	items, err := w.listMacroItems(req.AttachOpaqueData, req.Path, req.Type)
 	if err != nil {
@@ -1286,27 +1311,27 @@ func (w workerService) CatalogSchemaContentsMacros(ctx context.Context, callCtx 
 	return ItemsResponseWire{Items: items}, nil
 }
 
-// CatalogMacroCreate serves vgi.v2 catalog_macro_create (read-only).
+// CatalogMacroCreate serves vgi.v3 catalog_macro_create (read-only).
 func (w workerService) CatalogMacroCreate(ctx context.Context, callCtx *vgirpc.CallContext, req MacroCreateRequestWire) error {
 	return readOnlyErr("catalog_macro_create")
 }
 
-// CatalogMacroDrop serves vgi.v2 catalog_macro_drop (read-only).
+// CatalogMacroDrop serves vgi.v3 catalog_macro_drop (read-only).
 func (w workerService) CatalogMacroDrop(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogMacroDropParams) error {
 	return readOnlyErr("catalog_macro_drop")
 }
 
-// CatalogCreate serves vgi.v2 catalog_create (read-only).
+// CatalogCreate serves vgi.v3 catalog_create (read-only).
 func (w workerService) CatalogCreate(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogCreateRequestWire) error {
 	return readOnlyErr("catalog_create")
 }
 
-// CatalogDrop serves vgi.v2 catalog_drop (read-only).
+// CatalogDrop serves vgi.v3 catalog_drop (read-only).
 func (w workerService) CatalogDrop(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogDropParams) error {
 	return readOnlyErr("catalog_drop")
 }
 
-// CatalogTableInsertFunctionGet serves vgi.v2
+// CatalogTableInsertFunctionGet serves vgi.v3
 // catalog_table_insert_function_get.
 func (w workerService) CatalogTableInsertFunctionGet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableInsertFunctionGetParams) (TableScanFunctionGetResponseWire, error) {
 	if w.attachWriteFunctionGetHandler != nil {
@@ -1329,7 +1354,7 @@ func (w workerService) CatalogTableInsertFunctionGet(ctx context.Context, callCt
 	})
 }
 
-// CatalogTableUpdateFunctionGet serves vgi.v2
+// CatalogTableUpdateFunctionGet serves vgi.v3
 // catalog_table_update_function_get.
 func (w workerService) CatalogTableUpdateFunctionGet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableUpdateFunctionGetParams) (TableScanFunctionGetResponseWire, error) {
 	if w.attachWriteFunctionGetHandler != nil {
@@ -1352,7 +1377,7 @@ func (w workerService) CatalogTableUpdateFunctionGet(ctx context.Context, callCt
 	})
 }
 
-// CatalogTableDeleteFunctionGet serves vgi.v2
+// CatalogTableDeleteFunctionGet serves vgi.v3
 // catalog_table_delete_function_get.
 func (w workerService) CatalogTableDeleteFunctionGet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableDeleteFunctionGetParams) (TableScanFunctionGetResponseWire, error) {
 	if w.attachWriteFunctionGetHandler != nil {
@@ -1375,7 +1400,7 @@ func (w workerService) CatalogTableDeleteFunctionGet(ctx context.Context, callCt
 	})
 }
 
-// CatalogTableColumnStatisticsGet serves vgi.v2
+// CatalogTableColumnStatisticsGet serves vgi.v3
 // catalog_table_column_statistics_get — returns raw IPC bytes in the standard
 // "result" binary column. Using []byte directly (not a struct wrapper) avoids
 // vgi-rpc-go's struct-to-IPC double-wrap, so the C++ extension's
@@ -1460,38 +1485,54 @@ func resolveColumnGroupIndices(columns *arrow.Schema, groups [][]string) [][]int
 	return result
 }
 
-// validateRequiredFilters checks a table's CNF required-filter groups. Each
-// OR-group must be non-empty and contain no empty strings, and the leading
-// dotted segment of every path must name a real column on the table. Returns
-// nil when groups is empty (the no-enforcement fast path) or columns is nil.
-func validateRequiredFilters(tableName string, columns *arrow.Schema, groups [][]string) error {
-	if len(groups) == 0 {
-		return nil
-	}
-	columnNames := map[string]struct{}{}
-	if columns != nil {
-		for i := 0; i < columns.NumFields(); i++ {
-			columnNames[columns.Field(i).Name] = struct{}{}
-		}
-	}
+// validateRequiredFilters validates raw paths without splitting or folding names.
+func validateRequiredFilters(tableName string, columns *arrow.Schema, groups [][][]string) error {
 	for _, group := range groups {
 		if len(group) == 0 {
 			return fmt.Errorf("table %q: required_filters must not contain empty groups", tableName)
 		}
+		seen := map[string]bool{}
 		for _, path := range group {
-			if path == "" {
-				return fmt.Errorf("table %q: required_filters must not contain empty strings", tableName)
+			if len(path) == 0 {
+				return fmt.Errorf("table %q: required_filters must not contain empty paths", tableName)
 			}
-			if columns == nil {
-				continue
+			var fields []arrow.Field
+			if columns != nil {
+				fields = columns.Fields()
 			}
-			head := path
-			if idx := strings.IndexByte(path, '.'); idx >= 0 {
-				head = path[:idx]
+			key := ""
+			for i, part := range path {
+				if part == "" || strings.ContainsRune(part, 0) {
+					return fmt.Errorf("invalid required_filters component")
+				}
+				key += fmt.Sprintf("%d:%s", len(part), part)
+				if columns == nil {
+					continue
+				}
+				var found *arrow.Field
+				for j := range fields {
+					if fields[j].Name == part {
+						if found != nil {
+							return fmt.Errorf("ambiguous required_filters component %q", part)
+						}
+						found = &fields[j]
+					}
+				}
+				if found == nil {
+					return fmt.Errorf("unknown required_filters component %q", part)
+				}
+				if i+1 < len(path) {
+					st, ok := found.Type.(*arrow.StructType)
+					if !ok {
+						return fmt.Errorf("non-struct required_filters parent %q", part)
+					}
+					fields = st.Fields()
+				}
 			}
-			if _, ok := columnNames[head]; !ok {
-				return fmt.Errorf("table %q: required_filters path %q references unknown column %q", tableName, path, head)
+			if seen[key] {
+				return fmt.Errorf("duplicate required_filters path")
 			}
+			seen[key] = true
 		}
 	}
 	return nil
@@ -1507,6 +1548,9 @@ func (w *Worker) serializeCatalogTable(schemaPath SchemaPath, ct *CatalogTable) 
 }
 
 func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*TableInfo, error) {
+	if len(ct.NotNull)+len(ct.Unique)+len(ct.PrimaryKey)+len(ct.Check)+len(ct.ForeignKey) > 0 {
+		return nil, methodNotImplemented("legacy constraint metadata requires explicit canonical records")
+	}
 	// Resolve columns: if Function is set but Columns is nil, derive via OnBind
 	columns := ct.Columns
 	if columns == nil && ct.Function != nil {
@@ -1534,7 +1578,7 @@ func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*Tab
 	// Apply generated-column expressions as Arrow field metadata
 	if len(ct.Generated) > 0 && columns != nil {
 		var err error
-		columns, err = applyGenerated(columns, ct.Generated)
+		columns, err = applyGenerated(columns, ct.Generated, schemaPath)
 		if err != nil {
 			return nil, fmt.Errorf("applying generated columns for table %s: %w", ct.Name, err)
 		}
@@ -1549,27 +1593,9 @@ func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*Tab
 		}
 	}
 
-	// Resolve constraint column indices from names
-	notNull := resolveColumnIndices(columns, ct.NotNull)
-	unique := resolveColumnGroupIndices(columns, ct.Unique)
-	primaryKey := resolveColumnGroupIndices(columns, ct.PrimaryKey)
-
-	// Validate required_filters (CNF): each OR-group must be non-empty and
-	// contain no empty strings, and the leading dotted segment of each path
-	// must be a real column on this table. Mirrors vgi-python's descriptor
-	// validation; struct-subfield validity is left to DuckDB's binder.
+	// Validate every raw path against the complete schema.
 	if err := validateRequiredFilters(ct.Name, columns, ct.RequiredFilters); err != nil {
 		return nil, err
-	}
-
-	// Serialize FOREIGN KEY constraints
-	var foreignKeys [][]byte
-	for _, fk := range ct.ForeignKey {
-		fkBytes, err := serializeForeignKey(schemaPath, &fk)
-		if err != nil {
-			return nil, fmt.Errorf("serializing foreign key for table %s: %w", ct.Name, err)
-		}
-		foreignKeys = append(foreignKeys, fkBytes)
 	}
 
 	info := &TableInfo{
@@ -1578,11 +1604,8 @@ func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*Tab
 		Comment:                  ct.Comment,
 		Tags:                     ct.Tags,
 		Columns:                  columns,
-		NotNullConstraints:       notNull,
-		UniqueConstraints:        unique,
-		CheckConstraints:         ct.Check,
-		PrimaryKeyConstraints:    primaryKey,
-		ForeignKeyConstraints:    foreignKeys,
+		Constraints:              ct.Constraints,
+		DefinitionRevision:       ct.DefinitionRevision,
 		SupportsColumnStatistics: len(ct.Statistics) > 0,
 		CardinalityEstimate:      ct.CardinalityEstimate,
 		CardinalityMax:           ct.CardinalityMax,

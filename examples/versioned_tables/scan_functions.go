@@ -14,22 +14,22 @@ import (
 
 var (
 	AnimalsSchemaV1 = arrow.NewSchema([]arrow.Field{
-		{Name: "name", Type: arrow.BinaryTypes.String},
-		{Name: "legs", Type: arrow.PrimitiveTypes.Int64},
-		{Name: "sound", Type: arrow.BinaryTypes.String},
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: "legs", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		{Name: "sound", Type: arrow.BinaryTypes.String, Nullable: true},
 	}, nil)
 
 	AnimalsSchemaV11 = arrow.NewSchema([]arrow.Field{
-		{Name: "name", Type: arrow.BinaryTypes.String},
-		{Name: "legs", Type: arrow.PrimitiveTypes.Int64},
-		{Name: "sound", Type: arrow.BinaryTypes.String},
-		{Name: "color", Type: arrow.BinaryTypes.String},
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: "legs", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		{Name: "sound", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: "color", Type: arrow.BinaryTypes.String, Nullable: true},
 	}, nil)
 
 	PlantsSchema = arrow.NewSchema([]arrow.Field{
-		{Name: "name", Type: arrow.BinaryTypes.String},
-		{Name: "kind", Type: arrow.BinaryTypes.String},
-		{Name: "height_m", Type: arrow.PrimitiveTypes.Float64},
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: "kind", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: "height_m", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
 	}, nil)
 
 	animalNames  = []string{"chicken", "cow", "horse", "pig", "sheep"}

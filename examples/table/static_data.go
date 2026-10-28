@@ -8,7 +8,6 @@ import (
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
 )
 
 // ---------------------------------------------------------------------------
@@ -18,7 +17,7 @@ import (
 var DepartmentsSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "id", Type: arrow.PrimitiveTypes.Int64},
 	{Name: "name", Type: arrow.BinaryTypes.String},
-	{Name: "budget", Type: arrow.PrimitiveTypes.Float64},
+	{Name: "budget", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
 }, nil)
 
 type DepartmentsScanFunction struct{}
@@ -49,22 +48,12 @@ func (f *DepartmentsScanFunction) NewState(params *vgi.ProcessParams) (*staticDo
 
 func (f *DepartmentsScanFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *staticDone, out *vgirpc.OutputCollector) error {
 	if state.Done {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	state.Done = true
 
-	ids := vgi.BuildInt64Array(3, func(i int64) int64 { return i + 1 })
-	names := vgi.BuildStringArray(3, func(i int64) string {
-		return []string{"Engineering", "Sales", "HR"}[i]
-	})
-	budgets := vgi.BuildFloat64Array(3, func(i int64) float64 {
-		return []float64{500000.0, 300000.0, 200000.0}[i]
-	})
-
-	batch := array.NewRecordBatch(DepartmentsSchema, []arrow.Array{ids, names, budgets}, 3)
-	out.Emit(batch)
-	return nil
+	batch := departmentsFixtureRows()
+	return out.Emit(batch)
 }
 
 func NewDepartmentsScanFunction() vgi.TableFunction {
@@ -79,7 +68,7 @@ var EmployeesSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "id", Type: arrow.PrimitiveTypes.Int64},
 	{Name: "name", Type: arrow.BinaryTypes.String},
 	{Name: "email", Type: arrow.BinaryTypes.String},
-	{Name: "department_id", Type: arrow.PrimitiveTypes.Int64},
+	{Name: "department_id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 }, nil)
 
 type EmployeesScanFunction struct{}
@@ -108,25 +97,12 @@ func (f *EmployeesScanFunction) NewState(params *vgi.ProcessParams) (*staticDone
 
 func (f *EmployeesScanFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *staticDone, out *vgirpc.OutputCollector) error {
 	if state.Done {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	state.Done = true
 
-	ids := vgi.BuildInt64Array(5, func(i int64) int64 { return i + 1 })
-	names := vgi.BuildStringArray(5, func(i int64) string {
-		return []string{"Alice", "Bob", "Carol", "Dave", "Eve"}[i]
-	})
-	emails := vgi.BuildStringArray(5, func(i int64) string {
-		return []string{"alice@co.com", "bob@co.com", "carol@co.com", "dave@co.com", "eve@co.com"}[i]
-	})
-	deptIDs := vgi.BuildInt64Array(5, func(i int64) int64 {
-		return []int64{1, 1, 2, 2, 3}[i]
-	})
-
-	batch := array.NewRecordBatch(EmployeesSchema, []arrow.Array{ids, names, emails, deptIDs}, 5)
-	out.Emit(batch)
-	return nil
+	batch := employeesFixtureRows()
+	return out.Emit(batch)
 }
 
 func NewEmployeesScanFunction() vgi.TableFunction {
@@ -169,24 +145,12 @@ func (f *ProjectsScanFunction) NewState(params *vgi.ProcessParams) (*staticDone,
 
 func (f *ProjectsScanFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *staticDone, out *vgirpc.OutputCollector) error {
 	if state.Done {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	state.Done = true
 
-	deptIDs := vgi.BuildInt64Array(3, func(i int64) int64 {
-		return []int64{1, 1, 2}[i]
-	})
-	codes := vgi.BuildStringArray(3, func(i int64) string {
-		return []string{"P001", "P002", "P003"}[i]
-	})
-	titles := vgi.BuildStringArray(3, func(i int64) string {
-		return []string{"Backend API", "Frontend UI", "Sales Portal"}[i]
-	})
-
-	batch := array.NewRecordBatch(ProjectsSchema, []arrow.Array{deptIDs, codes, titles}, 3)
-	out.Emit(batch)
-	return nil
+	batch := projectsFixtureRows()
+	return out.Emit(batch)
 }
 
 func NewProjectsScanFunction() vgi.TableFunction {
@@ -199,9 +163,9 @@ func NewProjectsScanFunction() vgi.TableFunction {
 
 var ProductsSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "id", Type: arrow.PrimitiveTypes.Int64},
-	{Name: "name", Type: arrow.BinaryTypes.String},
-	{Name: "quantity", Type: arrow.PrimitiveTypes.Int64},
-	{Name: "price", Type: arrow.PrimitiveTypes.Float64},
+	{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
+	{Name: "quantity", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	{Name: "price", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
 }, nil)
 
 type ProductsScanFunction struct{}
@@ -230,11 +194,61 @@ func (f *ProductsScanFunction) NewState(params *vgi.ProcessParams) (*staticDone,
 
 func (f *ProductsScanFunction) Process(ctx context.Context, params *vgi.ProcessParams, state *staticDone, out *vgirpc.OutputCollector) error {
 	if state.Done {
-		out.Finish()
-		return nil
+		return out.Finish()
 	}
 	state.Done = true
 
+	batch := productsFixtureRows()
+	return out.Emit(batch)
+}
+
+func NewProductsScanFunction() vgi.TableFunction {
+	return vgi.AsTableFunction[staticDone](&ProductsScanFunction{})
+}
+
+// Immutable array sources shared by scans and catalog constraint validation.
+func departmentsFixtureRows() arrow.RecordBatch {
+	ids := vgi.BuildInt64Array(3, func(i int64) int64 { return i + 1 })
+	names := vgi.BuildStringArray(3, func(i int64) string {
+		return []string{"Engineering", "Sales", "HR"}[i]
+	})
+	budgets := vgi.BuildFloat64Array(3, func(i int64) float64 {
+		return []float64{500000.0, 300000.0, 200000.0}[i]
+	})
+
+	return constraintFixtureBatch(DepartmentsSchema, []arrow.Array{ids, names, budgets}, 3)
+}
+
+func employeesFixtureRows() arrow.RecordBatch {
+	ids := vgi.BuildInt64Array(5, func(i int64) int64 { return i + 1 })
+	names := vgi.BuildStringArray(5, func(i int64) string {
+		return []string{"Alice", "Bob", "Carol", "Dave", "Eve"}[i]
+	})
+	emails := vgi.BuildStringArray(5, func(i int64) string {
+		return []string{"alice@co.com", "bob@co.com", "carol@co.com", "dave@co.com", "eve@co.com"}[i]
+	})
+	deptIDs := vgi.BuildInt64Array(5, func(i int64) int64 {
+		return []int64{1, 1, 2, 2, 3}[i]
+	})
+
+	return constraintFixtureBatch(EmployeesSchema, []arrow.Array{ids, names, emails, deptIDs}, 5)
+}
+
+func projectsFixtureRows() arrow.RecordBatch {
+	deptIDs := vgi.BuildInt64Array(3, func(i int64) int64 {
+		return []int64{1, 1, 2}[i]
+	})
+	codes := vgi.BuildStringArray(3, func(i int64) string {
+		return []string{"P001", "P002", "P003"}[i]
+	})
+	titles := vgi.BuildStringArray(3, func(i int64) string {
+		return []string{"Backend API", "Frontend UI", "Sales Portal"}[i]
+	})
+
+	return constraintFixtureBatch(ProjectsSchema, []arrow.Array{deptIDs, codes, titles}, 3)
+}
+
+func productsFixtureRows() arrow.RecordBatch {
 	ids := vgi.BuildInt64Array(3, func(i int64) int64 { return i + 1 })
 	names := vgi.BuildStringArray(3, func(i int64) string {
 		return []string{"Widget", "Gadget", "Doohickey"}[i]
@@ -246,11 +260,5 @@ func (f *ProductsScanFunction) Process(ctx context.Context, params *vgi.ProcessP
 		return []float64{9.99, 24.99, 4.99}[i]
 	})
 
-	batch := array.NewRecordBatch(ProductsSchema, []arrow.Array{ids, names, quantities, prices}, 3)
-	out.Emit(batch)
-	return nil
-}
-
-func NewProductsScanFunction() vgi.TableFunction {
-	return vgi.AsTableFunction[staticDone](&ProductsScanFunction{})
+	return constraintFixtureBatch(ProductsSchema, []arrow.Array{ids, names, quantities, prices}, 3)
 }

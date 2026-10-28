@@ -132,6 +132,7 @@ func main() {
 		}),
 		vgi.WithAttachScanBranchesGetHandler(multiBranchScanBranchesGet),
 		vgi.WithAttachWriteFunctionGetHandler(schema_reconcile.AttachWriteFunctionGetHandler),
+		vgi.WithAttachValidator(fixtureAttachValidator),
 		vgi.WithSecretTypes(
 			vgi.SecretTypeSpec{
 				Name:        "vgi_example",
@@ -193,6 +194,7 @@ func main() {
 	// table-bufferings, aggregates, schema_reconcile). Catalog tables, secret
 	// types, and settings remain wired below — they're fixture-specific.
 	all.RegisterAll(w)
+	w.RegisterCatalogTable("main", vgi.CatalogTable{Name: "projection_rows", Function: &table.ProjectionSequence{}})
 
 	// Register the accumulate fixture (catalog-scoped, so it is invisible under
 	// the example catalog and preserves its function inventory).
@@ -231,9 +233,11 @@ func main() {
 
 	// Catalog tables
 
-	// Function-backed table: columns derived from sequence's OnBind
+	// Function-backed table with explicit SQL-nullable catalog columns.
+	// A scan's physical non-null array does not declare a SQL NOT NULL constraint.
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:     "large_sequence",
+		Columns:  arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil),
 		Comment:  "A large sequence of integers from 0 to 1,000,000",
 		Function: table.NewSequenceFunction(),
 		FuncArgs: []vgi.CatalogTableArg{
@@ -322,7 +326,7 @@ func main() {
 	// Multi-branch (scan-branches) tables. Their physical sources are resolved
 	// by multiBranchScanBranchesGet via catalog_table_scan_branches_get.
 	{
-		nCol := arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int64}}, nil)
+		nCol := arrow.NewSchema([]arrow.Field{{Name: "n", Nullable: true, Type: arrow.PrimitiveTypes.Int64}}, nil)
 		w.RegisterCatalogTable("data", vgi.CatalogTable{
 			Name:    "multi_branch_numbers",
 			Columns: nCol,
@@ -374,8 +378,8 @@ func main() {
 		w.RegisterCatalogTable("data", vgi.CatalogTable{
 			Name: "multi_branch_recon",
 			Columns: arrow.NewSchema([]arrow.Field{
-				{Name: "a", Type: arrow.PrimitiveTypes.Int64},
-				{Name: "b", Type: arrow.PrimitiveTypes.Int64},
+				{Name: "a", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
+				{Name: "b", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
 			}, nil),
 			Comment: "Multi-branch: column reconciliation — used by multi_branch_reconciliation.test",
 		})
@@ -386,16 +390,22 @@ func main() {
 	// / catalog/eager_load_threshold.test to verify catalog inlining.
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:     "ten_thousand_table",
+		Columns:  arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil),
 		Comment:  "Function-backed table over the no-arg ten_thousand function",
 		Function: table.NewTenThousandFunction(),
 	})
 
 	// Function-backed table over the secret-using secret_demo function. Its
 	// backing function declares RequiredSecrets and resolves the vgi_example
-	// secret in OnBind; the table schema derives from the static 3-column
+	// secret in OnBind; the catalog schema names the static 3-column
 	// key/value/arrow_type output. See secret/secret_function_backed_table.test.
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:     "secret_demo_table",
+		Name: "secret_demo_table",
+		Columns: arrow.NewSchema([]arrow.Field{
+			{Name: "key", Type: arrow.BinaryTypes.String, Nullable: true},
+			{Name: "value", Type: arrow.BinaryTypes.String, Nullable: true},
+			{Name: "arrow_type", Type: arrow.BinaryTypes.String, Nullable: true},
+		}, nil),
 		Comment:  "Function-backed table over the secret-using secret_demo function",
 		Function: table.NewSecretDemoFunction(),
 	})
@@ -421,6 +431,7 @@ func main() {
 		card := int64(10000)
 		w.RegisterCatalogTable("data", vgi.CatalogTable{
 			Name:                "cardinality_inlined_table",
+			Columns:             arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil),
 			Comment:             "Function-backed table with inlined cardinality (10000 rows)",
 			Function:            table.NewTenThousandFunction(),
 			CardinalityEstimate: &card,
@@ -432,8 +443,8 @@ func main() {
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name: "versioned_data",
 		Columns: arrow.NewSchema([]arrow.Field{
-			{Name: "id", Type: arrow.PrimitiveTypes.Int64},
-			{Name: "score", Type: arrow.PrimitiveTypes.Float64},
+			{Name: "id", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
+			{Name: "score", Nullable: true, Type: arrow.PrimitiveTypes.Float64},
 		}, nil),
 		SupportsTimeTravel: true,
 		Comment:            "Versioned data table demonstrating time travel with schema evolution",
@@ -446,7 +457,7 @@ func main() {
 		Name:    "numbers",
 		Comment: "First 100 integers (demonstrates explicit columns)",
 		Columns: arrow.NewSchema([]arrow.Field{
-			{Name: "value", Type: arrow.PrimitiveTypes.Int64},
+			{Name: "value", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
 		}, nil),
 		Statistics: map[string]*vgi.ColumnStatistics{
 			"value": {ColumnName: "value", Type: arrow.PrimitiveTypes.Int64, Min: int64(0), Max: int64(99), HasNotNull: true, DistinctCount: 100},
@@ -458,9 +469,9 @@ func main() {
 		Name:    "colors",
 		Comment: "Colors table with ENUM-derived statistics",
 		Columns: arrow.NewSchema([]arrow.Field{
-			{Name: "id", Type: arrow.PrimitiveTypes.Int64},
-			{Name: "color", Type: arrow.BinaryTypes.String},
-			{Name: "hex_code", Type: arrow.BinaryTypes.String},
+			{Name: "id", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
+			{Name: "color", Nullable: true, Type: arrow.BinaryTypes.String},
+			{Name: "hex_code", Nullable: true, Type: arrow.BinaryTypes.String},
 		}, nil),
 		Statistics: map[string]*vgi.ColumnStatistics{
 			"id":       {ColumnName: "id", Type: arrow.PrimitiveTypes.Int64, Min: int64(1), Max: int64(3), HasNotNull: true, DistinctCount: 3},
@@ -475,8 +486,8 @@ func main() {
 		Name:    "geo_points",
 		Comment: "5x5 grid of points with spatial bounding-box statistics",
 		Columns: arrow.NewSchema([]arrow.Field{
-			{Name: "id", Type: arrow.PrimitiveTypes.Int64},
-			{Name: "geom", Type: arrow.BinaryTypes.Binary, Metadata: arrow.NewMetadata(
+			{Name: "id", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
+			{Name: "geom", Nullable: true, Type: arrow.BinaryTypes.Binary, Metadata: arrow.NewMetadata(
 				[]string{"ARROW:extension:name", "ARROW:extension:metadata"},
 				[]string{"geoarrow.wkb", "{}"},
 			)},
@@ -496,7 +507,7 @@ func main() {
 		Name:    "volatile_numbers",
 		Comment: "Numbers with volatile stats (TTL=0, always re-fetched)",
 		Columns: arrow.NewSchema([]arrow.Field{
-			{Name: "value", Type: arrow.PrimitiveTypes.Int64},
+			{Name: "value", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
 		}, nil),
 		Statistics: map[string]*vgi.ColumnStatistics{
 			"value": {ColumnName: "value", Type: arrow.PrimitiveTypes.Int64, Min: int64(0), Max: int64(99), HasNotNull: true, DistinctCount: 100},
@@ -510,7 +521,7 @@ func main() {
 		Name:    "funny_numbers",
 		Comment: "123456 integers; stats served by the sequence function, not the table",
 		Columns: arrow.NewSchema([]arrow.Field{
-			{Name: "n", Type: arrow.PrimitiveTypes.Int64},
+			{Name: "n", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
 		}, nil),
 	})
 
@@ -520,9 +531,9 @@ func main() {
 		Name:    "generated_sequence",
 		Comment: "Table with generated columns backed by sequence(10)",
 		Columns: arrow.NewSchema([]arrow.Field{
-			{Name: "n", Type: arrow.PrimitiveTypes.Int64},
-			{Name: "doubled", Type: arrow.PrimitiveTypes.Int64},
-			{Name: "label", Type: arrow.BinaryTypes.String},
+			{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			{Name: "doubled", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			{Name: "label", Type: arrow.BinaryTypes.String, Nullable: true},
 		}, nil),
 		Generated: map[string]string{
 			"doubled": "n * 2",
@@ -541,25 +552,25 @@ func main() {
 		Comment: "Table with row_id at column index 0",
 		Columns: arrow.NewSchema([]arrow.Field{
 			{Name: "row_id", Type: arrow.PrimitiveTypes.Int64, Metadata: rowIDMeta},
-			{Name: "name", Type: arrow.BinaryTypes.String},
-			{Name: "value", Type: arrow.BinaryTypes.String},
+			{Name: "name", Nullable: true, Type: arrow.BinaryTypes.String},
+			{Name: "value", Nullable: true, Type: arrow.BinaryTypes.String},
 		}, nil),
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:    "rowid_middle",
 		Comment: "Table with row_id at column index 1",
 		Columns: arrow.NewSchema([]arrow.Field{
-			{Name: "name", Type: arrow.BinaryTypes.String},
+			{Name: "name", Nullable: true, Type: arrow.BinaryTypes.String},
 			{Name: "row_id", Type: arrow.PrimitiveTypes.Int64, Metadata: rowIDMeta},
-			{Name: "value", Type: arrow.BinaryTypes.String},
+			{Name: "value", Nullable: true, Type: arrow.BinaryTypes.String},
 		}, nil),
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:    "rowid_last",
 		Comment: "Table with row_id at column index 2",
 		Columns: arrow.NewSchema([]arrow.Field{
-			{Name: "name", Type: arrow.BinaryTypes.String},
-			{Name: "value", Type: arrow.BinaryTypes.String},
+			{Name: "name", Nullable: true, Type: arrow.BinaryTypes.String},
+			{Name: "value", Nullable: true, Type: arrow.BinaryTypes.String},
 			{Name: "row_id", Type: arrow.PrimitiveTypes.Int64, Metadata: rowIDMeta},
 		}, nil),
 	})
@@ -568,8 +579,8 @@ func main() {
 		Comment: "Table with string row_id",
 		Columns: arrow.NewSchema([]arrow.Field{
 			{Name: "row_id", Type: arrow.BinaryTypes.String, Metadata: rowIDMeta},
-			{Name: "name", Type: arrow.BinaryTypes.String},
-			{Name: "value", Type: arrow.BinaryTypes.String},
+			{Name: "name", Nullable: true, Type: arrow.BinaryTypes.String},
+			{Name: "value", Nullable: true, Type: arrow.BinaryTypes.String},
 		}, nil),
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
@@ -577,8 +588,8 @@ func main() {
 		Comment: "Table with struct row_id",
 		Columns: arrow.NewSchema([]arrow.Field{
 			{Name: "row_id", Type: rowIDStructType, Metadata: rowIDMeta},
-			{Name: "name", Type: arrow.BinaryTypes.String},
-			{Name: "value", Type: arrow.BinaryTypes.String},
+			{Name: "name", Nullable: true, Type: arrow.BinaryTypes.String},
+			{Name: "value", Nullable: true, Type: arrow.BinaryTypes.String},
 		}, nil),
 	})
 
@@ -588,9 +599,9 @@ func main() {
 	lateMatColumns := func() *arrow.Schema {
 		return arrow.NewSchema([]arrow.Field{
 			{Name: "row_id", Type: arrow.PrimitiveTypes.Int64, Metadata: rowIDMeta},
-			{Name: "ord", Type: arrow.PrimitiveTypes.Int64},
-			{Name: "payload", Type: arrow.BinaryTypes.String},
-			{Name: "pushed", Type: arrow.BinaryTypes.String},
+			{Name: "ord", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
+			{Name: "payload", Nullable: true, Type: arrow.BinaryTypes.String},
+			{Name: "pushed", Nullable: true, Type: arrow.BinaryTypes.String},
 		}, nil)
 	}
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
@@ -611,14 +622,11 @@ func main() {
 
 	// Constraint example tables
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:       "departments",
-		Comment:    "Department reference table",
-		Columns:    table.DepartmentsSchema,
-		NotNull:    []string{"id", "name"},
-		PrimaryKey: [][]string{{"id"}},
-		Unique:     [][]string{{"name"}},
-		Check:      []string{"budget >= 0"},
-		Defaults:   map[string]any{"budget": int64(0)},
+		Name:        "departments",
+		Comment:     "Department reference table",
+		Columns:     fixtureSchema(table.DepartmentsSchema, "departments", 0),
+		Constraints: fixtureConstraints("departments", 0),
+		Defaults:    map[string]any{"budget": int64(0)},
 		Statistics: map[string]*vgi.ColumnStatistics{
 			"id":     {ColumnName: "id", Type: arrow.PrimitiveTypes.Int64, Min: int64(1), Max: int64(10), HasNotNull: true, DistinctCount: 10},
 			"name":   {ColumnName: "name", Type: arrow.BinaryTypes.String, Min: "Accounting", Max: "Sales", HasNotNull: true, DistinctCount: 10, ContainsUnicode: boolPtr(false), MaxStringLength: int64Ptr(20)},
@@ -627,33 +635,23 @@ func main() {
 		StatisticsCacheMaxAgeSeconds: &statsTTL3600,
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:       "employees",
-		Comment:    "Employee table with FK to departments",
-		Columns:    table.EmployeesSchema,
-		NotNull:    []string{"id", "name", "email"},
-		PrimaryKey: [][]string{{"id"}},
-		Unique:     [][]string{{"email"}},
-		ForeignKey: []vgi.ForeignKeyConstraint{
-			{Columns: []string{"department_id"}, ReferencedTable: "departments", ReferencedColumns: []string{"id"}},
-		},
+		Name:        "employees",
+		Comment:     "Employee table with FK to departments",
+		Columns:     fixtureSchema(table.EmployeesSchema, "employees", 0),
+		Constraints: fixtureConstraints("employees", 0),
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:       "projects",
-		Comment:    "Projects with composite PK and FK to departments",
-		Columns:    table.ProjectsSchema,
-		NotNull:    []string{"department_id", "project_code", "title"},
-		PrimaryKey: [][]string{{"department_id", "project_code"}},
-		ForeignKey: []vgi.ForeignKeyConstraint{
-			{Columns: []string{"department_id"}, ReferencedTable: "departments", ReferencedColumns: []string{"id"}},
-		},
+		Name:        "projects",
+		Comment:     "Projects with composite PK and FK to departments",
+		Columns:     fixtureSchema(table.ProjectsSchema, "projects", 0),
+		Constraints: fixtureConstraints("projects", 0),
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
-		Name:       "products",
-		Comment:    "Product table with column defaults",
-		Columns:    table.ProductsSchema,
-		NotNull:    []string{"id"},
-		PrimaryKey: [][]string{{"id"}},
-		Defaults:   map[string]any{"quantity": int64(0), "name": "unknown", "price": float64(9.99)},
+		Name:        "products",
+		Comment:     "Product table with column defaults",
+		Columns:     fixtureSchema(table.ProductsSchema, "products", 0),
+		Constraints: fixtureConstraints("products", 0),
+		Defaults:    map[string]any{"quantity": int64(0), "name": "unknown", "price": float64(9.99)},
 		ColumnComments: map[string]string{
 			"id":    "Unique product identifier",
 			"name":  "Product display name",
@@ -676,25 +674,25 @@ func main() {
 		Name:            "rff_simple",
 		Comment:         "rff_simple — requires a filter referencing column 'a'.",
 		Columns:         table.RffSimpleSchema,
-		RequiredFilters: [][]string{{"a"}},
+		RequiredFilters: [][][]string{{{"a"}}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:            "rff_struct",
 		Comment:         "rff_struct — requires filters on both struct subfields s.a and s.b.",
 		Columns:         table.RffStructSchema,
-		RequiredFilters: [][]string{{"s.a"}, {"s.b"}},
+		RequiredFilters: [][][]string{{{"s", "a"}}, {{"s", "b"}}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:            "rff_nested",
 		Comment:         "rff_nested — requires a filter on the 3-deep nested path wrapper.mid.leaf.",
 		Columns:         table.RffNestedSchema,
-		RequiredFilters: [][]string{{"wrapper.mid.leaf"}},
+		RequiredFilters: [][][]string{{{"wrapper", "mid", "leaf"}}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:            "rff_multi",
 		Comment:         "rff_multi — mixed top-level + struct subfield requirements (top AND s.a).",
 		Columns:         table.RffMultiSchema,
-		RequiredFilters: [][]string{{"top"}, {"s.a"}},
+		RequiredFilters: [][][]string{{{"top"}}, {{"s", "a"}}},
 	})
 	// rff_or — genuine OR-group: a single CNF group satisfied by a filter on
 	// EITHER a or b (i.e. [["a","b"]] means "one of (a, b)").
@@ -702,7 +700,7 @@ func main() {
 		Name:            "rff_or",
 		Comment:         "rff_or — requires a filter on either column a OR column b (single OR-group).",
 		Columns:         table.RffNoneSchema,
-		RequiredFilters: [][]string{{"a", "b"}},
+		RequiredFilters: [][][]string{{{"a"}, {"b"}}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:    "rff_none",
@@ -716,45 +714,45 @@ func main() {
 		Name:            "rff_rowid",
 		Comment:         "rff_rowid — row_id virtual column + required bbox.* filters.",
 		Columns:         table.RffRowidSchema,
-		RequiredFilters: [][]string{{"bbox.xmin"}, {"bbox.xmax"}, {"bbox.ymin"}, {"bbox.ymax"}},
+		RequiredFilters: [][][]string{{{"bbox", "xmin"}}, {{"bbox", "xmax"}}, {{"bbox", "ymin"}}, {{"bbox", "ymax"}}},
 	})
 	// rff_parquet / rff_hive / rff_hive_mixed — native read_parquet delegation
 	// with bbox.* required filters (mirrors Overture transportation.segment).
 	// See required_filters_native.test.
 	rffBboxType := arrow.StructOf(
-		arrow.Field{Name: "xmin", Type: arrow.PrimitiveTypes.Float32},
-		arrow.Field{Name: "ymin", Type: arrow.PrimitiveTypes.Float32},
-		arrow.Field{Name: "xmax", Type: arrow.PrimitiveTypes.Float32},
-		arrow.Field{Name: "ymax", Type: arrow.PrimitiveTypes.Float32},
+		arrow.Field{Name: "xmin", Nullable: true, Type: arrow.PrimitiveTypes.Float32},
+		arrow.Field{Name: "ymin", Nullable: true, Type: arrow.PrimitiveTypes.Float32},
+		arrow.Field{Name: "xmax", Nullable: true, Type: arrow.PrimitiveTypes.Float32},
+		arrow.Field{Name: "ymax", Nullable: true, Type: arrow.PrimitiveTypes.Float32},
 	)
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:    "rff_parquet",
 		Comment: "rff_parquet — native read_parquet delegation with bbox.* required filters.",
 		Columns: arrow.NewSchema([]arrow.Field{
-			{Name: "bbox", Type: rffBboxType},
-			{Name: "other", Type: arrow.PrimitiveTypes.Int64},
+			{Name: "bbox", Nullable: true, Type: rffBboxType},
+			{Name: "other", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
 		}, nil),
-		RequiredFilters: [][]string{{"bbox.xmin"}, {"bbox.xmax"}, {"bbox.ymin"}, {"bbox.ymax"}},
+		RequiredFilters: [][][]string{{{"bbox", "xmin"}}, {{"bbox", "xmax"}}, {{"bbox", "ymin"}}, {{"bbox", "ymax"}}},
 	})
 	rffHiveColumns := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.BinaryTypes.String},
-		{Name: "bbox", Type: rffBboxType},
-		{Name: "name", Type: arrow.BinaryTypes.String},
-		{Name: "num", Type: arrow.PrimitiveTypes.Int64},
-		{Name: "theme", Type: arrow.BinaryTypes.String},
-		{Name: "type", Type: arrow.BinaryTypes.String},
+		{Name: "id", Nullable: true, Type: arrow.BinaryTypes.String},
+		{Name: "bbox", Nullable: true, Type: rffBboxType},
+		{Name: "name", Nullable: true, Type: arrow.BinaryTypes.String},
+		{Name: "num", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
+		{Name: "theme", Nullable: true, Type: arrow.BinaryTypes.String},
+		{Name: "type", Nullable: true, Type: arrow.BinaryTypes.String},
 	}, nil)
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:            "rff_hive",
 		Comment:         "rff_hive — native read_parquet over Hive glob with bbox.* required filters.",
 		Columns:         rffHiveColumns,
-		RequiredFilters: [][]string{{"bbox.xmin"}, {"bbox.xmax"}, {"bbox.ymin"}, {"bbox.ymax"}},
+		RequiredFilters: [][][]string{{{"bbox", "xmin"}}, {{"bbox", "xmax"}}, {{"bbox", "ymin"}}, {{"bbox", "ymax"}}},
 	})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:            "rff_hive_mixed",
 		Comment:         "rff_hive_mixed — native read_parquet, top-level 'id' + bbox.* required filters.",
 		Columns:         rffHiveColumns,
-		RequiredFilters: [][]string{{"id"}, {"bbox.xmin"}, {"bbox.xmax"}, {"bbox.ymin"}, {"bbox.ymax"}},
+		RequiredFilters: [][][]string{{{"id"}}, {{"bbox", "xmin"}}, {{"bbox", "xmax"}}, {{"bbox", "ymin"}}, {{"bbox", "ymax"}}},
 	})
 	// filter_echo_table — catalog table echoing pushed-down filters, backs
 	// filter_pushdown_through_view.test.
@@ -762,9 +760,9 @@ func main() {
 		Name:    "filter_echo_table",
 		Comment: "Catalog table echoing pushed-down filters (filter-pushdown-through-view tests).",
 		Columns: arrow.NewSchema([]arrow.Field{
-			{Name: "n", Type: arrow.PrimitiveTypes.Int64},
-			{Name: "s", Type: arrow.BinaryTypes.String},
-			{Name: "pushed_filters", Type: arrow.BinaryTypes.String},
+			{Name: "n", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
+			{Name: "s", Nullable: true, Type: arrow.BinaryTypes.String},
+			{Name: "pushed_filters", Nullable: true, Type: arrow.BinaryTypes.String},
 		}, nil),
 	})
 	// Time travel + filter pushdown together (time_travel_pushdown.test).
@@ -786,15 +784,10 @@ func main() {
 
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
 		Name:               "versioned_constraints",
-		Columns:            table.VersionedConstraintsSchemas[3],
+		Columns:            fixtureSchema(table.VersionedConstraintsSchemas[3], "versioned_constraints", 3),
 		Comment:            "Table with constraints that evolve across versions",
 		SupportsTimeTravel: true,
-		NotNull:            []string{"id", "name"},
-		PrimaryKey:         [][]string{{"id"}},
-		Unique:             [][]string{{"email"}},
-		ForeignKey: []vgi.ForeignKeyConstraint{
-			{Columns: []string{"department_id"}, ReferencedTable: "departments", ReferencedColumns: []string{"id"}},
-		},
+		Constraints:        fixtureConstraints("versioned_constraints", 3),
 	})
 
 	// Views
@@ -886,10 +879,11 @@ func main() {
 				return nil, err
 			}
 			info := &vgi.TableInfo{
-				Name:       tableName,
-				SchemaPath: schemaPath,
-				Comment:    "Table with constraints that evolve across versions",
-				Columns:    table.VersionedConstraintsSchema(version),
+				Name:        tableName,
+				SchemaPath:  schemaPath,
+				Comment:     "Table with constraints that evolve across versions",
+				Columns:     fixtureSchema(table.VersionedConstraintsSchema(version), "versioned_constraints", version),
+				Constraints: fixtureConstraints("versioned_constraints", version),
 			}
 			return vgi.SerializeTableInfo(info)
 		}
@@ -1101,10 +1095,10 @@ func main() {
 		return nil, fmt.Errorf("no scan function for %s.%s", schemaPath, tableName)
 	})
 
-	// conformance.Secondary.v1 beside vgi.v2, on every transport, through the
+	// conformance.Secondary.v1 beside vgi.v3, on every transport, through the
 	// SDK's hosted-protocols hook -- what vgi-rpc's hosted-protocols
 	// conformance group (vgi-rpc-test-hosted) asserts against this worker.
-	// Additive: it cannot change vgi.v2 dispatch, because every request routes
+	// Additive: it cannot change vgi.v3 dispatch, because every request routes
 	// on its protocol name.
 	vgi.WithHostedProtocols(func() ([]*vgirpc.Server, error) {
 		return []*vgirpc.Server{conformance.NewSecondary()}, nil

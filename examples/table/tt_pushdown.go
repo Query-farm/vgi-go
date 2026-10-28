@@ -33,10 +33,10 @@ import (
 // TtPushdownOutputSchema is version-independent: only the row data changes per
 // version, so the function-backed table stays inline-bound.
 var TtPushdownOutputSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "id", Type: arrow.PrimitiveTypes.Int64},
-	{Name: "val", Type: arrow.PrimitiveTypes.Int64},
-	{Name: "seen_version", Type: arrow.PrimitiveTypes.Int64},
-	{Name: "pushed_filters", Type: arrow.BinaryTypes.String},
+	{Name: "id", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
+	{Name: "val", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
+	{Name: "seen_version", Nullable: true, Type: arrow.PrimitiveTypes.Int64},
+	{Name: "pushed_filters", Nullable: true, Type: arrow.BinaryTypes.String},
 }, nil)
 
 // ttVersionIDs are the per-version row ids (val = id*10). v2 is a strict

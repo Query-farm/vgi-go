@@ -22,6 +22,9 @@ type Sql string
 
 // CatalogTable describes a table to register in the catalog.
 type CatalogTable struct {
+	// Constraints are explicit canonical ConstraintInfo IPC records, owned by the provider.
+	Constraints        [][]byte
+	DefinitionRevision []byte
 	// Name is the table name visible in SQL.
 	Name string
 	// Comment is a human-readable description.
@@ -50,7 +53,7 @@ type CatalogTable struct {
 	// through duckdb_columns().comment.
 	ColumnComments map[string]string
 	// Generated maps column names to SQL expressions for generated (virtual)
-	// columns. Encoded as `generated_expression` Arrow field metadata.
+	// columns. Encoded as canonical SqlExpression IPC with the owning schema.
 	Generated map[string]string
 	// Statistics holds optimizer hints per column name. When non-empty,
 	// the catalog reports supports_column_statistics=true for this table and
@@ -74,19 +77,11 @@ type CatalogTable struct {
 	// duckdb_tables().tags. Useful for category/coverage/example_queries
 	// metadata.
 	Tags map[string]string
-	// RequiredFilters is the required WHERE-filter set in conjunctive normal
-	// form (CNF): an AND (outer list) of OR-groups (inner lists) of dotted-path
-	// column references. A group is satisfied when any one of its member paths
-	// has a WHERE filter; every group must be satisfied. So
-	// [][]string{{"accession_number"}, {"ticker", "cik"}} means
-	// "accession_number AND one of (ticker, cik)"; a singleton group
-	// [][]string{{"country"}} is a plain mandatory filter. Paths are top-level
-	// names ("country") or struct subfields ("bbox.xmin", "nested.outer.inner").
-	// Empty (default) means no enforcement — the zero-cost fast path. The VGI
-	// DuckDB extension's optimizer pass enforces this at bind time and throws
-	// BinderException listing any unsatisfied groups; satisfaction is
-	// prefix-based (a filter on a parent path satisfies its child paths).
-	RequiredFilters [][]string
+	// RequiredFilters is an AND of OR-groups of raw component paths.
+	// Example: {{{"bbox", "xmin"}}, {{"ticker"}, {"cik"}}}.
+	// Dots and quotes are literal. A present component prefix satisfies a path;
+	// a child does not satisfy a requirement on its parent. Empty disables enforcement.
+	RequiredFilters [][][]string
 	// InlineBind, when true and the table's columns are statically known,
 	// inlines the bind result onto TableInfo.bind_result so the C++ extension
 	// skips the per-scan bind RPC. Safe only for tables whose output schema is
@@ -500,9 +495,9 @@ func defaultToSQL(value any) string {
 	}
 }
 
-// applyGenerated adds "generated_expression" metadata to Arrow schema fields
+// applyGenerated adds canonical VIRTUAL expression metadata to Arrow schema fields
 // for generated/virtual columns. Existing field metadata is preserved.
-func applyGenerated(schema *arrow.Schema, generated map[string]string) (*arrow.Schema, error) {
+func applyGenerated(schema *arrow.Schema, generated map[string]string, owner SchemaPath) (*arrow.Schema, error) {
 	if len(generated) == 0 {
 		return schema, nil
 	}
@@ -524,9 +519,20 @@ func applyGenerated(schema *arrow.Schema, generated map[string]string) (*arrow.S
 			return nil, fmt.Errorf("generated references non-existent column %q", colName)
 		}
 		existing := fields[idx].Metadata
-		keys := append(existing.Keys(), "generated_expression")
-		vals := append(existing.Values(), expr)
-		fields[idx].Metadata = arrow.NewMetadata(keys, vals)
+		values := existing.ToMap()
+		if _, ok := values[GeneratedExpressionKey]; ok {
+			return nil, fmt.Errorf("generated convenience conflicts with canonical metadata")
+		}
+		if _, ok := values["generated_expression"]; ok {
+			return nil, fmt.Errorf("legacy generated metadata requires explicit translation")
+		}
+		encoded, err := GeneratedExpressionMetadata(expr, owner)
+		if err != nil {
+			return nil, err
+		}
+		values[GeneratedExpressionKey] = encoded
+		values[GenerationKey] = "virtual"
+		fields[idx].Metadata = arrow.MetadataFrom(values)
 	}
 
 	md := schema.Metadata()
@@ -555,8 +561,14 @@ func applyColumnComments(schema *arrow.Schema, comments map[string]string) (*arr
 			return nil, fmt.Errorf("column_comment references non-existent column %q", colName)
 		}
 		existing := fields[idx].Metadata
-		keys := append(existing.Keys(), "comment")
-		vals := append(existing.Values(), comment)
+		keys := append([]string(nil), existing.Keys()...)
+		vals := append([]string(nil), existing.Values()...)
+		if found := existing.FindKey("comment"); found >= 0 {
+			vals[found] = comment
+		} else {
+			keys = append(keys, "comment")
+			vals = append(vals, comment)
+		}
 		fields[idx].Metadata = arrow.NewMetadata(keys, vals)
 	}
 	md := schema.Metadata()

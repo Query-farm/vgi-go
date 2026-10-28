@@ -16,6 +16,8 @@ import (
 
 // TableInfo describes a table in the catalog for wire serialization.
 type TableInfo struct {
+	Constraints              [][]byte // canonical ConstraintInfo IPC, never synthesized from legacy fields
+	DefinitionRevision       []byte
 	Name                     string
 	SchemaPath               []string
 	Comment                  string
@@ -55,20 +57,13 @@ type TableInfo struct {
 	// bind_data and skips the per-scan bind RPC.
 	BindResult []byte
 
-	// RequiredFilters is the required WHERE-filter set in conjunctive normal
-	// form (CNF): an AND (outer list) of OR-groups (inner lists) of dotted-path
-	// column references that MUST appear in a WHERE expression for any scan of
-	// this table. A group is satisfied when any one of its member paths has a
-	// filter; every group must be satisfied. So [["accession_number"],
-	// ["ticker","cik"]] means "accession_number AND one of (ticker, cik)".
-	// Paths are top-level names ("country") or struct subfields ("bbox.xmin").
-	// Empty (default) means no enforcement. The C++ extension's optimizer pass
-	// consults this at bind time and throws BinderException listing any
-	// unsatisfied groups. Satisfaction is prefix-based — a filter on a parent
-	// path satisfies every required child path.
-	//
-	// This is the trailing field of the TableInfo wire schema.
-	RequiredFilters [][]string
+	// RequiredFilters is an AND of OR-groups of raw component paths.
+	// Example: {{{"bbox", "xmin"}}, {{"ticker"}, {"cik"}}}.
+	// Dots and quotes are literal. Prefix satisfaction operates on components.
+	// Empty disables enforcement; the wire value is always an explicit list.
+	RequiredFilters [][][]string
+	Options         []byte
+	Layout          []byte
 }
 
 var tableInfoSchema = generated.TableInfoSchema
@@ -84,6 +79,15 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 }
 
 func buildTableInfoRecord(info *TableInfo) (arrow.RecordBatch, error) {
+	if err := ValidateColumnExpressions(info.Columns, info.SchemaPath, true); err != nil {
+		return nil, err
+	}
+	if err := ValidateColumnMetadata(info.Columns); err != nil {
+		return nil, err
+	}
+	if len(info.NotNullConstraints)+len(info.UniqueConstraints)+len(info.CheckConstraints)+len(info.PrimaryKeyConstraints)+len(info.ForeignKeyConstraints) > 0 {
+		return nil, methodNotImplemented("legacy constraint metadata requires explicit canonical records")
+	}
 	mem := memory.NewGoAllocator()
 
 	// comment
@@ -133,67 +137,11 @@ func buildTableInfoRecord(info *TableInfo) (arrow.RecordBatch, error) {
 		columnsBuilder.Append([]byte{})
 	}
 
-	// not_null_constraints
-	notNullBuilder := array.NewListBuilder(mem, arrow.PrimitiveTypes.Int32)
-	defer notNullBuilder.Release()
-	notNullBuilder.Append(true)
-	if len(info.NotNullConstraints) > 0 {
-		vb := notNullBuilder.ValueBuilder().(*array.Int32Builder)
-		for _, idx := range info.NotNullConstraints {
-			vb.Append(idx)
-		}
-	}
-
-	// unique_constraints (list of list of int32)
-	uniqueBuilder := array.NewListBuilder(mem, arrow.ListOf(arrow.PrimitiveTypes.Int32))
-	defer uniqueBuilder.Release()
-	uniqueBuilder.Append(true)
-	if len(info.UniqueConstraints) > 0 {
-		innerListBuilder := uniqueBuilder.ValueBuilder().(*array.ListBuilder)
-		for _, group := range info.UniqueConstraints {
-			innerListBuilder.Append(true)
-			innerVB := innerListBuilder.ValueBuilder().(*array.Int32Builder)
-			for _, idx := range group {
-				innerVB.Append(idx)
-			}
-		}
-	}
-
-	// check_constraints
-	checkBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
-	defer checkBuilder.Release()
-	checkBuilder.Append(true)
-	if len(info.CheckConstraints) > 0 {
-		vb := checkBuilder.ValueBuilder().(*array.StringBuilder)
-		for _, expr := range info.CheckConstraints {
-			vb.Append(expr)
-		}
-	}
-
-	// primary_key_constraints (list of list of int32)
-	pkBuilder := array.NewListBuilder(mem, arrow.ListOf(arrow.PrimitiveTypes.Int32))
-	defer pkBuilder.Release()
-	pkBuilder.Append(true)
-	if len(info.PrimaryKeyConstraints) > 0 {
-		innerListBuilder := pkBuilder.ValueBuilder().(*array.ListBuilder)
-		for _, group := range info.PrimaryKeyConstraints {
-			innerListBuilder.Append(true)
-			innerVB := innerListBuilder.ValueBuilder().(*array.Int32Builder)
-			for _, idx := range group {
-				innerVB.Append(idx)
-			}
-		}
-	}
-
-	// foreign_key_constraints (list of binary)
-	fkBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.Binary)
-	defer fkBuilder.Release()
-	fkBuilder.Append(true)
-	if len(info.ForeignKeyConstraints) > 0 {
-		vb := fkBuilder.ValueBuilder().(*array.BinaryBuilder)
-		for _, fkBytes := range info.ForeignKeyConstraints {
-			vb.Append(fkBytes)
-		}
+	constraintsBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.Binary)
+	defer constraintsBuilder.Release()
+	constraintsBuilder.Append(true)
+	for _, value := range info.Constraints {
+		constraintsBuilder.ValueBuilder().(*array.BinaryBuilder).Append(value)
 	}
 
 	writeModesBuilder := array.NewMapBuilder(mem, arrow.BinaryTypes.String, arrow.BinaryTypes.String, false)
@@ -254,18 +202,19 @@ func buildTableInfoRecord(info *TableInfo) (arrow.RecordBatch, error) {
 		cardMaxBuilder.AppendNull()
 	}
 
-	// required_filters (non-null list of list of string) — CNF: outer list is
-	// an AND of OR-groups, each inner list an OR of dotted-path references.
-	rfBuilder := array.NewListBuilder(mem, arrow.ListOf(arrow.BinaryTypes.String))
+	// required_filters: non-null AND-of-OR groups of raw component paths.
+	rfBuilder := array.NewListBuilder(mem, arrow.ListOf(arrow.ListOf(arrow.BinaryTypes.String)))
 	defer rfBuilder.Release()
 	rfBuilder.Append(true)
 	if len(info.RequiredFilters) > 0 {
 		innerListBuilder := rfBuilder.ValueBuilder().(*array.ListBuilder)
 		for _, group := range info.RequiredFilters {
 			innerListBuilder.Append(true)
-			innerVB := innerListBuilder.ValueBuilder().(*array.StringBuilder)
+			pathBuilder := innerListBuilder.ValueBuilder().(*array.ListBuilder)
+			innerVB := pathBuilder.ValueBuilder().(*array.StringBuilder)
 			for _, p := range group {
-				innerVB.Append(p)
+				pathBuilder.Append(true)
+				innerVB.AppendValues(p, nil)
 			}
 		}
 	}
@@ -276,11 +225,8 @@ func buildTableInfoRecord(info *TableInfo) (arrow.RecordBatch, error) {
 		nameBuilder.NewArray(),
 		schemaPathBuilder.NewArray(),
 		columnsBuilder.NewArray(),
-		notNullBuilder.NewArray(),
-		uniqueBuilder.NewArray(),
-		checkBuilder.NewArray(),
-		pkBuilder.NewArray(),
-		fkBuilder.NewArray(),
+		constraintsBuilder.NewArray(),
+		appendOptBinary(info.DefinitionRevision),
 		writeModesBuilder.NewArray(),
 		scsBuilder.NewArray(),
 		scanFunctionArr,
@@ -292,6 +238,8 @@ func buildTableInfoRecord(info *TableInfo) (arrow.RecordBatch, error) {
 		columnStatsArr,
 		bindResultArr,
 		rfBuilder.NewArray(),
+		appendOptBinary(info.Options),
+		appendOptBinary(info.Layout),
 	}
 	defer func() {
 		for _, c := range cols {
@@ -309,44 +257,9 @@ func buildTableInfoRecord(info *TableInfo) (arrow.RecordBatch, error) {
 // lists. Set on TableInfo.BindResult so the C++ extension threads it straight
 // into bind_data and skips the per-scan bind RPC.
 func serializeInlineBindResult(schema *arrow.Schema) ([]byte, error) {
-	schemaBytes, err := SerializeSchema(schema)
+	bound, err := wireProjectionBind(&BindResponse{OutputSchema: schema})
 	if err != nil {
 		return nil, err
 	}
-
-	mem := memory.NewGoAllocator()
-
-	outputBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
-	defer outputBuilder.Release()
-	outputBuilder.Append(schemaBytes)
-
-	opaqueBuilder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
-	defer opaqueBuilder.Release()
-	opaqueBuilder.AppendNull()
-
-	// Three empty (non-null) string lists: lookup_secret_types/scopes/names.
-	emptyList := func() arrow.Array {
-		lb := array.NewListBuilder(mem, arrow.BinaryTypes.String)
-		defer lb.Release()
-		lb.Append(true)
-		return lb.NewArray()
-	}
-
-	cols := []arrow.Array{
-		outputBuilder.NewArray(),
-		opaqueBuilder.NewArray(),
-		emptyList(),
-		emptyList(),
-		emptyList(),
-	}
-	defer func() {
-		for _, c := range cols {
-			c.Release()
-		}
-	}()
-
-	batch := array.NewRecordBatch(generated.BindResultSchema, cols, 1)
-	defer batch.Release()
-
-	return SerializeRecordBatch(batch)
+	return encodeProjectionBind(bound)
 }

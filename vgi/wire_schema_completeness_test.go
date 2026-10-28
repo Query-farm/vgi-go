@@ -53,6 +53,8 @@ type wireRecordCase struct {
 	// build returns the IPC bytes for a single record with every field of the
 	// generated schema populated with a non-null value.
 	build func() ([]byte, error)
+	// Fields this legacy builder cannot express, with a concrete reason.
+	expectedNull map[string]string
 }
 
 func strPtr(s string) *string             { return &s }
@@ -66,10 +68,6 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 	columns := arrow.NewSchema([]arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 	}, nil)
-	columnsIPC, err := SerializeSchema(columns)
-	if err != nil {
-		t.Fatalf("SerializeSchema: %v", err)
-	}
 	defaultBuilder := array.NewInt64Builder(memory.DefaultAllocator)
 	defaultBuilder.Append(42)
 	defaultColumn := defaultBuilder.NewArray()
@@ -109,10 +107,11 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 			build: func() ([]byte, error) {
 				return SerializeSchemaInfo(&SchemaInfo{
 					Path:                 SchemaPath{"analytics", "main"},
-					Comment:              "the main schema",
+					Comment:              descriptorComment("the main schema"),
 					Tags:                 map[string]string{"owner": "data-eng"},
 					AttachOpaqueData:     []byte("attach"),
 					EstimatedObjectCount: map[string]int64{"table": 7},
+					Options:              []byte("option-state-ipc"),
 				})
 			},
 		},
@@ -126,11 +125,8 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					Comment:                  "event log",
 					Tags:                     map[string]string{"tier": "hot"},
 					Columns:                  columns,
-					NotNullConstraints:       []int32{0},
-					UniqueConstraints:        [][]int32{{0}},
-					CheckConstraints:         []string{"id > 0"},
-					PrimaryKeyConstraints:    [][]int32{{0}},
-					ForeignKeyConstraints:    [][]byte{{0x02}},
+					Constraints:              [][]byte{{0x02}},
+					DefinitionRevision:       []byte("provider-revision"),
 					WriteResultModes:         map[string]string{"insert": "changes", "update": "rows"},
 					SupportsColumnStatistics: true,
 					ScanFunction:             []byte{0x03},
@@ -141,7 +137,9 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					CardinalityMax:           i64Ptr(200),
 					ColumnStatistics:         []byte{0x07},
 					BindResult:               []byte{0x08},
-					RequiredFilters:          [][]string{{"id"}},
+					RequiredFilters:          [][][]string{{{"id"}}},
+					Options:                  []byte{0x09},
+					Layout:                   []byte{0x0a},
 				})
 			},
 		},
@@ -152,7 +150,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 				return SerializeViewInfo(&ViewInfo{
 					Name:           "recent_events",
 					SchemaPath:     []string{"main"},
-					Comment:        "last 7 days",
+					Comment:        descriptorComment("last 7 days"),
 					Tags:           map[string]string{"tier": "hot"},
 					Definition:     "SELECT * FROM events",
 					ColumnComments: map[string]string{"id": "primary key"},
@@ -209,18 +207,14 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 		{
 			origin: "MacroInfo",
 			schema: generated.MacroInfoSchema,
+
 			build: func() ([]byte, error) {
-				return SerializeMacroInfo(&MacroInfo{
-					Name:                   "add_one",
-					SchemaPath:             []string{"main"},
-					Comment:                "adds one",
-					Tags:                   map[string]string{"tier": "hot"},
-					MacroType:              MacroTypeScalar,
-					Parameters:             []string{"x"},
-					ParameterDefaultValues: []byte{0x09},
-					Definition:             "x + 1",
-					ArgumentsSchema:        columnsIPC,
-				})
+				info, err := macroInfoFromCatalogMacro(CatalogMacro{Name: "add_one", MacroType: MacroTypeScalar,
+					Parameters: []string{"x"}, Definition: "x + 1", Comment: "adds one", Tags: map[string]string{"tier": "hot"}}, SchemaPath{"main"})
+				if err != nil {
+					return nil, err
+				}
+				return SerializeMacroInfo(info)
 			},
 		},
 		{
@@ -329,7 +323,6 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 // deliberate choice between covering it and writing down why not.
 var notBuiltByGo = map[string]string{
 	"IndexInfo":          "vgi-go exposes no index API; nothing constructs an IndexInfo record",
-	"IndexCreateRequest": "vgi-go exposes no index API; nothing constructs an IndexCreateRequest record",
 	"ClientCapabilities": "received as opaque catalog_attach ASD bytes; vgi-go does not construct this client record",
 	"ScanBranchesResult": "assembled by vgi-rpc-go's struct-tag reflection over " +
 		"TableScanBranchesGetResponseWire, not hand-built here",
@@ -359,6 +352,12 @@ func TestWireRecordSchemasMatchGenerated(t *testing.T) {
 				t.Fatalf("%s: expected a single-row record, got %d rows", tc.origin, batch.NumRows())
 			}
 			for i, col := range batch.Columns() {
+				if reason, expected := tc.expectedNull[tc.schema.Field(i).Name]; expected {
+					if reason == "" || !col.IsNull(0) {
+						t.Errorf("%s: legacy-only field %q must be explicitly NULL: %s", tc.origin, tc.schema.Field(i).Name, reason)
+					}
+					continue
+				}
 				if col.IsNull(0) {
 					// The builder has a column for this field but never wrote
 					// the value into it. On the wire that is indistinguishable

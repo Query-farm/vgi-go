@@ -166,11 +166,13 @@ func (BindRequestWire) ArrowSchema() *arrow.Schema {
 
 // BindResponseWire is the wire format for bind responses.
 type BindResponseWire struct {
-	OutputSchema      []byte   `vgirpc:"output_schema"`
-	OpaqueData        []byte   `vgirpc:"opaque_data,nullable"`
-	LookupSecretTypes []string `vgirpc:"lookup_secret_types"`
-	LookupScopes      []string `vgirpc:"lookup_scopes"`
-	LookupNames       []string `vgirpc:"lookup_names"`
+	OutputSchema                 []byte   `vgirpc:"output_schema"`
+	OpaqueData                   []byte   `vgirpc:"opaque_data,nullable"`
+	LookupSecretTypes            []string `vgirpc:"lookup_secret_types"`
+	LookupScopes                 []string `vgirpc:"lookup_scopes"`
+	LookupNames                  []string `vgirpc:"lookup_names"`
+	ProjectionExpressionProfiles []string `vgirpc:"projection_expression_profiles"`
+	Repeatability                string   `vgirpc:"repeatability,enum"`
 }
 
 // InitRequestWire is the wire format for init requests.
@@ -804,6 +806,11 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 		return BindResponseWire{}, err
 	}
 
+	repeatability, err := wireBindRepeatability(bindResp.Repeatability)
+	if err != nil {
+		return BindResponseWire{}, err
+	}
+
 	// Two-phase bind: if the function requests scoped secret lookup, return
 	// the lookup columns instead of an output schema.
 	if bindResp.SecretScopeRequest != nil {
@@ -820,17 +827,23 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 			LookupSecretTypes: types,
 			LookupScopes:      scopes,
 			LookupNames:       names,
+			Repeatability:     repeatability,
 		}, nil
 	}
 
+	if err := validateProjectionProfiles(bindResp.ProjectionExpressionProfiles); err != nil {
+		return BindResponseWire{}, err
+	}
 	outputSchemaBytes, err := SerializeSchema(bindResp.OutputSchema)
 	if err != nil {
 		return BindResponseWire{}, fmt.Errorf("serializing output schema: %w", err)
 	}
 
 	resp = BindResponseWire{
-		OutputSchema: outputSchemaBytes,
-		OpaqueData:   bindResp.OpaqueData,
+		OutputSchema:                 outputSchemaBytes,
+		OpaqueData:                   bindResp.OpaqueData,
+		ProjectionExpressionProfiles: bindResp.ProjectionExpressionProfiles,
+		Repeatability:                repeatability,
 	}
 	return resp, nil
 }
@@ -997,6 +1010,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		Args:             bindParams.Args,
 		OutputSchema:     processOutputSchema,
 		BindOutputSchema: outputSchema,
+		BindOpaqueData:   initParams.BindOpaqueData,
 		InputSchema:      bindParams.InputSchema,
 		ProjectionIDs:    initParams.ProjectionIDs,
 		Settings:         bindParams.Settings,
@@ -1758,7 +1772,7 @@ func (w *Worker) getArgSpecs(fn interface{}) []ArgSpec {
 // generated registry's vgiInitHeaderSchema, used both to advertise the header
 // and to serialize it, so the two cannot drift apart. It was once spelled out by hand
 // with max_workers before opaque_data, which put the advertised header out of
-// the generated order and so changed vgi.v2's protocol hash.
+// the generated order and so changed vgi.v3's protocol hash.
 var globalInitResponseWireSchema = vgiInitHeaderSchema
 
 // ArrowSchema returns the Arrow schema used to serialize a GlobalInitResponseWire.

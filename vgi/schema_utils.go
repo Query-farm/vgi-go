@@ -59,7 +59,46 @@ func DeserializeSchema(data []byte) (*arrow.Schema, error) {
 		return nil, fmt.Errorf("reading schema IPC: %w", err)
 	}
 	defer reader.Release()
-	return reader.Schema(), nil
+	return restoreSchemaFieldMetadata(data, reader.Schema())
+}
+
+// Empty canonical definitions cannot authorize SQL NOT NULL claims. Storage
+// children of lists/maps are not SQL column paths; ordinary structs are.
+func requireUnconstrainedCreateSchema(schema *arrow.Schema) error {
+	var visit func(arrow.Field, bool, int) error
+	visit = func(field arrow.Field, top bool, depth int) error {
+		if depth > 64 {
+			return methodNotImplemented("catalog_table_create: column nesting exceeds supported depth")
+		}
+		if top && field.Metadata.FindKey("is_row_id") >= 0 {
+			return nil
+		}
+		for _, key := range field.Metadata.Keys() {
+			if key == "ARROW:extension:name" || strings.HasPrefix(key, "vgi.logical_type.") {
+				return methodNotImplemented("catalog_table_create: logical column types require negotiation")
+			}
+		}
+		if field.Type.ID() == arrow.EXTENSION {
+			return methodNotImplemented("catalog_table_create: extension types require negotiation")
+		}
+		if !field.Nullable {
+			return methodNotImplemented("catalog_table_create: nonnullable user columns require canonical constraints")
+		}
+		if nested, ok := field.Type.(*arrow.StructType); ok {
+			for _, child := range nested.Fields() {
+				if err := visit(child, false, depth+1); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for _, field := range schema.Fields() {
+		if err := visit(field, true, 0); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeserializeRecordBatch reads a RecordBatch from IPC bytes.

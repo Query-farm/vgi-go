@@ -12,7 +12,7 @@ import (
 
 // What a worker's server hosts, in reflection order:
 //
-//  1. vgi.v2 -- the worker's own protocol.
+//  1. vgi.v3 -- the worker's own protocol.
 //  2. The worker's hosted protocols (WithHostedProtocols), in the order the
 //     hook returns them -- on EVERY transport.
 //  3. vgi_rpc.Reflection.v1 -- on every transport.
@@ -21,13 +21,13 @@ import (
 //  5. vgi.attach_tickets.v1 -- HTTP only, and only when the signing key is
 //     configured explicitly and the worker can issue grants (attach_ticket.go).
 //
-// Extra protocols cannot change vgi.v2's behaviour: vgi-rpc routes every
+// Extra protocols cannot change vgi.v3's behaviour: vgi-rpc routes every
 // request on its vgi_rpc.protocol key with no fallback to the primary, so a
-// client that only ever names vgi.v2 (the DuckDB extension) dispatches exactly
+// client that only ever names vgi.v3 (the DuckDB extension) dispatches exactly
 // as it would against a single-protocol server.
 
 // HostedProtocolsFunc returns the additional application protocols a worker
-// hosts beside vgi.v2. Each is a protocol definition built with
+// hosts beside vgi.v3. Each is a protocol definition built with
 // [vgirpc.NewProtocol] and its methods registered with [vgirpc.Unary] and
 // friends -- the handlers are the implementation, so one value is the
 // (protocol, implementation) pair.
@@ -42,7 +42,7 @@ type HostedProtocolsFunc func() ([]*vgirpc.Server, error)
 //
 // A returned protocol may not claim the reserved "vgi_rpc." prefix
 // (reflection is hosted automatically; identity is enabled with
-// [WithIdentity]), may not reuse vgi.v2 or another returned protocol's name,
+// [WithIdentity]), may not reuse vgi.v3 or another returned protocol's name,
 // and must be a fresh value: building the server fails, naming this hook,
 // otherwise.
 func WithHostedProtocols(fn HostedProtocolsFunc) WorkerOption {

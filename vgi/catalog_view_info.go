@@ -3,6 +3,7 @@
 package vgi
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 
@@ -19,6 +20,10 @@ type CatalogView struct {
 	Name string
 	// Definition is the SQL query backing the view.
 	Definition string
+	// Aliases are ordered raw output identifiers; empty uses query names.
+	Aliases []string
+	// Security is regular (the zero value) or barrier.
+	Security string
 	// Comment is a human-readable description.
 	Comment string
 	// Tags are arbitrary key/value annotations attached to this view;
@@ -32,11 +37,14 @@ type CatalogView struct {
 
 // ViewInfo describes a view in the catalog for wire serialization.
 type ViewInfo struct {
-	Name           string
-	SchemaPath     []string
-	Comment        string
+	Name       string
+	SchemaPath []string
+	// Comment distinguishes no comment (nil) from a present empty comment.
+	Comment        *string
 	Tags           map[string]string
 	Definition     string
+	Aliases        []string
+	Security       string
 	ColumnComments map[string]string
 }
 
@@ -53,13 +61,22 @@ func SerializeViewInfo(info *ViewInfo) ([]byte, error) {
 }
 
 func buildViewInfoRecord(info *ViewInfo) (arrow.RecordBatch, error) {
+	// The public Go DTO's zero value means regular. The wire always carries
+	// an explicit non-null mode; consumers must never default absent metadata.
+	security := info.Security
+	if security == "" {
+		security = "regular"
+	}
+	if security != "regular" && security != "barrier" {
+		return nil, fmt.Errorf("unknown view security: %q", security)
+	}
 	mem := memory.NewGoAllocator()
 
 	// comment
 	commentBuilder := array.NewStringBuilder(mem)
 	defer commentBuilder.Release()
-	if info.Comment != "" {
-		commentBuilder.Append(info.Comment)
+	if info.Comment != nil {
+		commentBuilder.Append(*info.Comment)
 	} else {
 		commentBuilder.AppendNull()
 	}
@@ -109,6 +126,15 @@ func buildViewInfoRecord(info *ViewInfo) (arrow.RecordBatch, error) {
 		}
 	}
 
+	aliasesBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer aliasesBuilder.Release()
+	aliasesBuilder.Append(true)
+	aliasesBuilder.ValueBuilder().(*array.StringBuilder).AppendValues(info.Aliases, nil)
+
+	securityBuilder := array.NewStringBuilder(mem)
+	defer securityBuilder.Release()
+	securityBuilder.Append(security)
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
@@ -116,6 +142,8 @@ func buildViewInfoRecord(info *ViewInfo) (arrow.RecordBatch, error) {
 		schemaPathBuilder.NewArray(),
 		defBuilder.NewArray(),
 		colCommentsBuilder.NewArray(),
+		aliasesBuilder.NewArray(),
+		securityBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {
@@ -124,4 +152,12 @@ func buildViewInfoRecord(info *ViewInfo) (arrow.RecordBatch, error) {
 	}()
 
 	return array.NewRecordBatch(viewInfoSchema, cols, 1), nil
+}
+
+// descriptorComment retains the static descriptor's historical zero-value default.
+func descriptorComment(comment string) *string {
+	if comment == "" {
+		return nil
+	}
+	return &comment
 }

@@ -233,7 +233,7 @@ Panics inside user functions during `bind`, `init`, `cardinality`, and
 
 ## Hosting more protocols
 
-A worker always hosts `vgi.v2` and `vgi_rpc.Reflection.v1`. To host another
+A worker always hosts `vgi.v3` and `vgi_rpc.Reflection.v1`. To host another
 application protocol beside them -- a reporting protocol, say -- return it from
 the hosted-protocols hook. Define it the way vgi-rpc-go defines any protocol:
 
@@ -248,10 +248,10 @@ w := vgi.NewWorker(
 ```
 
 The hook is called once when the worker's server is built and may read
-configuration; what it returns is hosted after `vgi.v2` on **every** transport
+configuration; what it returns is hosted after `vgi.v3` on **every** transport
 (stdio, unix, TCP, HTTP) and fixed for the life of the process. It cannot
-change `vgi.v2`: every request routes on its protocol name. A returned protocol
-named under the reserved `vgi_rpc.` prefix, named `vgi.v2`, or named twice
+change `vgi.v3`: every request routes on its protocol name. A returned protocol
+named under the reserved `vgi_rpc.` prefix, named `vgi.v3`, or named twice
 stops the worker from starting, with an error naming the hook.
 
 ## Identity (`vgi_rpc.Identity.v2`)

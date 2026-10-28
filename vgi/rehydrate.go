@@ -275,6 +275,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		ExecutionID:      recipe.ExecutionID,
 		SubstreamID:      recipe.SubstreamID,
 		InitOpaqueData:   recipe.InitOpaqueData,
+		BindOpaqueData:   recipe.BindOpaqueData,
 		AtUnit:           bindParams.AtUnit,
 		AtValue:          bindParams.AtValue,
 		AttachScope:      attachScope,
