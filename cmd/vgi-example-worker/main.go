@@ -132,7 +132,11 @@ func main() {
 		}),
 		vgi.WithAttachScanBranchesGetHandler(multiBranchScanBranchesGet),
 		vgi.WithAttachWriteFunctionGetHandler(schema_reconcile.AttachWriteFunctionGetHandler),
-		vgi.WithAttachValidator(fixtureAttachValidator),
+		// The example catalog's constraint records (departments, employees,
+		// ...) need no validator: the SDK advertises and selects the
+		// constraint read profile itself. schema_reconcile additionally
+		// negotiates write enforcement; the SDK merges the two.
+		vgi.WithAttachValidator(schema_reconcile.AttachValidator),
 		vgi.WithSecretTypes(
 			vgi.SecretTypeSpec{
 				Name:        "vgi_example",

@@ -96,7 +96,7 @@ func TestGeneratedColumnDiscoveryAndUnsupportedCreate(t *testing.T) {
 
 func TestGeneratedConvenienceUsesCanonicalOwnerAndPreservesMetadata(t *testing.T) {
 	md := arrow.MetadataFrom(map[string]string{"comment": "", "tags": "{}", "provider.note": "keep"})
-	schema := arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int64}, {Name: "doubled", Type: arrow.PrimitiveTypes.Int64, Metadata: md}}, &md)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true}, {Name: "doubled", Type: arrow.PrimitiveTypes.Int64, Nullable: true, Metadata: md}}, &md)
 	worker := vgi.NewWorker(vgi.WithCatalogName("generated"))
 	worker.RegisterCatalogTable("raw.schema", vgi.CatalogTable{Name: "t", Columns: schema, Generated: map[string]string{"doubled": "n * 2"}})
 	client := newContentsClient(t, worker)

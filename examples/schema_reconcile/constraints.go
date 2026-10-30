@@ -137,23 +137,13 @@ func notNullConstraints(spec tableSpec) ([][]byte, error) {
 			if err != nil {
 				return err
 			}
-			ref, err := encodeRecord(generated.CatalogObjectRefSchema, map[string]any{
-				"kind": "constraint", "schema_path": []string{SchemaPath},
-				"name": "schema_reconcile:" + spec.name + ":not_null:" + string(identity), "owner_table": spec.name,
-			})
-			if err != nil {
-				return err
-			}
-			definition, err := encodeRecord(generated.ConstraintDefinitionSchema, map[string]any{
-				"kind": "NOT_NULL", "column_paths": [][]string{path}, "declared_name": nil,
-				"check_expression": nil, "foreign_key": nil,
-			})
-			if err != nil {
-				return err
-			}
-			info, err := encodeRecord(generated.ConstraintInfoSchema, map[string]any{
-				"ref": ref, "definition": definition, "enforcement": "ENFORCED", "validation": "ALL_ROWS",
-				"referenced_constraint": nil,
+			// The provider enforces these on every write and scan and checks
+			// stored rows at attach (AttachValidator), so it attests all rows.
+			info, err := vgi.ConstraintRecord(vgi.ConstraintRecordSpec{
+				SchemaPath: []string{SchemaPath}, Table: spec.name,
+				ID:   "schema_reconcile:" + spec.name + ":not_null:" + string(identity),
+				Kind: vgi.ConstraintNotNull, Columns: [][]string{path},
+				Enforcement: vgi.ConstraintEnforced, Validation: vgi.ConstraintAllRows,
 			})
 			if err != nil {
 				return err

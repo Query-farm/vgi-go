@@ -150,7 +150,7 @@ func TestColumnMetadataRegisteredExtensionRoundTrip(t *testing.T) {
 func TestColumnMetadataEmptyCommentOverrideDiscovery(t *testing.T) {
 	metadata := arrow.MetadataFrom(map[string]string{"comment": "old", "tags": "{}", "provider.note": "keep"})
 	schemaMetadata := arrow.MetadataFrom(map[string]string{"provider": "retained"})
-	schema := arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64, Metadata: metadata}}, &schemaMetadata)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true, Metadata: metadata}}, &schemaMetadata)
 	worker := vgi.NewWorker(vgi.WithCatalogName("metadata"))
 	worker.RegisterCatalogTable("main", vgi.CatalogTable{Name: "comments", Columns: schema, ColumnComments: map[string]string{"id": ""}})
 	client := newContentsClient(t, worker)

@@ -216,7 +216,7 @@ func schemaPathOf(t *testing.T, item []byte) []string {
 func contentsWorker(opts ...vgi.WorkerOption) *vgi.Worker {
 	w := vgi.NewWorker(append([]vgi.WorkerOption{vgi.WithCatalogName("example")}, opts...)...)
 	all.RegisterAll(w)
-	cols := arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	cols := arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil)
 	w.RegisterCatalogTable("data", vgi.CatalogTable{Name: "t1", Columns: cols, Comment: "first"})
 	w.RegisterCatalogTable("data", vgi.CatalogTable{Name: "t2", Columns: cols,
 		ColumnComments: map[string]string{"id": "the id"}})

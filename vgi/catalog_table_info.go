@@ -3,6 +3,7 @@
 package vgi
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"sort"
@@ -86,7 +87,12 @@ func buildTableInfoRecord(info *TableInfo) (arrow.RecordBatch, error) {
 		return nil, err
 	}
 	if len(info.NotNullConstraints)+len(info.UniqueConstraints)+len(info.CheckConstraints)+len(info.PrimaryKeyConstraints)+len(info.ForeignKeyConstraints) > 0 {
-		return nil, methodNotImplemented("legacy constraint metadata requires explicit canonical records")
+		return nil, methodNotImplemented(fmt.Sprintf("table %q: legacy NotNull/Unique/Check/PrimaryKey/ForeignKey constraint fields are not sent under vgi.v3; "+
+			"declare canonical records with vgi.ConstraintRecord in Constraints instead", info.Name))
+	}
+	// The extension rejects the table at ATTACH when these disagree.
+	if err := ValidateConstraintRecords(info.Name, info.Columns, info.Constraints); err != nil {
+		return nil, err
 	}
 	mem := memory.NewGoAllocator()
 

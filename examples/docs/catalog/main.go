@@ -33,8 +33,8 @@ import (
 // The table's shape. Declaring Columns explicitly on the CatalogTable lets
 // DuckDB describe the table without calling the worker at all.
 var citiesSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "name", Type: arrow.BinaryTypes.String},
-	{Name: "population", Type: arrow.PrimitiveTypes.Int64},
+	{Name: "name", Type: arrow.BinaryTypes.String}, // non-nullable: attested by a NOT_NULL record below
+	{Name: "population", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 }, nil)
 
 // Fields are exported because this type ends up inside the scan state, and
@@ -138,6 +138,18 @@ func NewCitiesScan() vgi.TableFunction {
 	return vgi.AsTableFunction[citiesState](&CitiesFn{})
 }
 
+func citiesNameNotNull() []byte {
+	record, err := vgi.ConstraintRecord(vgi.ConstraintRecordSpec{
+		SchemaPath: []string{"data"}, Table: "cities", ID: "cities:name:not_null",
+		Kind: vgi.ConstraintNotNull, Columns: [][]string{{"name"}},
+		Enforcement: vgi.ConstraintEnforced, Validation: vgi.ConstraintAllRows,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	return record
+}
+
 func main() {
 	httpMode := flag.Bool("http", false, "serve over HTTP instead of stdio")
 	logFlags := vgi.RegisterLoggingFlags(flag.CommandLine)
@@ -164,7 +176,11 @@ func main() {
 		FuncArgs: []vgi.CatalogTableArg{
 			{Position: 0, Value: int64(0), Type: arrow.PrimitiveTypes.Int64},
 		},
-		NotNull:        []string{"name"},
+		// Constraints are facts the worker attests. The scan never yields a
+		// NULL name, so it states that as an ENFORCED + ALL_ROWS record; Arrow
+		// nullability must agree (name is the only non-nullable column). The
+		// SDK negotiates the constraint read profile at ATTACH.
+		Constraints:    [][]byte{citiesNameNotNull()},
 		ColumnComments: map[string]string{"population": "Most recent estimate"},
 	})
 

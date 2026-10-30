@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/apache/arrow-go/v18/arrow"
 )
 
 // writableStore is a SQLite-backed persistence layer that mirrors the
@@ -86,6 +88,11 @@ CREATE INDEX IF NOT EXISTS wc_row_lookup ON wc_row(catalog, schema_path, table_n
 
 // writableTableMeta is the gob-serializable per-table metadata.
 type writableTableMeta struct {
+	// Constraints are canonical ConstraintInfo records.
+	Constraints [][]byte
+	// NotNull, PrimaryKey, Unique, Check and ForeignKey are decoded only from
+	// stores written before vgi.v3. They were never enforced by this catalog,
+	// so they are not provider facts and are not served (see tableLoad).
 	NotNull       []string
 	PrimaryKey    [][]string
 	Unique        [][]string
@@ -106,8 +113,7 @@ func encodeTableMeta(t *writableTable) []byte {
 		defaults[k] = buf.Bytes()
 	}
 	m := writableTableMeta{
-		NotNull: t.notNull, PrimaryKey: t.primaryKey, Unique: t.unique,
-		Check: t.check, ForeignKey: t.foreignKey, Defaults: defaults,
+		Constraints: t.constraints, Defaults: defaults,
 		ColumnComment: t.columnComment,
 	}
 	var buf bytes.Buffer
@@ -291,12 +297,22 @@ func (s *writableStore) tableLoad(catalog, schemaPath, tableName string) (*writa
 	if err != nil {
 		return nil, err
 	}
+	return writableTableFromMeta(tableName, schema, comment, meta), nil
+}
+
+// writableTableFromMeta rebuilds a stored table. Legacy (pre-vgi.v3)
+// constraint fields are dropped: the writable catalog never enforced them,
+// so serving them as canonical records would attest facts it cannot vouch
+// for, and the legacy TableInfo fields are rejected on the wire.
+func writableTableFromMeta(name string, schema *arrow.Schema, comment string, meta *writableTableMeta) *writableTable {
+	if len(meta.NotNull)+len(meta.PrimaryKey)+len(meta.Unique)+len(meta.Check)+len(meta.ForeignKey) > 0 {
+		LogCatalog.Warn("ignoring legacy writable-table constraint metadata; only canonical records are served", "table", name)
+	}
 	return &writableTable{
-		name: tableName, schema: schema, comment: comment,
-		notNull: meta.NotNull, primaryKey: meta.PrimaryKey, unique: meta.Unique,
-		check: meta.Check, foreignKey: meta.ForeignKey,
-		defaults: meta.toDefaults(), columnComment: meta.ColumnComment,
-	}, nil
+		name: name, schema: schema, comment: comment,
+		constraints: meta.Constraints,
+		defaults:    meta.toDefaults(), columnComment: meta.ColumnComment,
+	}
 }
 
 func (s *writableStore) tableList(catalog, schemaPath string) ([]string, error) {

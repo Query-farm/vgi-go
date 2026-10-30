@@ -81,45 +81,6 @@ func TestConstraintFixtureInvalidRowsCannotEstablishFacts(t *testing.T) {
 	}
 }
 
-func TestConstraintFixtureAttachSelectsOnlyOfferedReadProfiles(t *testing.T) {
-	profiles := []string{"vgi.constraint.records.read.v1", "vgi.expression.duckdb.scalar.v1"}
-	for count := -1; count <= 3; count++ {
-		req := &vgi.CatalogAttachRequestWire{Name: "example"}
-		if count >= 0 {
-			offered := profiles[:min(count, 2)]
-			if count == 3 {
-				offered = profiles[1:]
-			}
-			offer := fixtureRecord(generated.CatalogCapabilitiesSchema, map[string]any{"read": offered, "ddl": []string{}, "write": []string{}, "transaction": []string{}})
-			client := fixtureRecord(generated.ClientCapabilitiesSchema, map[string]any{"engine": "duckdb", "native_formats": []string{}, "catalogs": []string{}, "can_stream": true, "filter_encodings": []string{}, "catalog": offer, "query_pushdown": nil})
-			req.ClientCapabilities = &client
-		}
-		decision, err := fixtureAttachValidator(req, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		selected := fixtureBatch(t, decision.SelectedCapabilities)
-		read := fixtureColumn(t, selected, "read").(*array.List)
-		a, b := read.ValueOffsets(0)
-		expected := max(count, 0)
-		if count == 3 {
-			expected = 0
-		}
-		if int(b-a) != expected {
-			t.Fatal("selection ignored client offer")
-		}
-		write := fixtureColumn(t, selected, "write").(*array.List)
-		a, b = write.ValueOffsets(0)
-		if b != a {
-			t.Fatal("read-only fixture advertised mutation enforcement")
-		}
-	}
-	decision, err := fixtureAttachValidator(&vgi.CatalogAttachRequestWire{Name: "unrelated"}, nil)
-	if err != nil || decision != nil {
-		t.Fatal("unrelated catalog was changed")
-	}
-}
-
 func fixtureColumn(t *testing.T, batch arrow.RecordBatch, name string) arrow.Array {
 	t.Helper()
 	index := batch.Schema().FieldIndices(name)
@@ -191,7 +152,9 @@ func TestConstraintFixtureDiscoveryIsValidatedReadOnly(t *testing.T) {
 				definition := fixtureBatch(t, fixtureColumn(t, constraint, "definition").(*array.Binary).Value(0))
 				switch fixtureEnum(t, definition, "kind") {
 				case "FOREIGN_KEY":
-					if !bytes.Equal(fixtureColumn(t, constraint, "referenced_constraint").(*array.Binary).Value(0), fixtureConstraintRef("departments", "fixture:departments:primary")) {
+					target := fixtureBatch(t, fixtureColumn(t, constraint, "referenced_constraint").(*array.Binary).Value(0))
+					if fixtureColumn(t, target, "name").(*array.String).Value(0) != "fixture:departments:primary" ||
+						fixtureColumn(t, target, "owner_table").(*array.String).Value(0) != "departments" {
 						t.Fatal("FK lost stable target")
 					}
 				case "CHECK":

@@ -14,7 +14,7 @@ import (
 // because every kind in a SchemaContents is complete.
 func TestSchemaContentsSkipsKindsCountedZero(t *testing.T) {
 	w := NewWorker(WithCatalogName("example"))
-	cols := arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	cols := arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil)
 	w.RegisterCatalogTable("data", CatalogTable{Name: "t", Columns: cols})
 	w.RegisterCatalogView("data", CatalogView{Name: "v", Definition: "SELECT 1"})
 	w.catalog = NewDefaultReadOnlyCatalog(w.catalogName, w)
@@ -64,7 +64,7 @@ func (c *countingTable) ArgumentSpecs() []ArgSpec   { return nil }
 
 func (c *countingTable) OnBind(*BindParams) (*BindResponse, error) {
 	*c.binds++
-	return &BindResponse{OutputSchema: arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64}}, nil)}, nil
+	return &BindResponse{OutputSchema: arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil)}, nil
 }
 
 // The default catalog is static and version-frozen, so catalog_contents is

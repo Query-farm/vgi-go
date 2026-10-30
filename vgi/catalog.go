@@ -765,6 +765,7 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 	attachOpaqueDataRequired := false
 	var resolvedData, resolvedImpl *string
 	var catalogCapabilities, selectedCapabilities *[]byte
+	var err error
 	if w.attachValidator != nil {
 		decision, vErr := w.attachValidator(&req, callCtx)
 		if vErr != nil {
@@ -795,6 +796,13 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 				resolvedImpl = &v
 			}
 		}
+	}
+	// Constraint records are readable only under a negotiated profile: the
+	// SDK advertises and selects it itself when the declarative tables this
+	// attach serves carry records, merged with any validator decision.
+	if catalogCapabilities, selectedCapabilities, err = mergeReadProfiles(
+		w.declarativeReadProfiles(req.Name), catalogCapabilities, selectedCapabilities, req.ClientCapabilities); err != nil {
+		return CatalogAttachResultWire{}, rewrapError("ValueError", err)
 	}
 	// Aliases registered with discovery metadata (WithCatalogAliasInfo)
 	// get a random per-ATTACH scope so two ATTACHes of the same alias are
@@ -1447,44 +1455,6 @@ func (w *Worker) findCatalogTable(schemaPath SchemaPath, name string) *CatalogTa
 	return nil
 }
 
-// resolveColumnIndices maps column names to their indices in the schema.
-func resolveColumnIndices(columns *arrow.Schema, names []string) []int32 {
-	if columns == nil {
-		return nil
-	}
-	var indices []int32
-	for _, colName := range names {
-		for i := 0; i < columns.NumFields(); i++ {
-			if columns.Field(i).Name == colName {
-				indices = append(indices, int32(i))
-				break
-			}
-		}
-	}
-	return indices
-}
-
-// resolveColumnGroupIndices maps groups of column names to groups of indices.
-func resolveColumnGroupIndices(columns *arrow.Schema, groups [][]string) [][]int32 {
-	if columns == nil || len(groups) == 0 {
-		return nil
-	}
-	result := make([][]int32, 0, len(groups))
-	for _, group := range groups {
-		var indices []int32
-		for _, colName := range group {
-			for i := 0; i < columns.NumFields(); i++ {
-				if columns.Field(i).Name == colName {
-					indices = append(indices, int32(i))
-					break
-				}
-			}
-		}
-		result = append(result, indices)
-	}
-	return result
-}
-
 // validateRequiredFilters validates raw paths without splitting or folding names.
 func validateRequiredFilters(tableName string, columns *arrow.Schema, groups [][][]string) error {
 	for _, group := range groups {
@@ -1549,7 +1519,8 @@ func (w *Worker) serializeCatalogTable(schemaPath SchemaPath, ct *CatalogTable) 
 
 func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*TableInfo, error) {
 	if len(ct.NotNull)+len(ct.Unique)+len(ct.PrimaryKey)+len(ct.Check)+len(ct.ForeignKey) > 0 {
-		return nil, methodNotImplemented("legacy constraint metadata requires explicit canonical records")
+		return nil, methodNotImplemented(fmt.Sprintf("table %q: legacy NotNull/Unique/Check/PrimaryKey/ForeignKey constraint fields are not sent under vgi.v3; "+
+			"declare canonical records with vgi.ConstraintRecord in CatalogTable.Constraints instead", ct.Name))
 	}
 	// Resolve columns: if Function is set but Columns is nil, derive via OnBind
 	columns := ct.Columns

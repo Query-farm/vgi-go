@@ -68,6 +68,13 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 	columns := arrow.NewSchema([]arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 	}, nil)
+	uniqueRecord, err := ConstraintRecord(ConstraintRecordSpec{
+		SchemaPath: []string{"main"}, Table: "events", ID: "events:unique:id", Kind: ConstraintUnique,
+		Columns: [][]string{{"id"}}, Enforcement: ConstraintEnforced, Validation: ConstraintAllRows,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defaultBuilder := array.NewInt64Builder(memory.DefaultAllocator)
 	defaultBuilder.Append(42)
 	defaultColumn := defaultBuilder.NewArray()
@@ -125,7 +132,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					Comment:                  "event log",
 					Tags:                     map[string]string{"tier": "hot"},
 					Columns:                  columns,
-					Constraints:              [][]byte{{0x02}},
+					Constraints:              [][]byte{uniqueRecord},
 					DefinitionRevision:       []byte("provider-revision"),
 					WriteResultModes:         map[string]string{"insert": "changes", "update": "rows"},
 					SupportsColumnStatistics: true,

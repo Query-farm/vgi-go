@@ -70,6 +70,19 @@ func (c *contentsClient) functions(attach []byte, functionType string) [][]byte 
 		map[string]any{"attach_opaque_data": attach, "path": []string{"main"}, "type": functionType})
 }
 
+// notNullRecord is an ENFORCED + ALL_ROWS NOT_NULL record for one column.
+func notNullRecord(schema, table, column string) []byte {
+	record, err := vgi.ConstraintRecord(vgi.ConstraintRecordSpec{
+		SchemaPath: []string{schema}, Table: table, ID: table + ":nn:" + column,
+		Kind: vgi.ConstraintNotNull, Columns: [][]string{{column}},
+		Enforcement: vgi.ConstraintEnforced, Validation: vgi.ConstraintAllRows,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return record
+}
+
 // staticChild is a small static catalog: two schemas, a function-backed table
 // in each, a view, a macro, and three functions.
 func staticChild(name string, opts ...vgi.WorkerOption) *vgi.Worker {
@@ -78,10 +91,13 @@ func staticChild(name string, opts ...vgi.WorkerOption) *vgi.Worker {
 	c.RegisterScalar(scalar.NewDouble())
 	c.RegisterAggregate(&aggregate.SumFunction{})
 	c.RegisterTable(seq)
+	// sequence's n is non-nullable in Arrow, so each table attests it.
 	c.RegisterCatalogTable("main", vgi.CatalogTable{Name: "ten", Function: seq,
-		FuncArgs: []vgi.CatalogTableArg{{Position: 0, Value: int64(10), Type: arrow.PrimitiveTypes.Int64}}})
+		FuncArgs:    []vgi.CatalogTableArg{{Position: 0, Value: int64(10), Type: arrow.PrimitiveTypes.Int64}},
+		Constraints: [][]byte{notNullRecord("main", "ten", "n")}})
 	c.RegisterCatalogTable("extra", vgi.CatalogTable{Name: "five", Function: seq,
-		FuncArgs: []vgi.CatalogTableArg{{Position: 0, Value: int64(5), Type: arrow.PrimitiveTypes.Int64}}})
+		FuncArgs:    []vgi.CatalogTableArg{{Position: 0, Value: int64(5), Type: arrow.PrimitiveTypes.Int64}},
+		Constraints: [][]byte{notNullRecord("extra", "five", "n")}})
 	c.RegisterCatalogView("main", vgi.CatalogView{Name: "answer", Definition: "SELECT 42 AS answer"})
 	c.RegisterCatalogMacro("main", vgi.CatalogMacro{Name: "triple", MacroType: vgi.MacroTypeScalar,
 		Parameters: []string{"x"}, Definition: "x * 3"})

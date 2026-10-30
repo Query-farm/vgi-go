@@ -409,30 +409,12 @@ func tableInfoFromWritable(t *writableTable, schemaPath SchemaPath) (*TableInfo,
 			return nil, err
 		}
 	}
-	notNull := resolveColumnIndices(cols, t.notNull)
-	unique := resolveColumnGroupIndices(cols, t.unique)
-	primaryKey := resolveColumnGroupIndices(cols, t.primaryKey)
-	var fkBytes [][]byte
-	for i := range t.foreignKey {
-		data, err := serializeForeignKey(schemaPath, &t.foreignKey[i])
-		if err != nil {
-			return nil, err
-		}
-		fkBytes = append(fkBytes, data)
-	}
-	if fkBytes == nil {
-		fkBytes = [][]byte{}
-	}
 	return &TableInfo{
 		Name:                     t.name,
 		SchemaPath:               schemaPath,
 		Comment:                  t.comment,
 		Columns:                  cols,
-		NotNullConstraints:       notNull,
-		UniqueConstraints:        unique,
-		PrimaryKeyConstraints:    primaryKey,
-		ForeignKeyConstraints:    fkBytes,
-		CheckConstraints:         t.check,
+		Constraints:              t.constraints,
 		WriteResultModes:         map[string]string{"insert": "count", "update": "count", "delete": "count"},
 		SupportsColumnStatistics: false,
 	}, nil

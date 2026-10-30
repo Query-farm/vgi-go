@@ -43,12 +43,9 @@ type writableTable struct {
 	// rows is the in-memory row store; each row is a map of column name
 	// to Go value (nil for NULL).
 	rows []map[string]interface{}
-	// constraints captured at CREATE TABLE time.
-	notNull       []string
-	primaryKey    [][]string
-	unique        [][]string
-	check         []string
-	foreignKey    []ForeignKeyConstraint
+	// constraints are canonical ConstraintInfo records the catalog attests
+	// for this table, served verbatim on TableInfo.constraints.
+	constraints   [][]byte
 	defaults      map[string]any
 	columnComment map[string]string
 }
