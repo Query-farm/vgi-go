@@ -15,7 +15,7 @@ replace github.com/apache/arrow-go/v18 => github.com/Query-farm/arrow-go/v18 v18
 replace github.com/google/flatbuffers => github.com/rustyconover/flatbuffers v25.12.20-0.20261026151427-0acd09bcd1ff+incompatible
 
 require (
-	github.com/Query-farm-haybarn/haybarn-go/v2 v2.20000.0-rc.8
+	github.com/Query-farm-haybarn/haybarn-go/v2 v2.20000.0-rc.9
 	github.com/Query-farm/vgi-rpc-go v0.36.0
 	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.0
 	github.com/apache/arrow-go/v18 v18.7.0
@@ -29,7 +29,7 @@ require (
 require (
 	github.com/MicahParks/jwkset v0.11.3 // indirect
 	github.com/MicahParks/keyfunc/v3 v3.8.1 // indirect
-	github.com/Query-farm-haybarn/haybarn-go-bindings v0.20000.0-rc.8 // indirect
+	github.com/Query-farm-haybarn/haybarn-go-bindings v0.20000.0-rc.9 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/apache/thrift v0.24.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -57,10 +57,10 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
-	haybarn-extensions.query.farm/go/libhaybarn/darwin-arm64 v0.20000.0-rc.8 // indirect
-	haybarn-extensions.query.farm/go/libhaybarn/linux-amd64 v0.20000.0-rc.8 // indirect
-	haybarn-extensions.query.farm/go/libhaybarn/linux-arm64 v0.20000.0-rc.8 // indirect
-	haybarn-extensions.query.farm/go/libhaybarn/windows-amd64 v0.20000.0-rc.8 // indirect
+	haybarn-extensions.query.farm/go/libhaybarn/darwin-arm64 v0.20000.0-rc.9 // indirect
+	haybarn-extensions.query.farm/go/libhaybarn/linux-amd64 v0.20000.0-rc.9 // indirect
+	haybarn-extensions.query.farm/go/libhaybarn/linux-arm64 v0.20000.0-rc.9 // indirect
+	haybarn-extensions.query.farm/go/libhaybarn/windows-amd64 v0.20000.0-rc.9 // indirect
 	modernc.org/libc v1.75.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.0 // indirect
