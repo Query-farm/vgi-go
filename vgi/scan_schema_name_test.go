@@ -169,7 +169,7 @@ func (f *namedTable) Metadata() FunctionMetadata { return FunctionMetadata{} }
 func (f *namedTable) ArgumentSpecs() []ArgSpec { return nil }
 
 func (f *namedTable) OnBind(*BindParams) (*BindResponse, error) {
-	return BindSchema(arrow.NewSchema([]arrow.Field{{Name: "tag", Type: arrow.BinaryTypes.String, Nullable: true}}, nil))
+	return BindSchema(arrow.NewSchema([]arrow.Field{{Name: "tag", Type: arrow.BinaryTypes.String}}, nil))
 }
 
 func (f *namedTable) NewState(*ProcessParams) (*struct{}, error) { return &struct{}{}, nil }

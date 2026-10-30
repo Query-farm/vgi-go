@@ -42,8 +42,9 @@ func ValidateColumnExpressions(schema *arrow.Schema, owner []string, allowGenera
 				return fmt.Errorf("unknown generated column metadata version")
 			}
 		}
-		if _, legacy := values["generated_expression"]; legacy {
-			return fmt.Errorf("legacy generated expression requires explicit canonical translation")
+		if _, legacy := values[legacyGeneratedKey]; legacy {
+			return fmt.Errorf("column %q: legacy generated_expression metadata is not read under vgi.v3; "+
+				"use CatalogTable.Generated or vgi.GeneratedExpressionMetadata (SerializeTableInfo translates it automatically when unambiguous)", field.Name)
 		}
 		encoded, expression := values[GeneratedExpressionKey]
 		category, generation := values[GenerationKey]
@@ -146,18 +147,9 @@ func validateGeneratedExpression(encoded string, owner []string) error {
 			return fmt.Errorf("required expression context is null")
 		}
 	}
-	for _, i := range []int{0, 1} {
-		if !sqlText(context.Field(i).(*array.String).Value(0), 256) {
-			return fmt.Errorf("invalid expression context")
-		}
-	}
-	order := context.Field(2).(*array.String).Value(0)
-	nullOrder := context.Field(3).(*array.String).Value(0)
-	if order != "asc" && order != "desc" {
-		return fmt.Errorf("invalid expression order")
-	}
-	if !slices.Contains([]string{"nulls_first", "nulls_last", "nulls_first_on_asc_last_on_desc", "nulls_last_on_asc_first_on_desc"}, nullOrder) {
-		return fmt.Errorf("invalid expression NULL order")
+	// The extension reads only the default explicit evaluation context.
+	if !defaultEvaluationContext(context) {
+		return fmt.Errorf("unsupported generated expression evaluation context; DuckDB reads only UTC/binary/asc/nulls_last/preserve_insertion_order")
 	}
 	if reader.Next() || reader.Err() != nil || source.Len() != 0 {
 		return fmt.Errorf("generated expression requires exactly one complete IPC batch")
@@ -191,4 +183,92 @@ func GeneratedExpressionMetadata(sql string, owner []string) (string, error) {
 	}
 	encoded := base64.StdEncoding.EncodeToString(payload)
 	return encoded, validateGeneratedExpression(encoded, owner)
+}
+
+// legacyGeneratedKey is the pre-v3 generated-column metadata key, whose value
+// was the bare SQL expression.
+const legacyGeneratedKey = "generated_expression"
+
+// translateLegacyGenerated rewrites top-level legacy generated_expression
+// metadata into the canonical VIRTUAL form owned by schemaPath. It refuses
+// the ambiguous cases: canonical keys alongside the legacy one, or an empty
+// expression. Fields without the legacy key are untouched.
+func translateLegacyGenerated(schema *arrow.Schema, owner []string) (*arrow.Schema, error) {
+	if schema == nil {
+		return nil, nil
+	}
+	var fields []arrow.Field
+	for i, field := range schema.Fields() {
+		index := field.Metadata.FindKey(legacyGeneratedKey)
+		if index < 0 {
+			continue
+		}
+		sql := field.Metadata.Values()[index]
+		if field.Metadata.FindKey(GeneratedExpressionKey) >= 0 || field.Metadata.FindKey(GenerationKey) >= 0 {
+			return nil, fmt.Errorf("column %q carries both legacy generated_expression and canonical %s metadata", field.Name, GeneratedExpressionKey)
+		}
+		if strings.TrimSpace(sql) == "" {
+			return nil, fmt.Errorf("column %q: legacy generated_expression is empty", field.Name)
+		}
+		encoded, err := GeneratedExpressionMetadata(sql, owner)
+		if err != nil {
+			return nil, fmt.Errorf("column %q: translating legacy generated_expression: %w", field.Name, err)
+		}
+		values := field.Metadata.ToMap()
+		delete(values, legacyGeneratedKey)
+		values[GeneratedExpressionKey] = encoded
+		values[GenerationKey] = "virtual"
+		if fields == nil {
+			fields = slices.Clone(schema.Fields())
+		}
+		fields[i].Metadata = arrow.MetadataFrom(values)
+	}
+	if fields == nil {
+		return schema, nil
+	}
+	metadata := schema.Metadata()
+	return arrow.NewSchema(fields, &metadata), nil
+}
+
+// validateGeneratedColumns mirrors the extension's restrictions on the
+// generated columns of a served table: Boolean, signed integer or string type
+// without an extension type, the bounded generated-expression grammar over
+// existing generated-primitive columns, and at least one physical column.
+// Nullability is served by ServedTableColumns. Canonical metadata must
+// already have passed ValidateColumnExpressions.
+func validateGeneratedColumns(schema *arrow.Schema) error {
+	if schema == nil {
+		return nil
+	}
+	generatedCount, physical := 0, 0
+	for _, field := range schema.Fields() {
+		index := field.Metadata.FindKey(GeneratedExpressionKey)
+		if index < 0 {
+			if !isRowIDField(field) {
+				physical++
+			}
+			continue
+		}
+		generatedCount++
+		if !generatedPrimitiveArrow(field) {
+			return fmt.Errorf("generated column %q has type %s; DuckDB reads generated columns only as BOOLEAN, TINYINT..BIGINT or VARCHAR", field.Name, field.Type)
+		}
+		payload, err := base64.StdEncoding.DecodeString(field.Metadata.Values()[index])
+		if err != nil {
+			return fmt.Errorf("generated column %q: %w", field.Name, err)
+		}
+		row, err := readCanonicalRow(payload, generated.SqlExpressionSchema)
+		if err != nil {
+			return fmt.Errorf("generated column %q: %w", field.Name, err)
+		}
+		sql := rowColumn(row, "sql").(*array.String).Value(0)
+		row.Release()
+		if err := validateGeneratedSQL(sql, schema, field.Name); err != nil {
+			return fmt.Errorf("generated column %q (%s): %w", field.Name, sql, err)
+		}
+	}
+	if generatedCount > 0 && physical == 0 {
+		return fmt.Errorf("a table with generated columns needs at least one physical column")
+	}
+	return nil
 }

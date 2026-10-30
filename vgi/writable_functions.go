@@ -187,6 +187,8 @@ type writableMutateState struct {
 	// input batch would repeat it. Unexported so gob ignores it on the HTTP
 	// continuation round-trip (it re-resolves after rehydration).
 	catalog *WritableCatalog
+	// required are the table's NOT NULL columns, enforced on every write.
+	required []string
 }
 
 // resolveCatalog returns the writable catalog owning this mutation's table,
@@ -195,8 +197,11 @@ func (st *writableMutateState) resolveCatalog(w *Worker) (*WritableCatalog, erro
 	if st.catalog != nil {
 		return st.catalog, nil
 	}
-	c, _, err := w.findWritableTable(st.SchemaPath, st.TableName)
+	c, t, err := w.findWritableTable(st.SchemaPath, st.TableName)
 	if err != nil {
+		return nil, err
+	}
+	if st.required, err = requiredColumns(t.constraints); err != nil {
 		return nil, err
 	}
 	st.catalog = c
@@ -269,7 +274,7 @@ func (f *writableInsertFn) Process(ctx context.Context, p *ProcessParams, state 
 	if err != nil {
 		return err
 	}
-	if _, err := c.store.rowsAppend(c.Name, st.SchemaPath, st.TableName, rows); err != nil {
+	if _, err := c.store.rowsAppend(c.Name, st.SchemaPath, st.TableName, rows, st.required); err != nil {
 		return err
 	}
 	st.Count += int64(len(rows))
@@ -328,7 +333,7 @@ func (f *writableUpdateFn) Process(ctx context.Context, p *ProcessParams, state 
 	if err != nil {
 		return err
 	}
-	updated, err := c.store.rowsUpdate(c.Name, st.SchemaPath, st.TableName, updates)
+	updated, err := c.store.rowsUpdate(c.Name, st.SchemaPath, st.TableName, updates, st.required)
 	if err != nil {
 		return err
 	}

@@ -202,8 +202,15 @@ func (m *MemoryCatalog) attach(_ *vgirpc.CallContext, req *CatalogAttachRequestW
 	m.attaches[string(attach)] = st
 	version := m.reportedVersion(st)
 	m.mu.Unlock()
+	// Negotiate the profiles CREATE TABLE ... NOT NULL needs (see tableCreate).
+	available, selected, err := mergeCapabilities(writableCapabilities, nil, nil, req.ClientCapabilities)
+	if err != nil {
+		return CatalogAttachResultWire{}, err
+	}
 	defaultSchema := "main"
 	res := CatalogAttachResultWire{
+		CatalogCapabilities:      available,
+		SelectedCapabilities:     selected,
 		AttachOpaqueData:         attach,
 		CatalogVersion:           version,
 		AttachOpaqueDataRequired: true,
@@ -563,9 +570,6 @@ func (m *MemoryCatalog) dropObject(attach []byte, path SchemaPath, name, kind st
 }
 
 func (m *MemoryCatalog) tableCreate(req *TableCreateRequestWire) error {
-	if len(req.ConstraintDefinitions) > 0 {
-		return methodNotImplemented("catalog_table_create: canonical constraint enforcement")
-	}
 	if req.Comment != nil || req.Tags != nil || req.Options != nil || req.Layout != nil {
 		return methodNotImplemented("catalog_table_create")
 	}
@@ -576,14 +580,21 @@ func (m *MemoryCatalog) tableCreate(req *TableCreateRequestWire) error {
 	if err != nil {
 		return fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
 	}
-	if err := requireUnconstrainedCreateSchema(columns); err != nil {
+	// Tables hold definitions only and have no write path, so a NOT NULL
+	// holds for every row they can ever return. Other kinds are refused:
+	// this catalog claims no PRIMARY KEY/UNIQUE/CHECK/FOREIGN KEY enforcement.
+	records, required, err := notNullRecords(req.SchemaPath, req.Name, columns, req.ConstraintDefinitions)
+	if err != nil {
+		return err
+	}
+	if err := requireUnconstrainedCreateSchema(columns, required); err != nil {
 		return err
 	}
 	item, err := SerializeTableInfo(&TableInfo{
 		Name:        req.Name,
 		SchemaPath:  slices.Clone(req.SchemaPath),
 		Columns:     columns,
-		Constraints: [][]byte{},
+		Constraints: records,
 	})
 	if err != nil {
 		return err

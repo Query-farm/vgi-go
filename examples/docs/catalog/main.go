@@ -33,8 +33,8 @@ import (
 // The table's shape. Declaring Columns explicitly on the CatalogTable lets
 // DuckDB describe the table without calling the worker at all.
 var citiesSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "name", Type: arrow.BinaryTypes.String}, // non-nullable: attested by a NOT_NULL record below
-	{Name: "population", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	{Name: "name", Type: arrow.BinaryTypes.String},
+	{Name: "population", Type: arrow.PrimitiveTypes.Int64},
 }, nil)
 
 // Fields are exported because this type ends up inside the scan state, and
@@ -177,9 +177,10 @@ func main() {
 			{Position: 0, Value: int64(0), Type: arrow.PrimitiveTypes.Int64},
 		},
 		// Constraints are facts the worker attests. The scan never yields a
-		// NULL name, so it states that as an ENFORCED + ALL_ROWS record; Arrow
-		// nullability must agree (name is the only non-nullable column). The
-		// SDK negotiates the constraint read profile at ATTACH.
+		// NULL name, so it states that as an ENFORCED + ALL_ROWS record. The
+		// SDK serves exactly the record-named columns as non-nullable (every
+		// other column is served nullable) and negotiates the constraint read
+		// profile at ATTACH.
 		Constraints:    [][]byte{citiesNameNotNull()},
 		ColumnComments: map[string]string{"population": "Most recent estimate"},
 	})

@@ -22,7 +22,9 @@ import (
 // them from schema shape or legacy descriptor fields. The DuckDB extension
 // reads them only when the attach negotiated ConstraintRecordsReadProfile,
 // accepts only ENFORCED + ALL_ROWS records, and requires every table's Arrow
-// nullability to match its NOT_NULL/PRIMARY_KEY column paths exactly.
+// nullability to match its NOT_NULL/PRIMARY_KEY column paths exactly. The SDK
+// serves nullability from the records (see ServedTableColumns), so authors
+// never have to flip Arrow fields by hand.
 
 // ConstraintRecordsReadProfile is the catalog read profile under which a
 // catalog serves canonical ConstraintInfo records.
@@ -106,12 +108,22 @@ type ConstraintRecordSpec struct {
 
 // ConstraintRecord encodes one canonical ConstraintInfo record for
 // CatalogTable.Constraints / TableInfo.Constraints.
+//
+// It rejects what the DuckDB extension refuses at ATTACH whenever the record
+// alone shows it: anything but ENFORCED + ALL_ROWS, a schema path that is not
+// exactly one component, nested column paths outside NOT_NULL, duplicate
+// paths, a cross-schema FOREIGN KEY, and CHECK SQL outside the numeric
+// comparison grammar. Checks that need the table's columns (path resolution,
+// operand types, nullability) run when the table is served.
 func ConstraintRecord(spec ConstraintRecordSpec) ([]byte, error) {
-	if spec.ID == "" || strings.ContainsRune(spec.ID, 0) {
-		return nil, fmt.Errorf("constraint id must be nonempty without NUL")
+	if !validIdentifier(spec.ID) {
+		return nil, fmt.Errorf("constraint id must be nonempty, at most 4096 bytes, without NUL")
 	}
-	if spec.Table == "" {
+	if !validIdentifier(spec.Table) {
 		return nil, fmt.Errorf("constraint %q: owning table is required", spec.ID)
+	}
+	if len(spec.SchemaPath) != 1 || !validIdentifier(spec.SchemaPath[0]) {
+		return nil, fmt.Errorf("constraint %q: SchemaPath must be the owning table's one-component schema path; DuckDB reads no other", spec.ID)
 	}
 	switch spec.Kind {
 	case ConstraintNotNull, ConstraintPrimaryKey, ConstraintUnique, ConstraintCheck, ConstraintForeignKey:
@@ -128,6 +140,13 @@ func ConstraintRecord(spec ConstraintRecordSpec) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("constraint %q: validation must be ALL_ROWS, FUTURE_WRITES or UNVALIDATED, got %q", spec.ID, spec.Validation)
 	}
+	if spec.Enforcement != ConstraintEnforced || spec.Validation != ConstraintAllRows {
+		return nil, fmt.Errorf("constraint %q is %s/%s; DuckDB accepts only ENFORCED + ALL_ROWS records, "+
+			"so state a constraint only when every row the table can return satisfies it", spec.ID, spec.Enforcement, spec.Validation)
+	}
+	if spec.DeclaredName != "" && !validIdentifier(spec.DeclaredName) {
+		return nil, fmt.Errorf("constraint %q: declared name must be at most 4096 bytes without NUL", spec.ID)
+	}
 	isCheck := spec.Kind == ConstraintCheck
 	if isCheck != (spec.CheckSQL != "") {
 		return nil, fmt.Errorf("constraint %q: CheckSQL is required for CHECK and only CHECK", spec.ID)
@@ -141,14 +160,39 @@ func ConstraintRecord(spec ConstraintRecordSpec) ([]byte, error) {
 	if spec.Kind == ConstraintNotNull && len(spec.Columns) != 1 {
 		return nil, fmt.Errorf("constraint %q: NOT_NULL requires exactly one column path", spec.ID)
 	}
-	if err := checkColumnPaths(spec.ID, spec.Columns); err != nil {
+	if err := checkColumnPaths(spec.ID, spec.Columns, spec.Kind == ConstraintNotNull); err != nil {
 		return nil, err
+	}
+	if isCheck {
+		if err := validateNumericCheckSQL(spec.CheckSQL, nil); err != nil {
+			return nil, fmt.Errorf("constraint %q: CHECK %q: %w", spec.ID, spec.CheckSQL, err)
+		}
 	}
 	if (spec.Kind == ConstraintForeignKey) != (spec.References != nil) {
 		return nil, fmt.Errorf("constraint %q: References is required for FOREIGN_KEY and only FOREIGN_KEY", spec.ID)
 	}
+	if ref := spec.References; ref != nil {
+		if len(ref.SchemaPath) != 0 && !slices.Equal(ref.SchemaPath, spec.SchemaPath) {
+			return nil, fmt.Errorf("constraint %q: foreign key must reference a table in its own schema %v; DuckDB refuses cross-schema keys", spec.ID, spec.SchemaPath)
+		}
+		if len(ref.Columns) != len(spec.Columns) {
+			return nil, fmt.Errorf("constraint %q: foreign key local and referenced arity must match", spec.ID)
+		}
+		if err := checkColumnPaths(spec.ID, ref.Columns, false); err != nil {
+			return nil, err
+		}
+		if !validIdentifier(ref.Table) || !validIdentifier(ref.ConstraintID) {
+			return nil, fmt.Errorf("constraint %q: foreign key needs the referenced table and its key's constraint id", spec.ID)
+		}
+	}
+	return encodeConstraintRecord(spec)
+}
 
+// encodeConstraintRecord encodes spec without ConstraintRecord's checks. A
+// FOREIGN KEY with no referenced schema path references the owner's schema.
+func encodeConstraintRecord(spec ConstraintRecordSpec) ([]byte, error) {
 	var check, foreign, referenced any
+	isCheck := spec.Kind == ConstraintCheck
 	if isCheck {
 		encoded, err := encodeCanonicalRow(generated.SqlExpressionSchema, map[string]any{
 			"sql": spec.CheckSQL, "profile": scalarExpressionProfile, "schema_path": nonNilStrings(spec.SchemaPath),
@@ -163,16 +207,11 @@ func ConstraintRecord(spec ConstraintRecordSpec) ([]byte, error) {
 		check = encoded
 	}
 	if ref := spec.References; ref != nil {
-		if len(ref.Columns) != len(spec.Columns) {
-			return nil, fmt.Errorf("constraint %q: foreign key local and referenced arity must match", spec.ID)
+		refSchema := ref.SchemaPath
+		if len(refSchema) == 0 {
+			refSchema = spec.SchemaPath
 		}
-		if err := checkColumnPaths(spec.ID, ref.Columns); err != nil {
-			return nil, err
-		}
-		if ref.Table == "" || ref.ConstraintID == "" {
-			return nil, fmt.Errorf("constraint %q: foreign key needs the referenced table and its key's constraint id", spec.ID)
-		}
-		table, err := catalogObjectRef("table", ref.SchemaPath, ref.Table, nil)
+		table, err := catalogObjectRef("table", refSchema, ref.Table, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -183,7 +222,7 @@ func ConstraintRecord(spec ConstraintRecordSpec) ([]byte, error) {
 			return nil, err
 		}
 		owner := ref.Table
-		if referenced, err = catalogObjectRef("constraint", ref.SchemaPath, ref.ConstraintID, &owner); err != nil {
+		if referenced, err = catalogObjectRef("constraint", refSchema, ref.ConstraintID, &owner); err != nil {
 			return nil, err
 		}
 	}
@@ -209,18 +248,42 @@ func ConstraintRecord(spec ConstraintRecordSpec) ([]byte, error) {
 	})
 }
 
+// decodedConstraint is a record plus the wire details ATTACH checks that
+// ConstraintRecordSpec does not carry.
+type decodedConstraint struct {
+	spec ConstraintRecordSpec
+	// CHECK expression envelope.
+	checkProfile        string
+	checkSchemaPath     []string
+	checkDefaultContext bool
+	// FOREIGN KEY definition and referenced key identity.
+	fkMatch, fkOnUpdate, fkOnDelete string
+	targetSchemaPath                []string
+	targetOwner                     string
+	hasForeignKey, hasTarget        bool
+}
+
 // ReadConstraintRecord decodes a TableInfo.constraints entry; it is the
 // inverse of ConstraintRecord.
 func ReadConstraintRecord(data []byte) (ConstraintRecordSpec, error) {
-	var spec ConstraintRecordSpec
+	decoded, err := decodeConstraintRecord(data)
+	return decoded.spec, err
+}
+
+func decodeConstraintRecord(data []byte) (decodedConstraint, error) {
+	var out decodedConstraint
+	spec := &out.spec
 	info, err := readCanonicalRow(data, generated.ConstraintInfoSchema)
 	if err != nil {
-		return spec, fmt.Errorf("ConstraintInfo: %w", err)
+		return out, fmt.Errorf("ConstraintInfo: %w", err)
 	}
 	defer info.Release()
 	ref, err := readObjectRef(rowBinary(info, "ref"))
 	if err != nil {
-		return spec, err
+		return out, err
+	}
+	if ref.Kind != "constraint" {
+		return out, fmt.Errorf("ConstraintInfo.ref has kind %q, want constraint", ref.Kind)
 	}
 	spec.SchemaPath, spec.ID = ref.SchemaPath, ref.Name
 	if ref.OwnerTable != nil {
@@ -231,7 +294,7 @@ func ReadConstraintRecord(data []byte) (ConstraintRecordSpec, error) {
 
 	definition, err := readCanonicalRow(rowBinary(info, "definition"), generated.ConstraintDefinitionSchema)
 	if err != nil {
-		return spec, fmt.Errorf("ConstraintDefinition: %w", err)
+		return out, fmt.Errorf("ConstraintDefinition: %w", err)
 	}
 	defer definition.Release()
 	spec.Kind = ConstraintKind(rowEnum(definition, "kind"))
@@ -242,31 +305,65 @@ func ReadConstraintRecord(data []byte) (ConstraintRecordSpec, error) {
 	if expr := rowColumn(definition, "check_expression"); !expr.IsNull(0) {
 		row, err := readCanonicalRow(expr.(*array.Binary).Value(0), generated.SqlExpressionSchema)
 		if err != nil {
-			return spec, fmt.Errorf("SqlExpression: %w", err)
+			return out, fmt.Errorf("SqlExpression: %w", err)
 		}
 		spec.CheckSQL = rowColumn(row, "sql").(*array.String).Value(0)
+		out.checkProfile = rowColumn(row, "profile").(*array.String).Value(0)
+		out.checkSchemaPath = rowStrings(row, "schema_path")
+		out.checkDefaultContext = defaultEvaluationContext(rowColumn(row, "evaluation_context").(*array.Struct))
 		row.Release()
 	}
 	if fk := rowColumn(definition, "foreign_key"); !fk.IsNull(0) {
+		out.hasForeignKey = true
 		row, err := readCanonicalRow(fk.(*array.Binary).Value(0), generated.ForeignKeyDefinitionSchema)
 		if err != nil {
-			return spec, fmt.Errorf("ForeignKeyDefinition: %w", err)
+			return out, fmt.Errorf("ForeignKeyDefinition: %w", err)
 		}
 		defer row.Release()
 		table, err := readObjectRef(rowBinary(row, "referenced_table"))
 		if err != nil {
-			return spec, err
+			return out, err
 		}
+		if table.Kind != "table" || table.OwnerTable != nil {
+			return out, fmt.Errorf("ForeignKeyDefinition.referenced_table must be a table reference")
+		}
+		out.fkMatch, out.fkOnUpdate, out.fkOnDelete = rowEnum(row, "match"), rowEnum(row, "on_update"), rowEnum(row, "on_delete")
 		spec.References = &ConstraintReference{SchemaPath: table.SchemaPath, Table: table.Name, Columns: rowPaths(row, "referenced_column_paths")}
-		if target := rowColumn(info, "referenced_constraint"); !target.IsNull(0) {
-			key, err := readObjectRef(target.(*array.Binary).Value(0))
-			if err != nil {
-				return spec, err
-			}
+	}
+	if target := rowColumn(info, "referenced_constraint"); !target.IsNull(0) {
+		key, err := readObjectRef(target.(*array.Binary).Value(0))
+		if err != nil {
+			return out, err
+		}
+		if key.Kind != "constraint" || key.OwnerTable == nil {
+			return out, fmt.Errorf("ConstraintInfo.referenced_constraint must be an owned constraint reference")
+		}
+		out.hasTarget = true
+		out.targetSchemaPath, out.targetOwner = key.SchemaPath, *key.OwnerTable
+		if spec.References != nil {
 			spec.References.ConstraintID = key.Name
 		}
 	}
-	return spec, nil
+	return out, nil
+}
+
+func defaultEvaluationContext(context *array.Struct) bool {
+	values := map[string]any{}
+	fields := context.DataType().(*arrow.StructType).Fields()
+	for i, field := range fields {
+		column := context.Field(i)
+		if column.IsNull(0) {
+			return false
+		}
+		switch v := column.(type) {
+		case *array.String:
+			values[field.Name] = v.Value(0)
+		case *array.Boolean:
+			values[field.Name] = v.Value(0)
+		}
+	}
+	return values["timezone"] == "UTC" && values["collation"] == "binary" && values["default_order"] == "asc" &&
+		values["default_null_order"] == "nulls_last" && values["preserve_insertion_order"] == true
 }
 
 // SelectReadProfiles returns the profiles in available that the client
@@ -274,31 +371,11 @@ func ReadConstraintRecord(data []byte) (ConstraintRecordSpec, error) {
 // expression profile is selected only alongside constraint records. A nil
 // clientCapabilities (an older client) selects nothing.
 func SelectReadProfiles(available []string, clientCapabilities []byte) ([]string, error) {
-	if len(clientCapabilities) == 0 || len(available) == 0 {
-		return []string{}, nil
-	}
-	client, err := readCanonicalRow(clientCapabilities, generated.ClientCapabilitiesSchema)
+	selected, err := SelectCatalogCapabilities(CatalogCapabilities{Read: available}, clientCapabilities)
 	if err != nil {
-		return nil, fmt.Errorf("ClientCapabilities: %w", err)
+		return nil, err
 	}
-	defer client.Release()
-	catalog := rowColumn(client, "catalog")
-	if catalog.IsNull(0) {
-		return []string{}, nil
-	}
-	offer, err := readCanonicalRow(catalog.(*array.Binary).Value(0), generated.CatalogCapabilitiesSchema)
-	if err != nil {
-		return nil, fmt.Errorf("CatalogCapabilities: %w", err)
-	}
-	defer offer.Release()
-	offered := rowStrings(offer, "read")
-	selected := []string{}
-	for _, profile := range available {
-		if slices.Contains(offered, profile) && !slices.Contains(selected, profile) {
-			selected = append(selected, profile)
-		}
-	}
-	return finishReadSelection(selected), nil
+	return selected.Read, nil
 }
 
 // finishReadSelection drops a scalar-expression read without constraint
@@ -311,58 +388,272 @@ func finishReadSelection(selected []string) []string {
 	return slices.Compact(selected)
 }
 
+// ServedTableColumns returns the Arrow schema a table is served with, after
+// checking its constraint records the way the DuckDB extension does at ATTACH.
+//
+// Nullability follows the records, never the other way round: a field
+// (descending through ordinary STRUCTs, i.e. ones without an
+// ARROW:extension:name or vgi.logical_type.* metadata key) is served
+// non-nullable exactly when a NOT_NULL or PRIMARY_KEY record names its path,
+// and nullable otherwise. A non-nullable Arrow field nothing attests is
+// therefore relaxed rather than refused, and a record-named nullable field is
+// served non-nullable because every record is ENFORCED + ALL_ROWS. The
+// top-level is_row_id column is left untouched. SerializeTableInfo applies
+// this to every table it serializes.
+//
+// The records are rejected, naming the table, constraint id and path, when
+// the extension would refuse them: an owner other than (schemaPath, table),
+// duplicate constraint ids, duplicate declared names (case-insensitive), more
+// than one PRIMARY KEY, column paths that do not resolve, a FOREIGN KEY to
+// another schema or with an action other than NO ACTION/RESTRICT, CHECK SQL
+// outside the numeric comparison grammar, anything but ENFORCED + ALL_ROWS,
+// and a NOT_NULL/PRIMARY KEY on a generated column (which must be nullable).
+func ServedTableColumns(schemaPath []string, table string, columns *arrow.Schema, constraints [][]byte) (*arrow.Schema, error) {
+	if len(schemaPath) != 1 && len(constraints) > 0 {
+		return nil, fmt.Errorf("table %q: constraint records need a one-component schema path, got %v", table, schemaPath)
+	}
+	required, err := checkTableConstraints(schemaPath, true, table, columns, constraints)
+	if err != nil {
+		return nil, err
+	}
+	if columns == nil {
+		return nil, nil
+	}
+	return servedNullability(table, columns, required)
+}
+
 // ValidateConstraintRecords checks a table's records the way the DuckDB
-// extension does at ATTACH: every record is ENFORCED + ALL_ROWS, and the
-// Arrow nullability of columns agrees with the NOT_NULL/PRIMARY_KEY records.
-// A field (descending through ordinary STRUCTs, i.e. ones without an
-// ARROW:extension:name or vgi.logical_type.* metadata key) must be
-// non-nullable exactly when a record names its path. The is_row_id column is
-// exempt. It applies to every table, including one with no records.
+// extension does at ATTACH (see ServedTableColumns), except for the owner
+// schema, which it cannot see. Arrow nullability is no longer checked: the
+// SDK serves it from the records.
+//
+// Deprecated: use ServedTableColumns, which also checks the owner schema and
+// returns the schema the table is served with.
 func ValidateConstraintRecords(table string, columns *arrow.Schema, constraints [][]byte) error {
+	required, err := checkTableConstraints(nil, false, table, columns, constraints)
+	if err != nil || columns == nil {
+		return err
+	}
+	_, err = servedNullability(table, columns, required)
+	return err
+}
+
+// checkTableConstraints mirrors DecodeNativeConstraints and returns the set
+// of column paths NOT_NULL/PRIMARY_KEY records require to be non-NULL.
+func checkTableConstraints(schemaPath []string, checkSchema bool, table string, columns *arrow.Schema, constraints [][]byte) (map[string]bool, error) {
 	required := map[string]bool{}
+	if len(constraints) > 1024 {
+		return nil, fmt.Errorf("table %q: too many constraints (%d > 1024)", table, len(constraints))
+	}
+	total := 0
+	ids := map[string]bool{}
+	labels := map[string]string{}
+	var primaryKey string
+	rowID := -1
+	if columns != nil {
+		for i, field := range columns.Fields() {
+			if isRowIDField(field) {
+				rowID = i
+			}
+		}
+	}
 	for _, data := range constraints {
-		record, err := ReadConstraintRecord(data)
+		total += len(data)
+		if len(data) == 0 || len(data) > 8*1024*1024 || total > 8*1024*1024 {
+			return nil, fmt.Errorf("table %q: constraint records exceed the 8 MiB limit", table)
+		}
+		decoded, err := decodeConstraintRecord(data)
 		if err != nil {
-			return fmt.Errorf("table %q: %w", table, err)
+			return nil, fmt.Errorf("table %q: %w", table, err)
 		}
-		// DuckDB reads only facts that hold for every row; anything else fails ATTACH.
+		record := decoded.spec
+		fail := func(format string, args ...any) error {
+			return fmt.Errorf("table %q: constraint %q: %s", table, record.ID, fmt.Sprintf(format, args...))
+		}
+		if !validIdentifier(record.ID) || len(record.SchemaPath) != 1 || !validIdentifier(record.SchemaPath[0]) {
+			return nil, fail("identity must be a nonempty id with a one-component schema path, got schema %v", record.SchemaPath)
+		}
+		if record.Table != table || (checkSchema && !slices.Equal(record.SchemaPath, schemaPath)) {
+			return nil, fail("belongs to %v.%q, not the serving table %v.%q", record.SchemaPath, record.Table, schemaPath, table)
+		}
+		if ids[record.ID] {
+			return nil, fail("duplicate constraint id")
+		}
+		ids[record.ID] = true
 		if record.Enforcement != ConstraintEnforced || record.Validation != ConstraintAllRows {
-			return fmt.Errorf("table %q: constraint %q is %s/%s; DuckDB accepts only ENFORCED + ALL_ROWS records",
-				table, record.ID, record.Enforcement, record.Validation)
+			return nil, fail("is %s/%s; DuckDB accepts only ENFORCED + ALL_ROWS records", record.Enforcement, record.Validation)
 		}
-		if record.Kind == ConstraintNotNull || record.Kind == ConstraintPrimaryKey {
+		if record.DeclaredName != "" {
+			if !validIdentifier(record.DeclaredName) {
+				return nil, fail("invalid declared name")
+			}
+			key := strings.ToLower(record.DeclaredName)
+			if other, dup := labels[key]; dup {
+				return nil, fail("declared name %q duplicates constraint %q (names compare case-insensitively)", record.DeclaredName, other)
+			}
+			labels[key] = record.ID
+		}
+		if err := checkColumnPaths(record.ID, record.Columns, true); err != nil {
+			return nil, fmt.Errorf("table %q: %w", table, err)
+		}
+		isCheck := record.Kind == ConstraintCheck
+		if isCheck != (record.CheckSQL != "") || isCheck == (len(record.Columns) > 0) {
+			return nil, fail("inconsistent CHECK payload or column paths")
+		}
+		isFK := record.Kind == ConstraintForeignKey
+		if isFK != decoded.hasForeignKey || isFK != decoded.hasTarget {
+			return nil, fail("inconsistent FOREIGN KEY payload")
+		}
+		switch record.Kind {
+		case ConstraintCheck:
+			if decoded.checkProfile != ScalarExpressionReadProfile {
+				return nil, fail("unsupported CHECK expression profile %q", decoded.checkProfile)
+			}
+			if !slices.Equal(decoded.checkSchemaPath, record.SchemaPath) {
+				return nil, fail("CHECK expression belongs to schema %v", decoded.checkSchemaPath)
+			}
+			if !decoded.checkDefaultContext {
+				return nil, fail("unsupported CHECK evaluation context; DuckDB reads only UTC/binary/asc/nulls_last/preserve_insertion_order")
+			}
+			if err := validateNumericCheckSQL(record.CheckSQL, columns); err != nil {
+				return nil, fail("CHECK %q: %v", record.CheckSQL, err)
+			}
+			continue
+		case ConstraintNotNull:
+			if len(record.Columns) != 1 {
+				return nil, fail("NOT_NULL requires exactly one column path")
+			}
+			if columns != nil {
+				if err := resolveNotNullPath(columns, rowID, record.Columns[0]); err != nil {
+					return nil, fail("column %s: %v", strings.Join(record.Columns[0], "."), err)
+				}
+			}
+			required[pathKey(record.Columns[0])] = true
+			continue
+		case ConstraintPrimaryKey, ConstraintUnique, ConstraintForeignKey:
+		default:
+			return nil, fail("unknown constraint kind %q", record.Kind)
+		}
+		for _, path := range record.Columns {
+			if len(path) != 1 {
+				return nil, fail("column %s: DuckDB supports nested constraint paths only for NOT_NULL", strings.Join(path, "."))
+			}
+			if columns != nil {
+				if index := topLevelIndex(columns, path[0]); index < 0 || index == rowID {
+					return nil, fail("column %s is missing, ambiguous or the row-id column", path[0])
+				}
+			}
+		}
+		switch record.Kind {
+		case ConstraintPrimaryKey:
+			if primaryKey != "" {
+				return nil, fail("a table has at most one PRIMARY KEY (already %q)", primaryKey)
+			}
+			primaryKey = record.ID
 			for _, path := range record.Columns {
 				required[pathKey(path)] = true
 			}
+		case ConstraintForeignKey:
+			ref := record.References
+			if !slices.Equal(ref.SchemaPath, record.SchemaPath) || !slices.Equal(decoded.targetSchemaPath, record.SchemaPath) || decoded.targetOwner != ref.Table {
+				return nil, fail("FOREIGN KEY must reference an identified key of a table in the same schema %v", record.SchemaPath)
+			}
+			if len(ref.Columns) != len(record.Columns) {
+				return nil, fail("FOREIGN KEY arity mismatch")
+			}
+			for _, path := range ref.Columns {
+				if len(path) != 1 {
+					return nil, fail("referenced column %s: DuckDB supports only top-level FOREIGN KEY columns", strings.Join(path, "."))
+				}
+			}
+			if decoded.fkMatch != "SIMPLE" {
+				return nil, fail("DuckDB supports only MATCH SIMPLE foreign keys, got %s", decoded.fkMatch)
+			}
+			for _, action := range []string{decoded.fkOnUpdate, decoded.fkOnDelete} {
+				if action != "NO_ACTION" && action != "RESTRICT" {
+					return nil, fail("DuckDB supports only NO ACTION/RESTRICT referential actions, got %s", action)
+				}
+			}
 		}
 	}
-	if columns == nil {
-		return nil
+	return required, nil
+}
+
+// resolveNotNullPath mirrors ResolveNotNullPath: an exact, unambiguous
+// top-level field (not the row id), then ordinary STRUCT children.
+func resolveNotNullPath(columns *arrow.Schema, rowID int, path []string) error {
+	index := topLevelIndex(columns, path[0])
+	if index < 0 || index == rowID {
+		return fmt.Errorf("references a missing, ambiguous or row-id column")
 	}
-	var walk func(fields []arrow.Field, prefix []string, top bool) error
-	walk = func(fields []arrow.Field, prefix []string, top bool) error {
-		for _, field := range fields {
-			if top && field.Metadata.FindKey("is_row_id") >= 0 {
+	field := columns.Field(index)
+	for _, part := range path[1:] {
+		children, ok := ordinaryStructChildren(field)
+		if !ok {
+			return fmt.Errorf("path must traverse ordinary STRUCT fields, not %s", field.Type)
+		}
+		found := -1
+		for i, child := range children {
+			if child.Name == part {
+				if found >= 0 {
+					return fmt.Errorf("ambiguous nested field %q", part)
+				}
+				found = i
+			}
+		}
+		if found < 0 {
+			return fmt.Errorf("missing nested field %q", part)
+		}
+		field = children[found]
+	}
+	return nil
+}
+
+func topLevelIndex(columns *arrow.Schema, name string) int {
+	indices := columns.FieldIndices(name)
+	if len(indices) != 1 {
+		return -1
+	}
+	return indices[0]
+}
+
+// servedNullability rewrites Arrow nullability to match the required paths.
+func servedNullability(table string, columns *arrow.Schema, required map[string]bool) (*arrow.Schema, error) {
+	var rewrite func(fields []arrow.Field, prefix []string, top bool) ([]arrow.Field, error)
+	rewrite = func(fields []arrow.Field, prefix []string, top bool) ([]arrow.Field, error) {
+		out := make([]arrow.Field, len(fields))
+		for i, field := range fields {
+			out[i] = field
+			if top && isRowIDField(field) {
 				continue
 			}
 			path := append(slices.Clone(prefix), field.Name)
-			if field.Nullable == required[pathKey(path)] {
-				if field.Nullable {
-					return fmt.Errorf("table %q: column %s is in a NOT_NULL/PRIMARY_KEY record but its Arrow field is nullable",
-						table, strings.Join(path, "."))
-				}
-				return fmt.Errorf("table %q: column %s is non-nullable in Arrow but no NOT_NULL/PRIMARY_KEY record names it; "+
-					"declare one with vgi.ConstraintRecord or make the field nullable", table, strings.Join(path, "."))
+			needed := required[pathKey(path)]
+			if needed && top && field.Metadata.FindKey(GeneratedExpressionKey) >= 0 {
+				return nil, fmt.Errorf("table %q: column %s is generated, and DuckDB requires generated columns to be nullable; "+
+					"no NOT_NULL/PRIMARY_KEY record may name it", table, strings.Join(path, "."))
 			}
+			out[i].Nullable = !needed
 			if children, ok := ordinaryStructChildren(field); ok {
-				if err := walk(children, path, false); err != nil {
-					return err
+				served, err := rewrite(children, path, false)
+				if err != nil {
+					return nil, err
 				}
+				out[i].Type = arrow.StructOf(served...)
 			}
 		}
-		return nil
+		return out, nil
 	}
-	return walk(columns.Fields(), nil, true)
+	fields, err := rewrite(columns.Fields(), nil, true)
+	if err != nil {
+		return nil, err
+	}
+	metadata := columns.Metadata()
+	return arrow.NewSchema(fields, &metadata), nil
+}
+
+func validIdentifier(value string) bool {
+	return value != "" && len(value) <= 4096 && !strings.ContainsRune(value, 0)
 }
 
 func ordinaryStructChildren(field arrow.Field) ([]arrow.Field, bool) {
@@ -387,16 +678,28 @@ func pathKey(path []string) string {
 	return b.String()
 }
 
-func checkColumnPaths(id string, paths [][]string) error {
+func checkColumnPaths(id string, paths [][]string, nested bool) error {
+	if len(paths) > 1024 {
+		return fmt.Errorf("constraint %q: too many column paths", id)
+	}
+	seen := map[string]bool{}
 	for _, path := range paths {
-		if len(path) == 0 {
-			return fmt.Errorf("constraint %q: empty column path", id)
+		if len(path) == 0 || len(path) > 64 {
+			return fmt.Errorf("constraint %q: empty or oversized column path", id)
+		}
+		if !nested && len(path) != 1 {
+			return fmt.Errorf("constraint %q: column %s: DuckDB supports nested constraint paths only for NOT_NULL", id, strings.Join(path, "."))
 		}
 		for _, part := range path {
-			if part == "" || strings.ContainsRune(part, 0) {
-				return fmt.Errorf("constraint %q: column path components must be nonempty without NUL", id)
+			if !validIdentifier(part) {
+				return fmt.Errorf("constraint %q: column path components must be nonempty, at most 4096 bytes, without NUL", id)
 			}
 		}
+		key := pathKey(path)
+		if seen[key] {
+			return fmt.Errorf("constraint %q: duplicate column path %s", id, strings.Join(path, "."))
+		}
+		seen[key] = true
 	}
 	return nil
 }
@@ -503,6 +806,12 @@ func appendCanonicalValue(builder array.Builder, value any) error {
 				}
 			}
 		case [][]string:
+			for _, item := range items {
+				if err := appendCanonicalValue(b.ValueBuilder(), item); err != nil {
+					return err
+				}
+			}
+		case [][]byte:
 			for _, item := range items {
 				if err := appendCanonicalValue(b.ValueBuilder(), item); err != nil {
 					return err

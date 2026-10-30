@@ -62,9 +62,11 @@ func DeserializeSchema(data []byte) (*arrow.Schema, error) {
 	return restoreSchemaFieldMetadata(data, reader.Schema())
 }
 
-// Empty canonical definitions cannot authorize SQL NOT NULL claims. Storage
-// children of lists/maps are not SQL column paths; ordinary structs are.
-func requireUnconstrainedCreateSchema(schema *arrow.Schema) error {
+// A non-nullable column needs a NOT NULL definition the catalog records and
+// enforces (notNull, by top-level name); empty definitions cannot authorize
+// SQL NOT NULL claims. Storage children of lists/maps are not SQL column
+// paths; ordinary structs are.
+func requireUnconstrainedCreateSchema(schema *arrow.Schema, notNull map[string]bool) error {
 	var visit func(arrow.Field, bool, int) error
 	visit = func(field arrow.Field, top bool, depth int) error {
 		if depth > 64 {
@@ -81,8 +83,8 @@ func requireUnconstrainedCreateSchema(schema *arrow.Schema) error {
 		if field.Type.ID() == arrow.EXTENSION {
 			return methodNotImplemented("catalog_table_create: extension types require negotiation")
 		}
-		if !field.Nullable {
-			return methodNotImplemented("catalog_table_create: nonnullable user columns require canonical constraints")
+		if !field.Nullable && (!top || !notNull[field.Name]) {
+			return methodNotImplemented(fmt.Sprintf("catalog_table_create: column %q is non-nullable without a NOT NULL constraint definition", field.Name))
 		}
 		if nested, ok := field.Type.(*arrow.StructType); ok {
 			for _, child := range nested.Fields() {

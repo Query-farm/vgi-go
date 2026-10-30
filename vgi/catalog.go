@@ -1519,8 +1519,11 @@ func (w *Worker) serializeCatalogTable(schemaPath SchemaPath, ct *CatalogTable) 
 
 func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*TableInfo, error) {
 	if len(ct.NotNull)+len(ct.Unique)+len(ct.PrimaryKey)+len(ct.Check)+len(ct.ForeignKey) > 0 {
-		return nil, methodNotImplemented(fmt.Sprintf("table %q: legacy NotNull/Unique/Check/PrimaryKey/ForeignKey constraint fields are not sent under vgi.v3; "+
-			"declare canonical records with vgi.ConstraintRecord in CatalogTable.Constraints instead", ct.Name))
+		return nil, methodNotImplemented(fmt.Sprintf("table %q: the legacy CatalogTable.NotNull/Unique/Check/PrimaryKey/ForeignKey fields are not sent under vgi.v3; "+
+			"build canonical records with vgi.ConstraintRecord (ENFORCED + ALL_ROWS) and set CatalogTable.Constraints instead", ct.Name))
+	}
+	if err := w.checkDeclarativeForeignKeys(schemaPath, ct); err != nil {
+		return nil, err
 	}
 	// Resolve columns: if Function is set but Columns is nil, derive via OnBind
 	columns := ct.Columns
@@ -1569,6 +1572,18 @@ func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*Tab
 		return nil, err
 	}
 
+	// Serve nullability from the records, here as well as in
+	// SerializeTableInfo, so an inlined bind result agrees with the columns.
+	if columns != nil {
+		translated, err := translateLegacyGenerated(columns, schemaPath)
+		if err != nil {
+			return nil, fmt.Errorf("table %q: %w", ct.Name, err)
+		}
+		if columns, err = ServedTableColumns(schemaPath, ct.Name, translated, ct.Constraints); err != nil {
+			return nil, err
+		}
+	}
+
 	info := &TableInfo{
 		Name:                     ct.Name,
 		SchemaPath:               schemaPath,
@@ -1608,61 +1623,44 @@ func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*Tab
 	return info, nil
 }
 
-// fkSchema is the generated wire format for a single foreign key constraint.
-var fkSchema = generated.ForeignKeyInfoSchema
-
-// serializeForeignKey serializes a ForeignKeyConstraint to IPC bytes.
-func serializeForeignKey(schemaPath SchemaPath, fk *ForeignKeyConstraint) ([]byte, error) {
-	mem := memory.NewGoAllocator()
-
-	// fk_columns
-	fkColBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
-	defer fkColBuilder.Release()
-	fkColBuilder.Append(true)
-	fkVB := fkColBuilder.ValueBuilder().(*array.StringBuilder)
-	for _, col := range fk.Columns {
-		fkVB.Append(col)
-	}
-
-	// pk_columns
-	pkColBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
-	defer pkColBuilder.Release()
-	pkColBuilder.Append(true)
-	pkVB := pkColBuilder.ValueBuilder().(*array.StringBuilder)
-	for _, col := range fk.ReferencedColumns {
-		pkVB.Append(col)
-	}
-
-	// referenced_table
-	refTableBuilder := array.NewStringBuilder(mem)
-	defer refTableBuilder.Release()
-	refTableBuilder.Append(fk.ReferencedTable)
-
-	// referenced_schema_path
-	refSchemaBuilder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
-	defer refSchemaBuilder.Release()
-	refSchema := fk.ReferencedSchemaPath
-	if len(refSchema) == 0 {
-		refSchema = schemaPath
-	}
-	appendSchemaPath(refSchemaBuilder, refSchema)
-
-	cols := []arrow.Array{
-		fkColBuilder.NewArray(),
-		pkColBuilder.NewArray(),
-		refTableBuilder.NewArray(),
-		refSchemaBuilder.NewArray(),
-	}
-	defer func() {
-		for _, c := range cols {
-			c.Release()
+// checkDeclarativeForeignKeys checks each FOREIGN KEY record of a declarative
+// table whose referenced table is also declared in this worker: the
+// referenced constraint must exist there as a PRIMARY KEY or UNIQUE record
+// over exactly the referenced columns. A target served some other way (a
+// handler, another catalog) cannot be seen and is left to the client.
+func (w *Worker) checkDeclarativeForeignKeys(schemaPath SchemaPath, ct *CatalogTable) error {
+	for _, data := range ct.Constraints {
+		record, err := ReadConstraintRecord(data)
+		if err != nil || record.Kind != ConstraintForeignKey || record.References == nil {
+			continue // malformed records are reported by ServedTableColumns
 		}
-	}()
-
-	batch := array.NewRecordBatch(fkSchema, cols, 1)
-	defer batch.Release()
-
-	return SerializeRecordBatch(batch)
+		ref := record.References
+		target := w.findCatalogTable(schemaPath, ref.Table)
+		if target == nil {
+			continue
+		}
+		found := false
+		for _, candidate := range target.Constraints {
+			key, err := ReadConstraintRecord(candidate)
+			if err != nil || key.ID != ref.ConstraintID {
+				continue
+			}
+			if key.Kind != ConstraintPrimaryKey && key.Kind != ConstraintUnique {
+				return fmt.Errorf("table %q: constraint %q references %q.%q, which is a %s, not a PRIMARY KEY or UNIQUE key",
+					ct.Name, record.ID, ref.Table, ref.ConstraintID, key.Kind)
+			}
+			if !slices.EqualFunc(key.Columns, ref.Columns, slices.Equal[[]string]) {
+				return fmt.Errorf("table %q: constraint %q references columns %v of %q but key %q covers %v",
+					ct.Name, record.ID, ref.Columns, ref.Table, ref.ConstraintID, key.Columns)
+			}
+			found = true
+		}
+		if !found {
+			return fmt.Errorf("table %q: constraint %q references key %q, which table %q does not declare",
+				ct.Name, record.ID, ref.ConstraintID, ref.Table)
+		}
+	}
+	return nil
 }
 
 // buildScanResultFromTable creates a ScanFunctionResult from a function-backed

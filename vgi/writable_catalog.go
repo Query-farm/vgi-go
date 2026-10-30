@@ -45,8 +45,11 @@ type writableTable struct {
 	rows []map[string]interface{}
 	// constraints are canonical ConstraintInfo records the catalog attests
 	// for this table, served verbatim on TableInfo.constraints.
-	constraints   [][]byte
-	defaults      map[string]any
+	constraints [][]byte
+	defaults    map[string]any
+	// legacy holds constraint metadata stored before vgi.v3, until ATTACH
+	// migrates it (migrateLegacyConstraints). Never persisted.
+	legacy        *writableTableMeta
 	columnComment map[string]string
 }
 

@@ -17,18 +17,25 @@ import (
 
 // TableInfo describes a table in the catalog for wire serialization.
 type TableInfo struct {
-	Constraints              [][]byte // canonical ConstraintInfo IPC, never synthesized from legacy fields
-	DefinitionRevision       []byte
-	Name                     string
-	SchemaPath               []string
-	Comment                  string
-	Tags                     map[string]string
-	Columns                  *arrow.Schema // serialized as IPC schema bytes
-	NotNullConstraints       []int32
-	UniqueConstraints        [][]int32
-	CheckConstraints         []string
-	PrimaryKeyConstraints    [][]int32
-	ForeignKeyConstraints    [][]byte // each []byte is an IPC-serialized FK RecordBatch
+	Constraints        [][]byte // canonical ConstraintInfo IPC, never synthesized from legacy fields
+	DefinitionRevision []byte
+	Name               string
+	SchemaPath         []string
+	Comment            string
+	Tags               map[string]string
+	Columns            *arrow.Schema // serialized as IPC schema bytes
+	// Deprecated: vgi.v3 has no legacy constraint fields; SerializeTableInfo
+	// refuses a TableInfo that sets one. Build canonical records with
+	// ConstraintRecord and set Constraints instead.
+	NotNullConstraints []int32
+	// Deprecated: refused under vgi.v3; use ConstraintRecord in Constraints.
+	UniqueConstraints [][]int32
+	// Deprecated: refused under vgi.v3; use ConstraintRecord in Constraints.
+	CheckConstraints []string
+	// Deprecated: refused under vgi.v3; use ConstraintRecord in Constraints.
+	PrimaryKeyConstraints [][]int32
+	// Deprecated: refused under vgi.v3; use ConstraintRecord in Constraints.
+	ForeignKeyConstraints    [][]byte
 	WriteResultModes         map[string]string
 	SupportsColumnStatistics bool
 
@@ -79,19 +86,34 @@ func SerializeTableInfo(info *TableInfo) ([]byte, error) {
 	return SerializeRecordBatch(record)
 }
 
-func buildTableInfoRecord(info *TableInfo) (arrow.RecordBatch, error) {
-	if err := ValidateColumnExpressions(info.Columns, info.SchemaPath, true); err != nil {
-		return nil, err
-	}
-	if err := ValidateColumnMetadata(info.Columns); err != nil {
-		return nil, err
-	}
+func buildTableInfoRecord(source *TableInfo) (arrow.RecordBatch, error) {
+	// Serve a copy: the caller's TableInfo and schema stay as given.
+	copied := *source
+	info := &copied
 	if len(info.NotNullConstraints)+len(info.UniqueConstraints)+len(info.CheckConstraints)+len(info.PrimaryKeyConstraints)+len(info.ForeignKeyConstraints) > 0 {
-		return nil, methodNotImplemented(fmt.Sprintf("table %q: legacy NotNull/Unique/Check/PrimaryKey/ForeignKey constraint fields are not sent under vgi.v3; "+
-			"declare canonical records with vgi.ConstraintRecord in Constraints instead", info.Name))
+		return nil, methodNotImplemented(fmt.Sprintf("table %q: the legacy NotNullConstraints/UniqueConstraints/CheckConstraints/PrimaryKeyConstraints/ForeignKeyConstraints fields are not sent under vgi.v3; "+
+			"build canonical records with vgi.ConstraintRecord and set TableInfo.Constraints instead", info.Name))
 	}
-	// The extension rejects the table at ATTACH when these disagree.
-	if err := ValidateConstraintRecords(info.Name, info.Columns, info.Constraints); err != nil {
+	if info.DefinitionRevision != nil && (len(info.DefinitionRevision) == 0 || len(info.DefinitionRevision) > 65536) {
+		return nil, fmt.Errorf("table %q: DefinitionRevision must be nil or a 1..65536-byte token", info.Name)
+	}
+	columns, err := translateLegacyGenerated(info.Columns, info.SchemaPath)
+	if err != nil {
+		return nil, fmt.Errorf("table %q: %w", info.Name, err)
+	}
+	if err := ValidateColumnExpressions(columns, info.SchemaPath, true); err != nil {
+		return nil, fmt.Errorf("table %q: %w", info.Name, err)
+	}
+	if err := validateGeneratedColumns(columns); err != nil {
+		return nil, fmt.Errorf("table %q: %w", info.Name, err)
+	}
+	if err := ValidateColumnMetadata(columns); err != nil {
+		return nil, err
+	}
+	// Records are checked as the extension checks them at ATTACH, and Arrow
+	// nullability is served from them: unattested non-nullable fields are
+	// relaxed to nullable, record-named ones are served non-nullable.
+	if info.Columns, err = ServedTableColumns(info.SchemaPath, info.Name, columns, info.Constraints); err != nil {
 		return nil, err
 	}
 	mem := memory.NewGoAllocator()

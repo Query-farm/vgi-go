@@ -359,6 +359,11 @@ func BuildMacroDefaultValues(defaults []MacroDefault) ([]byte, error) {
 // Returns nil when there are no parameters (nothing to describe). The returned
 // bytes are for local presentation only. MacroInfo and CREATE carry canonical
 // overload parameters, including Documentation and a separate DeclaredType.
+//
+// Deprecated: vgi.v3 has no macro arguments_schema; nothing on the wire reads
+// these bytes. Set CatalogMacro.ParameterDocs (or a canonical
+// MacroParameter.Documentation) for docs and MacroParameterDeclaredType for a
+// parameter's type.
 func BuildMacroArgumentsSchema(parameters []string, parameterDefaultValues []byte, parameterDocs map[string]string) ([]byte, error) {
 	if len(parameters) == 0 {
 		return nil, nil
@@ -404,6 +409,9 @@ func BuildMacroArgumentsSchema(parameters []string, parameterDefaultValues []byt
 // BuildMacroArgumentsSchema's vgi_doc handling: reads the vgi_doc field metadata
 // (UTF-8) for each field. Fields without the key (undocumented) are omitted from
 // the result. Returns an empty map when the input is empty or carries no docs.
+//
+// Deprecated: it reads only BuildMacroArgumentsSchema output, which vgi.v3 no
+// longer sends. Read MacroParameter.Documentation from MacroInfo overloads.
 func MacroParameterDocsFromSchema(argumentsSchema []byte) (map[string]string, error) {
 	docs := map[string]string{}
 	if len(argumentsSchema) == 0 {

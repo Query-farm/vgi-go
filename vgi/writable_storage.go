@@ -300,19 +300,21 @@ func (s *writableStore) tableLoad(catalog, schemaPath, tableName string) (*writa
 	return writableTableFromMeta(tableName, schema, comment, meta), nil
 }
 
-// writableTableFromMeta rebuilds a stored table. Legacy (pre-vgi.v3)
-// constraint fields are dropped: the writable catalog never enforced them,
-// so serving them as canonical records would attest facts it cannot vouch
-// for, and the legacy TableInfo fields are rejected on the wire.
+// writableTableFromMeta rebuilds a stored table. Constraint fields stored
+// before vgi.v3 are not served as they are: ATTACH migrates them
+// (migrateLegacyConstraints), turning a NOT NULL that every stored row
+// satisfies into a canonical record and dropping the rest with a warning.
+// Until then the table is served without them.
 func writableTableFromMeta(name string, schema *arrow.Schema, comment string, meta *writableTableMeta) *writableTable {
-	if len(meta.NotNull)+len(meta.PrimaryKey)+len(meta.Unique)+len(meta.Check)+len(meta.ForeignKey) > 0 {
-		LogCatalog.Warn("ignoring legacy writable-table constraint metadata; only canonical records are served", "table", name)
-	}
-	return &writableTable{
+	t := &writableTable{
 		name: name, schema: schema, comment: comment,
 		constraints: meta.Constraints,
 		defaults:    meta.toDefaults(), columnComment: meta.ColumnComment,
 	}
+	if len(meta.NotNull)+len(meta.PrimaryKey)+len(meta.Unique)+len(meta.Check)+len(meta.ForeignKey) > 0 {
+		t.legacy = meta
+	}
+	return t
 }
 
 func (s *writableStore) tableList(catalog, schemaPath string) ([]string, error) {
@@ -337,10 +339,16 @@ func (s *writableStore) tableList(catalog, schemaPath string) ([]string, error) 
 	return out, nil
 }
 
-// rowsAppend writes new rows, returning the next row_id base.
-func (s *writableStore) rowsAppend(catalog, schemaPath, tableName string, rows []map[string]interface{}) (int64, error) {
+// rowsAppend writes new rows, returning the next row_id base. Rows with a
+// NULL in a required column are refused and nothing is written.
+func (s *writableStore) rowsAppend(catalog, schemaPath, tableName string, rows []map[string]interface{}, required []string) (int64, error) {
 	if err := s.ensureOpen(); err != nil {
 		return 0, err
+	}
+	for _, r := range rows {
+		if err := checkNotNullRow(tableName, required, r); err != nil {
+			return 0, err
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -434,8 +442,9 @@ func (s *writableStore) rowsCount(catalog, schemaPath, tableName string) (int64,
 	return n, err
 }
 
-// rowsUpdate replaces specified columns in rows identified by row_id.
-func (s *writableStore) rowsUpdate(catalog, schemaPath, tableName string, updates []map[string]interface{}) (int64, error) {
+// rowsUpdate replaces specified columns in rows identified by row_id. An
+// update that leaves a required column NULL rolls the whole batch back.
+func (s *writableStore) rowsUpdate(catalog, schemaPath, tableName string, updates []map[string]interface{}, required []string) (int64, error) {
 	if err := s.ensureOpen(); err != nil {
 		return 0, err
 	}
@@ -487,6 +496,10 @@ func (s *writableStore) rowsUpdate(catalog, schemaPath, tableName string, update
 				continue
 			}
 			existing[k] = v
+		}
+		if err := checkNotNullRow(tableName, required, existing); err != nil {
+			_ = tx.Rollback()
+			return 0, err
 		}
 		buf.Reset()
 		if err := gob.NewEncoder(&buf).Encode(existing); err != nil {

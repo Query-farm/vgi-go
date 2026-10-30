@@ -164,6 +164,44 @@ are advertised at catalog level, not inside a schema. Such a bind resolves by
 name within the catalog, and errors naming the schemas involved if that name is
 declared in more than one.
 
+### Table constraints and nullability
+
+A table's constraints are facts its provider attests, as canonical records
+built with `vgi.ConstraintRecord` and set on `CatalogTable.Constraints` /
+`TableInfo.Constraints`. DuckDB reads only `ENFORCED` + `ALL_ROWS` records, and
+`ConstraintRecord` refuses anything else. The legacy `NotNull`/`Unique`/
+`Check`/`PrimaryKey`/`ForeignKey` fields are deprecated and refused.
+
+Arrow nullability is served from the records, so you never edit fields to
+match them: `SerializeTableInfo` serves a column (or ordinary-STRUCT child) as
+non-nullable exactly when a `NOT_NULL` or `PRIMARY_KEY` record names it, and as
+nullable otherwise. A non-nullable output field that nothing attests (Go's
+default `arrow.Field`) is served nullable, and the `is_row_id` column is left
+alone. Records are checked before serving as the extension checks them at
+ATTACH. The checks cover owner and schema, duplicate ids and declared names,
+one `PRIMARY KEY`, path resolution, same-schema `FOREIGN KEY` with `NO ACTION`/
+`RESTRICT`, and `CHECK` limited to a numeric `column op constant` comparison.
+
+The SDK negotiates `vgi.constraint.records.read.v1` itself when a registered
+table carries records. When records come from a handler
+(`WithSchemaContentsHandler`, `WithAttachTableGetHandler`, ...), add
+`vgi.WithConstraintReadProfile()`. An `AttachValidator` can build its own pair
+with `vgi.ReadProfilesDecision`.
+
+Writable (`WritableCatalog`) and in-memory (`MemoryCatalog`) catalogs accept
+`CREATE TABLE ... NOT NULL` and record it as an enforced `NOT_NULL` record. The
+writable catalog refuses a NULL on INSERT and UPDATE. `PRIMARY KEY`, `UNIQUE`,
+`CHECK` and `FOREIGN KEY` are not enforced, so `CREATE TABLE` refuses them. On
+a worker with transactions, DuckDB sends a constrained `CREATE TABLE` only
+under `vgi.transaction.ddl.v1`, which the writable catalog does not claim.
+
+Generated columns must be `VIRTUAL` and nullable. Their type must be BOOLEAN,
+TINYINT..BIGINT or VARCHAR. The expression is limited to the extension's
+bounded grammar: literals, column references, `CAST`, comparisons,
+`AND`/`OR`/`NOT`, `IS [NOT] NULL`, `COALESCE`, `+ - * % ||`, and `abs`, `lower`,
+`upper`. Legacy `generated_expression` metadata is translated to the canonical
+form automatically.
+
 ### Attach options
 
 `vgi.WithAttachOptions(...)` declares the options a caller may pass at ATTACH

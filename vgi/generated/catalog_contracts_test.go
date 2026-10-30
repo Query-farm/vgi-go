@@ -256,12 +256,23 @@ func TestTableConstraintParentFields(t *testing.T) {
 	if paths.Len() != 1 || path.Len() != 1 || components.Len() != 2 || components.Value(0) != "record" || components.Value(1) != "a.b" {
 		t.Fatal("nested column path changed")
 	}
-	encoded, err := vgi.SerializeTableInfo(&vgi.TableInfo{Name: "t", SchemaPath: []string{"main"}, Constraints: constraints, DefinitionRevision: revision})
+	// The corpus record is owned by a two-component schema, which DuckDB
+	// refuses at ATTACH, so the serializer refuses to serve it.
+	if _, err := vgi.SerializeTableInfo(&vgi.TableInfo{Name: "t", SchemaPath: []string{"main"}, Constraints: constraints, DefinitionRevision: revision}); err == nil {
+		t.Fatal("a record DuckDB refuses was served")
+	}
+	// A record DuckDB reads is carried byte for byte, with the revision.
+	readable, err := vgi.ConstraintRecord(vgi.ConstraintRecordSpec{SchemaPath: []string{"main"}, Table: "t", ID: "fixture-stable-key",
+		Kind: vgi.ConstraintUnique, Columns: [][]string{{"id"}}, Enforcement: vgi.ConstraintEnforced, Validation: vgi.ConstraintAllRows})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := vgi.SerializeTableInfo(&vgi.TableInfo{Name: "t", SchemaPath: []string{"main"}, Constraints: [][]byte{readable}, DefinitionRevision: revision})
 	if err != nil {
 		t.Fatal(err)
 	}
 	restored := catalogBatch(t, encoded)
-	if !array.Equal(column(info, "constraints"), column(restored, "constraints")) || !array.Equal(column(info, "definition_revision"), column(restored, "definition_revision")) {
+	if got := binaryList(restored, "constraints"); len(got) != 1 || !bytes.Equal(got[0], readable) || !array.Equal(column(info, "definition_revision"), column(restored, "definition_revision")) {
 		t.Fatal("handwritten TableInfo serializer changed canonical fields")
 	}
 }

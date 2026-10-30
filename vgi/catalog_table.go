@@ -37,14 +37,30 @@ type CatalogTable struct {
 	// FuncArgs are the arguments to pass when calling the backing function.
 	FuncArgs []CatalogTableArg
 	// NotNull lists column names with NOT NULL constraints.
+	//
+	// Deprecated: vgi.v3 has no legacy constraint fields and a table that sets
+	// this is refused when served. Build a NOT_NULL record with
+	// ConstraintRecord and add it to Constraints.
 	NotNull []string
 	// Unique lists groups of column names for UNIQUE constraints.
+	//
+	// Deprecated: refused under vgi.v3. Build a UNIQUE record with
+	// ConstraintRecord and add it to Constraints.
 	Unique [][]string
 	// Check lists check constraint expressions.
+	//
+	// Deprecated: refused under vgi.v3. Build a CHECK record with
+	// ConstraintRecord and add it to Constraints.
 	Check []string
 	// PrimaryKey lists groups of column names for PRIMARY KEY constraints.
+	//
+	// Deprecated: refused under vgi.v3. Build a PRIMARY_KEY record with
+	// ConstraintRecord and add it to Constraints.
 	PrimaryKey [][]string
 	// ForeignKey lists foreign key definitions.
+	//
+	// Deprecated: refused under vgi.v3. Build a FOREIGN_KEY record with
+	// ConstraintRecord (References) and add it to Constraints.
 	ForeignKey []ForeignKeyConstraint
 	// Defaults maps column names to their default values.
 	// Supported types: Sql (raw SQL), string, int/int64/int32, float64/float32, bool, nil.
@@ -90,6 +106,10 @@ type CatalogTable struct {
 }
 
 // ForeignKeyConstraint describes a foreign key relationship.
+//
+// Deprecated: only the deprecated CatalogTable.ForeignKey field uses it, and
+// vgi.v3 refuses that field. Describe a foreign key with ConstraintRecord and
+// ConstraintReference instead.
 type ForeignKeyConstraint struct {
 	// Columns are the column names in this table.
 	Columns []string

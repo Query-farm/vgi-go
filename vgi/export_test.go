@@ -27,3 +27,13 @@ func (w *Worker) ServeTcpForTest(idleTimeout time.Duration, onBound func(host st
 	}
 	return s.RunTcp("127.0.0.1", 0, idleTimeout, onBound)
 }
+
+// EncodeConstraintRecordUnchecked encodes a record without ConstraintRecord's
+// checks, standing in for another producer's record.
+func EncodeConstraintRecordUnchecked(t interface{ Fatal(...any) }, spec ConstraintRecordSpec) []byte {
+	data, err := encodeConstraintRecord(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}

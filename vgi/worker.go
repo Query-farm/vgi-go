@@ -364,6 +364,7 @@ type Worker struct {
 	tableGetHandler               TableGetHandler
 	catalogInfoOverride           *CatalogInfo
 	attachValidator               AttachValidator
+	constraintReadProfile         bool // WithConstraintReadProfile
 	schemaContentsHandler         SchemaContentsHandler
 	attachTableGetHandler         AttachTableGetHandler
 	attachScanFunctionGetHandler  AttachScanFunctionGetHandler

@@ -122,9 +122,6 @@ func (w *Worker) writableSchemaDrop(c *WritableCatalog, path SchemaPath, ignoreN
 }
 
 func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestWire) error {
-	if len(req.ConstraintDefinitions) > 0 {
-		return methodNotImplemented("catalog_table_create: canonical constraint enforcement")
-	}
 	if len(req.Columns) == 0 {
 		return fmt.Errorf("catalog_table_create: missing columns schema")
 	}
@@ -138,7 +135,13 @@ func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestW
 	if err := ValidateColumnMetadata(schema); err != nil {
 		return err
 	}
-	if err := requireUnconstrainedCreateSchema(schema); err != nil {
+	// NOT NULL is the one constraint this catalog enforces (see
+	// writable_constraints.go); anything else is refused.
+	records, required, err := notNullRecords(req.SchemaPath, req.Name, schema, req.ConstraintDefinitions)
+	if err != nil {
+		return err
+	}
+	if err := requireUnconstrainedCreateSchema(schema, required); err != nil {
 		return err
 	}
 
@@ -170,6 +173,7 @@ func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestW
 	t := &writableTable{
 		name:          req.Name,
 		schema:        schema,
+		constraints:   records,
 		defaults:      defaultsFromSchemaMetadata(schema),
 		columnComment: map[string]string{},
 	}
@@ -253,6 +257,16 @@ func (w *Worker) writableByAttachOpaqueData(attachOpaqueData []byte) *WritableCa
 
 // handleWritableAttach serves catalog_attach for a writable catalog.
 func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableCatalog) (CatalogAttachResultWire, error) {
+	// Upgrade constraint metadata stored before vgi.v3 (logging what is
+	// dropped) and negotiate the profiles NOT NULL tables need.
+	if err := c.migrateLegacyConstraints(); err != nil {
+		// The tables stay served without their legacy facts; never fail ATTACH.
+		LogCatalog.Warn("writable catalog: migrating constraint metadata stored before vgi.v3 failed", "catalog", c.Name, "error", err)
+	}
+	available, selected, err := mergeCapabilities(writableCapabilities, nil, nil, req.ClientCapabilities)
+	if err != nil {
+		return CatalogAttachResultWire{}, rewrapError("ValueError", err)
+	}
 	c.mu.Lock()
 	if len(c.attachOpaqueData) == 0 {
 		c.attachOpaqueData = []byte("writable:" + c.Name)
@@ -312,6 +326,8 @@ func (w *Worker) handleWritableAttach(req CatalogAttachRequestWire, c *WritableC
 		// catalog_contents answers with the committed catalog only, so the
 		// client keeps to the per-schema RPCs.
 		SupportsCatalogContents: false,
+		CatalogCapabilities:     available,
+		SelectedCapabilities:    selected,
 	}, nil
 }
 
@@ -409,12 +425,16 @@ func tableInfoFromWritable(t *writableTable, schemaPath SchemaPath) (*TableInfo,
 			return nil, err
 		}
 	}
+	constraints, err := rebindRecords(t.constraints, schemaPath, t.name)
+	if err != nil {
+		return nil, err
+	}
 	return &TableInfo{
 		Name:                     t.name,
 		SchemaPath:               schemaPath,
 		Comment:                  t.comment,
 		Columns:                  cols,
-		Constraints:              t.constraints,
+		Constraints:              constraints,
 		WriteResultModes:         map[string]string{"insert": "count", "update": "count", "delete": "count"},
 		SupportsColumnStatistics: false,
 	}, nil

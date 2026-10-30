@@ -46,7 +46,32 @@ func TestGeneratedColumnDiscoveryAndUnsupportedCreate(t *testing.T) {
 					t.Fatal(err)
 				}
 				info, discoveryError := vgi.SerializeTableInfo(&vgi.TableInfo{Name: name, SchemaPath: corpus.Schemas.Owner, Columns: schema})
-				if group == "invalid" {
+				if group == "invalid" && name == "legacy_generated_only" {
+					// Unambiguous legacy metadata is translated to the canonical
+					// VIRTUAL form at discovery instead of being refused.
+					if discoveryError != nil {
+						t.Fatal(discoveryError)
+					}
+					record, err := vgi.DeserializeRecordBatch(info)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer record.Release()
+					served, err := vgi.DeserializeSchema(column[*array.Binary](t, record, "columns").Value(0))
+					if err != nil {
+						t.Fatal(err)
+					}
+					translated := false
+					for _, field := range served.Fields() {
+						if field.Metadata.FindKey("generated_expression") >= 0 {
+							t.Fatal("legacy key was served")
+						}
+						translated = translated || field.Metadata.FindKey(vgi.GeneratedExpressionKey) >= 0
+					}
+					if !translated {
+						t.Fatal("legacy generated_expression was not translated")
+					}
+				} else if group == "invalid" {
 					if discoveryError == nil {
 						t.Fatal("invalid generated metadata published")
 					}
@@ -96,7 +121,7 @@ func TestGeneratedColumnDiscoveryAndUnsupportedCreate(t *testing.T) {
 
 func TestGeneratedConvenienceUsesCanonicalOwnerAndPreservesMetadata(t *testing.T) {
 	md := arrow.MetadataFrom(map[string]string{"comment": "", "tags": "{}", "provider.note": "keep"})
-	schema := arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true}, {Name: "doubled", Type: arrow.PrimitiveTypes.Int64, Nullable: true, Metadata: md}}, &md)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int64}, {Name: "doubled", Type: arrow.PrimitiveTypes.Int64, Metadata: md}}, &md)
 	worker := vgi.NewWorker(vgi.WithCatalogName("generated"))
 	worker.RegisterCatalogTable("raw.schema", vgi.CatalogTable{Name: "t", Columns: schema, Generated: map[string]string{"doubled": "n * 2"}})
 	client := newContentsClient(t, worker)

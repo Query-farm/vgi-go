@@ -256,7 +256,7 @@ func minimalWireRecordCases() []wireRecordCase {
 		}, nil},
 		{"TableInfo", generated.TableInfoSchema, func() ([]byte, error) {
 			return SerializeTableInfo(&TableInfo{Name: "t", SchemaPath: []string{"main"},
-				Columns: arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil)})
+				Columns: arrow.NewSchema([]arrow.Field{{Name: "id", Type: arrow.PrimitiveTypes.Int64}}, nil)})
 		}, nil},
 		{"ViewInfo", generated.ViewInfoSchema, func() ([]byte, error) {
 			return SerializeViewInfo(&ViewInfo{Name: "v", Definition: "SELECT 1"})
