@@ -1289,8 +1289,9 @@ const ProtocolName = "vgi.v3"
 // 2.0.0 represents every schema identity as a root-to-leaf list of components;
 // 2.1.0 adds supports_catalog_contents to CatalogAttachResult and the
 // catalog_contents RPC (the whole catalog in one call; see catalog_contents.go).
-// 3.0.0 is the combined breaking catalog/query successor, routed as vgi.v3.
-const ProtocolVersion = "3.0.0"
+// 3.0.0 is the combined breaking catalog/query successor, routed as vgi.v3;
+// 3.1.0 adds portable exact key grouping and exact range distribution plans.
+const ProtocolVersion = "3.1.0"
 
 // buildServer is the one place a worker's server is built, for every
 // transport; see hosting.go for what it hosts. An error means the worker must

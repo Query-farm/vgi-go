@@ -1580,6 +1580,15 @@ func (w *Worker) handlePlan(ctx context.Context, callCtx *vgirpc.CallContext, re
 		EstimatedTotalBytes:  result.EstimatedTotalBytes,
 		Scope:                result.Scope,
 	}
+	if result.Locations != nil {
+		out.Locations = &result.Locations
+	}
+	if result.KeyGrouping != nil {
+		out.KeyGrouping = &result.KeyGrouping
+	}
+	if result.RangePartitioning != nil {
+		out.RangePartitioning = &result.RangePartitioning
+	}
 	if result.ExecutionID != nil {
 		out.ExecutionID = &result.ExecutionID
 	}

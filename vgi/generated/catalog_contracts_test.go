@@ -60,6 +60,19 @@ func catalogBatch(t *testing.T, payload []byte) arrow.RecordBatch {
 	return batch
 }
 
+func getBinary(t *testing.T, batch arrow.RecordBatch, name string) []byte {
+	t.Helper()
+	indices := batch.Schema().FieldIndices(name)
+	if len(indices) != 1 {
+		t.Fatalf("expected one %s column, found %d", name, len(indices))
+	}
+	column := batch.Column(indices[0]).(*array.Binary)
+	if column.IsNull(0) {
+		t.Fatalf("%s is unexpectedly NULL", name)
+	}
+	return column.Value(0)
+}
+
 // Exercise the public HTTP/RPC path because vgi-rpc-go keeps the reflection
 // codec private. The handler receives a typed record, then serializes it again.
 func echoCatalogRecord[T any](t *testing.T, name string) {
@@ -115,6 +128,39 @@ func echoCatalogRecord[T any](t *testing.T, name string) {
 	}
 	if !array.RecordEqual(want, got) {
 		t.Fatalf("%s changed across the typed codec:\nwant %s\ngot %s", name, want, got)
+	}
+}
+
+func TestProtocol31PartitionDistributionDecodesPythonGoldenPlan(t *testing.T) {
+	for _, run := range []struct {
+		name string
+		echo func(*testing.T, string)
+	}{
+		{"partition_field_path", echoCatalogRecord[generated.FieldPath]},
+		{"partition_identity_transform", echoCatalogRecord[generated.TransformSpec]},
+		{"partition_parameterized_transform", echoCatalogRecord[generated.TransformSpec]},
+		{"partition_key_grouping", echoCatalogRecord[generated.KeyGrouping]},
+		{"partition_range_key", echoCatalogRecord[generated.RangeKey]},
+		{"partition_range_partitioning", echoCatalogRecord[generated.RangePartitioning]},
+		{"partition_scan_split", echoCatalogRecord[vgi.ScanSplit]},
+	} {
+		t.Run(run.name, func(t *testing.T) { run.echo(t, run.name) })
+	}
+
+	path := catalogBatch(t, catalogFixture(t, "partition_field_path"))
+	components := path.Column(0).(*array.List).ListValues().(*array.String)
+	if components.Len() != 2 || components.Value(0) != "customer" || components.Value(1) != "region" {
+		t.Fatalf("nested path changed: %v", components)
+	}
+	plan := catalogBatch(t, catalogFixture(t, "partition_plan_response"))
+	if !bytes.Equal(getBinary(t, plan, "key_grouping"), catalogFixture(t, "partition_key_grouping")) ||
+		!bytes.Equal(getBinary(t, plan, "range_partitioning"), catalogFixture(t, "partition_range_partitioning")) {
+		t.Fatal("plan-wide Protocol 3.1 distribution records changed")
+	}
+	split := catalogBatch(t, catalogFixture(t, "partition_scan_split"))
+	rangeIndex := split.Column(split.Schema().FieldIndices("range_index")[0]).(*array.Int64)
+	if rangeIndex.Value(0) != 2 {
+		t.Fatalf("range_index = %d, want 2", rangeIndex.Value(0))
 	}
 }
 

@@ -113,6 +113,12 @@ type PlanResponseWire struct {
 	// which keeps a large plan off the coordinator heap.
 	Locations *[]string `vgirpc:"locations"`
 
+	// KeyGrouping and RangePartitioning are serialized Protocol 3.1 records.
+	// They are plan-wide exact distribution claims; each split carries the
+	// corresponding KeyValue and/or RangeIndex below.
+	KeyGrouping       *[]byte `vgirpc:"key_grouping"`
+	RangePartitioning *[]byte `vgirpc:"range_partitioning"`
+
 	// Partitioning is serialized PartitionTransform records. NOT derivable from
 	// a split's partition values: country=US does not say whether partitions are
 	// identity(country) or bucket(16, user_id). Report NOTHING here unless every
@@ -147,6 +153,9 @@ type ScanSplit struct {
 	EstimatedRows    *int64   `vgirpc:"estimated_rows"`
 	RowsExact        bool     `vgirpc:"rows_exact"`
 	EstimatedBytes   *int64   `vgirpc:"estimated_bytes"`
+	KeyValue         *[]byte  `vgirpc:"key_value"`
+	RangeIndex       *int64   `vgirpc:"range_index"`
+	ColumnBounds     *[]byte  `vgirpc:"column_bounds"`
 	PartitionBounds  *[]byte  `vgirpc:"partition_bounds"`
 	ColumnStatistics *[]byte  `vgirpc:"column_statistics"`
 	LocationIDs      *[]int64 `vgirpc:"location_ids"`
@@ -167,6 +176,9 @@ type PlanResult struct {
 	EstimatedTotalRows   *int64
 	EstimatedTotalBytes  *int64
 	CatalogVersion       int64
+	Locations            []string
+	KeyGrouping          []byte
+	RangePartitioning    []byte
 
 	// Scope names which anchor the tokens bind to: "catalog" (the default) or
 	// "transaction". A transaction-scoped plan is not cacheable and is not
@@ -258,6 +270,8 @@ func SerializeScanSplit(split *ScanSplit) ([]byte, error) {
 		return *p, false
 	}
 	pb, pbNull := deref(split.PartitionBounds)
+	kv, kvNull := deref(split.KeyValue)
+	cb, cbNull := deref(split.ColumnBounds)
 	cs, csNull := deref(split.ColumnStatistics)
 	sp, spNull := deref(split.StartPosition)
 	ep, epNull := deref(split.EndPosition)
@@ -268,6 +282,9 @@ func SerializeScanSplit(split *ScanSplit) ([]byte, error) {
 		nullableInt64(split.EstimatedRows),
 		boolBuilder.NewArray(),
 		nullableInt64(split.EstimatedBytes),
+		bin(kv, kvNull),
+		nullableInt64(split.RangeIndex),
+		bin(cb, cbNull),
 		bin(pb, pbNull),
 		bin(cs, csNull),
 		locBuilder.NewArray(),
@@ -283,6 +300,126 @@ func SerializeScanSplit(split *ScanSplit) ([]byte, error) {
 	rec := array.NewRecordBatch(generated.ScanSplitSchema, cols, 1)
 	defer rec.Release()
 	return SerializeRecordBatch(rec)
+}
+
+// SerializeFieldPath encodes a Protocol 3.1 raw field path for use in a
+// TransformSpec.Inputs list.
+func SerializeFieldPath(value generated.FieldPath) ([]byte, error) {
+	mem := memory.NewGoAllocator()
+	return serializeDistributionRecord(generated.FieldPathSchema, []arrow.Array{
+		distributionStringList(mem, value.Components),
+	})
+}
+
+// SerializeTransformSpec encodes a Protocol 3.1 transform.
+func SerializeTransformSpec(value generated.TransformSpec) ([]byte, error) {
+	mem := memory.NewGoAllocator()
+	return serializeDistributionRecord(generated.TransformSpecSchema, []arrow.Array{
+		distributionString(mem, value.ID),
+		distributionBinaryList(mem, value.Inputs),
+		distributionOptionalBinary(mem, value.Parameters),
+	})
+}
+
+// SerializeKeyGrouping encodes exact transformed grouping keys for a plan.
+func SerializeKeyGrouping(value generated.KeyGrouping) ([]byte, error) {
+	mem := memory.NewGoAllocator()
+	return serializeDistributionRecord(generated.KeyGroupingSchema, []arrow.Array{
+		distributionBinaryList(mem, value.Keys),
+	})
+}
+
+// SerializeRangeKey encodes one transform and comparator component.
+func SerializeRangeKey(value generated.RangeKey) ([]byte, error) {
+	mem := memory.NewGoAllocator()
+	direction, err := distributionEnum(mem, value.Direction)
+	if err != nil {
+		return nil, err
+	}
+	nullOrder, err := distributionEnum(mem, value.NullOrder)
+	if err != nil {
+		direction.Release()
+		return nil, err
+	}
+	return serializeDistributionRecord(generated.RangeKeySchema, []arrow.Array{
+		distributionBinary(mem, value.Transform), direction, nullOrder,
+	})
+}
+
+// SerializeRangePartitioning encodes exact ordered split points and comparators.
+func SerializeRangePartitioning(value generated.RangePartitioning) ([]byte, error) {
+	mem := memory.NewGoAllocator()
+	return serializeDistributionRecord(generated.RangePartitioningSchema, []arrow.Array{
+		distributionBinaryList(mem, value.Keys),
+		distributionBinary(mem, value.SplitPoints),
+	})
+}
+
+func serializeDistributionRecord(schema *arrow.Schema, columns []arrow.Array) ([]byte, error) {
+	defer func() {
+		for _, column := range columns {
+			column.Release()
+		}
+	}()
+	record := array.NewRecordBatch(schema, columns, 1)
+	defer record.Release()
+	return SerializeRecordBatch(record)
+}
+
+func distributionString(mem memory.Allocator, value string) arrow.Array {
+	builder := array.NewStringBuilder(mem)
+	defer builder.Release()
+	builder.Append(value)
+	return builder.NewArray()
+}
+
+func distributionBinary(mem memory.Allocator, value []byte) arrow.Array {
+	builder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	defer builder.Release()
+	builder.Append(value)
+	return builder.NewArray()
+}
+
+func distributionOptionalBinary(mem memory.Allocator, value *[]byte) arrow.Array {
+	builder := array.NewBinaryBuilder(mem, arrow.BinaryTypes.Binary)
+	defer builder.Release()
+	if value == nil {
+		builder.AppendNull()
+	} else {
+		builder.Append(*value)
+	}
+	return builder.NewArray()
+}
+
+func distributionStringList(mem memory.Allocator, values []string) arrow.Array {
+	builder := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	defer builder.Release()
+	builder.Append(true)
+	items := builder.ValueBuilder().(*array.StringBuilder)
+	for _, value := range values {
+		items.Append(value)
+	}
+	return builder.NewArray()
+}
+
+func distributionBinaryList(mem memory.Allocator, values [][]byte) arrow.Array {
+	builder := array.NewListBuilder(mem, arrow.BinaryTypes.Binary)
+	defer builder.Release()
+	builder.Append(true)
+	items := builder.ValueBuilder().(*array.BinaryBuilder)
+	for _, value := range values {
+		items.Append(value)
+	}
+	return builder.NewArray()
+}
+
+func distributionEnum(mem memory.Allocator, value string) (arrow.Array, error) {
+	builder := array.NewDictionaryBuilder(mem, dictType).(*array.BinaryDictionaryBuilder)
+	defer builder.Release()
+	if err := builder.AppendString(value); err != nil {
+		return nil, err
+	}
+	return builder.NewArray(), nil
 }
 
 // splitPlannerFor finds the split hooks on a function, looking through any

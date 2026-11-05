@@ -280,17 +280,65 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 				start := []byte{0x0c}
 				end := []byte{0x0d}
 				ids := []int64{1, 2}
+				key := []byte{0x0e}
+				rangeIndex := int64(1)
+				columnBounds := []byte{0x0f}
 				return SerializeScanSplit(&ScanSplit{
 					Payload:          []byte("payload"),
 					Token:            []byte("token"),
 					EstimatedRows:    i64Ptr(10),
 					RowsExact:        true,
 					EstimatedBytes:   i64Ptr(1024),
+					KeyValue:         &key,
+					RangeIndex:       &rangeIndex,
+					ColumnBounds:     &columnBounds,
 					PartitionBounds:  &bounds,
 					ColumnStatistics: &stats,
 					LocationIDs:      &ids,
 					StartPosition:    &start,
 					EndPosition:      &end,
+				})
+			},
+		},
+		{
+			origin: "FieldPath",
+			schema: generated.FieldPathSchema,
+			build: func() ([]byte, error) {
+				return SerializeFieldPath(generated.FieldPath{Components: []string{"customer", "region"}})
+			},
+		},
+		{
+			origin: "TransformSpec",
+			schema: generated.TransformSpecSchema,
+			build: func() ([]byte, error) {
+				parameters := []byte{0x01}
+				return SerializeTransformSpec(generated.TransformSpec{
+					ID: "iceberg.bucket/1", Inputs: [][]byte{{0x02}}, Parameters: &parameters,
+				})
+			},
+		},
+		{
+			origin: "KeyGrouping",
+			schema: generated.KeyGroupingSchema,
+			build: func() ([]byte, error) {
+				return SerializeKeyGrouping(generated.KeyGrouping{Keys: [][]byte{{0x03}}})
+			},
+		},
+		{
+			origin: "RangeKey",
+			schema: generated.RangeKeySchema,
+			build: func() ([]byte, error) {
+				return SerializeRangeKey(generated.RangeKey{
+					Transform: []byte{0x04}, Direction: "ASC", NullOrder: "NULLS_FIRST",
+				})
+			},
+		},
+		{
+			origin: "RangePartitioning",
+			schema: generated.RangePartitioningSchema,
+			build: func() ([]byte, error) {
+				return SerializeRangePartitioning(generated.RangePartitioning{
+					Keys: [][]byte{{0x05}}, SplitPoints: []byte{0x06},
 				})
 			},
 		},

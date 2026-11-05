@@ -43,6 +43,10 @@ var wireEnumMemberNames = map[string]map[string][]string{
 	"MacroInfo": {
 		"macro_type": {"SCALAR", "TABLE"},
 	},
+	"RangeKey": {
+		"direction":  {"ASC", "DESC"},
+		"null_order": {"NULLS_FIRST", "NULLS_LAST"},
+	},
 }
 
 // readSingleRecord decodes a one-record IPC stream.
