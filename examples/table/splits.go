@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Query-farm/vgi-go/vgi"
+	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -1121,7 +1122,8 @@ var splitPartitionedSchema = arrow.NewSchema(splitPartitionedFields, nil)
 var splitPartitionKeyFields = splitPartitionedFields[:1]
 
 type splitPartArgs struct {
-	RowsPerCountry int64 `vgi:"name=rows_per_country,default=5,ge=0,doc=Rows in each partition"`
+	RowsPerCountry int64  `vgi:"name=rows_per_country,default=5,ge=0,doc=Rows in each partition"`
+	KeyMode        string `vgi:"name=key_mode,default=valid,doc=Test-only Protocol 3.1 key shape: valid missing two_rows or wrong_type"`
 }
 
 type splitPartState struct {
@@ -1173,14 +1175,77 @@ func (f *SplitPartitionedFunction) OnBind(params *vgi.BindParams) (*vgi.BindResp
 // Plan names each partition by INDEX, so a redemption reads the same partition
 // however many times it runs and in whichever process.
 func (f *SplitPartitionedFunction) Plan(params *vgi.BindParams, req vgi.PlanRequestWire) (*vgi.PlanResult, error) {
+	var args splitPartArgs
+	if err := vgi.BindArgs(params.Args, &args); err != nil {
+		return nil, err
+	}
+	path, err := vgi.SerializeFieldPath(generated.FieldPath{Components: []string{"country"}})
+	if err != nil {
+		return nil, err
+	}
+	transform, err := vgi.SerializeTransformSpec(generated.TransformSpec{
+		ID: "vgi.identity/1", Inputs: [][]byte{path},
+	})
+	if err != nil {
+		return nil, err
+	}
+	grouping, err := vgi.SerializeKeyGrouping(generated.KeyGrouping{Keys: [][]byte{transform}})
+	if err != nil {
+		return nil, err
+	}
 	splits := make([]vgi.ScanSplit, 0, len(splitPartCountries))
-	for i := range splitPartCountries {
+	for i, country := range splitPartCountries {
 		payload := make([]byte, 8)
 		binary.LittleEndian.PutUint64(payload, uint64(i))
-		splits = append(splits, vgi.ScanSplit{Payload: payload})
+		keyValue, err := splitPartKeyValue(country, args.KeyMode)
+		if err != nil {
+			return nil, err
+		}
+		splits = append(splits, vgi.ScanSplit{Payload: payload, KeyValue: keyValue})
 	}
 	n := int64(len(splits))
-	return &vgi.PlanResult{Splits: splits, EstimatedTotalSplits: &n}, nil
+	return &vgi.PlanResult{
+		Splits: splits, EstimatedTotalSplits: &n, KeyGrouping: grouping,
+	}, nil
+}
+
+func splitPartKeyValue(country, mode string) (*[]byte, error) {
+	if mode == "missing" {
+		return nil, nil
+	}
+	mem := memory.NewGoAllocator()
+	var schema *arrow.Schema
+	var column arrow.Array
+	switch mode {
+	case "valid", "two_rows":
+		rows := 1
+		if mode == "two_rows" {
+			rows = 2
+		}
+		builder := array.NewStringBuilder(mem)
+		defer builder.Release()
+		for range rows {
+			builder.Append(country)
+		}
+		column = builder.NewArray()
+		schema = arrow.NewSchema([]arrow.Field{{Name: "country", Type: arrow.BinaryTypes.String, Nullable: true}}, nil)
+	case "wrong_type":
+		builder := array.NewInt64Builder(mem)
+		defer builder.Release()
+		builder.Append(1)
+		column = builder.NewArray()
+		schema = arrow.NewSchema([]arrow.Field{{Name: "country", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil)
+	default:
+		return nil, fmt.Errorf("unknown split_partitioned key_mode: %s", mode)
+	}
+	defer column.Release()
+	batch := array.NewRecordBatch(schema, []arrow.Array{column}, int64(column.Len()))
+	defer batch.Release()
+	encoded, err := vgi.SerializeRecordBatch(batch)
+	if err != nil {
+		return nil, err
+	}
+	return &encoded, nil
 }
 
 func (f *SplitPartitionedFunction) Redeem(params *vgi.InitParams) error { return nil }
