@@ -212,7 +212,7 @@ func TestFunctionInfoCarriesInputRowsPerCall(t *testing.T) {
 // inOutMixedState has an unexported counter gob would drop between HTTP turns.
 type inOutMixedState struct { //nolint:unused
 	Seen  int64
-	total int64
+	total int64 //nolint:unused // the field gob would drop
 }
 
 func TestTableInOutRejectsUnexportedState(t *testing.T) {

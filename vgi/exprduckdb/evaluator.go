@@ -81,7 +81,7 @@ func Evaluate(ctx context.Context, batch arrow.RecordBatch, sqlExpr string) (arr
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	tableName := fmt.Sprintf("vgi_filter_eval_%d", nextEvalID())
 	createSQL, err := buildCreateTableSQL(tableName, batch.Schema())
@@ -101,7 +101,7 @@ func Evaluate(ctx context.Context, batch arrow.RecordBatch, sqlExpr string) (arr
 	if err != nil {
 		return nil, fmt.Errorf("expression eval query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	n := int(batch.NumRows())
 	mem := memory.NewGoAllocator()
 	b := array.NewBooleanBuilder(mem)
@@ -160,7 +160,7 @@ func insertBatchToDuckDB(ctx context.Context, conn *sql.Conn, name string, batch
 	if err != nil {
 		return err
 	}
-	defer app.Close()
+	defer func() { _ = app.Close() }()
 
 	schema := batch.Schema()
 	cols := make([]arrow.Array, schema.NumFields())

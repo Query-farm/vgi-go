@@ -122,7 +122,7 @@ func TestAsTableFunctionRejectsUnexportedState(t *testing.T) {
 // every HTTP continuation (duplicate rows / a scan that never ends).
 type mixedState struct { //nolint:unused
 	Done   bool
-	cursor int64
+	cursor int64 //nolint:unused // the field gob would drop
 }
 
 // nestedMixedState hides the unexported field one struct down.
@@ -136,7 +136,7 @@ type nestedMixedState struct { //nolint:unused
 // transientState opts an unexported cache out of the check.
 type transientState struct { //nolint:unused
 	Cursor int64
-	cache  map[string]int `vgi:"transient"`
+	cache  map[string]int `vgi:"transient"` //nolint:unused // opted out
 }
 
 // binaryState has unexported fields behind encoding.BinaryMarshaler.
