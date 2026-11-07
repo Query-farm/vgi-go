@@ -307,19 +307,61 @@ func checkTableInOutContract(name string, fn TableInOutFunction) error {
 			return fmt.Errorf("%s: InputRowsPerCall must be a positive row count, got %d", name, *n)
 		}
 	}
-	if _, ok := fn.(TableInOutResumer); !ok {
+	// A raw (untyped) function's state type is unknown until NewState runs, so a
+	// raw TableInOutResumer is checked per turn instead: Exchange refuses
+	// WithMoreOutput with a nil state, and HTTP rehydration a pending token with
+	// no state.
+	st, ok := fn.(stateTyped)
+	if !ok {
 		return nil
 	}
-	// A raw (untyped) TableInOutResumer's state type is unknown until NewState
-	// runs, so it is checked per turn instead: Exchange refuses WithMoreOutput
-	// with a nil state, and HTTP rehydration a pending token with no state.
-	if st, ok := fn.(stateTyped); ok {
-		t := st.stateType()
+	t := st.stateType()
+	if _, resumable := fn.(TableInOutResumer); resumable {
 		if t.Kind() == reflect.Struct && t.NumField() == 0 {
 			return fmt.Errorf("%s: Resume continues from its state alone, so the state type %s must hold the resume position", name, t)
 		}
 		if _, err := gobEncode(reflect.New(t).Interface()); err != nil {
 			return fmt.Errorf("%s: Resume continues from its state alone, so the state type %s must be gob-serializable: %w", name, t, err)
+		}
+	}
+	// The state rides the HTTP token between exchanges; a field gob drops would
+	// reset on every HTTP turn.
+	if err := checkGobState(t); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+// checkExpressionEvaluator refuses, at startup, a worker with an
+// AutoApplyFilters function but no ExpressionEvaluator linked: every pushed
+// filter it receives would otherwise fail its first scan. The fix is one
+// blank import of vgi/exprduckdb. It covers every routed sub-catalog too.
+func (w *Worker) checkExpressionEvaluator() error {
+	if HasExpressionEvaluator() {
+		return nil
+	}
+	refuse := func(name string) error {
+		return fmt.Errorf("%s sets AutoApplyFilters, which evaluates pushed filters: %w", name, ErrExpressionEvaluatorNotLinked)
+	}
+	for name, fns := range w.tables {
+		for _, fn := range fns {
+			if fn.Metadata().AutoApplyFilters {
+				return refuse(name)
+			}
+		}
+	}
+	for name, fns := range w.tableInOuts {
+		for _, fn := range fns {
+			if fn.Metadata().AutoApplyFilters {
+				return refuse(name)
+			}
+		}
+	}
+	for _, b := range w.routes {
+		if sc, ok := b.(*subCatalog); ok {
+			if err := sc.child.checkExpressionEvaluator(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -1,6 +1,11 @@
 package vgi
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
+)
 
 func mkSecrets() Secrets {
 	return Secrets{
@@ -56,5 +61,24 @@ func TestForScopeLongestPrefixAndFallback(t *testing.T) {
 	// No match and no fallback.
 	if _, ok := s.ForScope("s3://nope/x"); ok {
 		t.Fatalf("expected no match for unknown bucket")
+	}
+}
+
+func TestSecretsRequire(t *testing.T) {
+	s := mkSecrets()
+	got, err := s.Require("s3")
+	if err != nil || got["key_id"] != "AAA" || got["type"] != "s3" {
+		t.Fatalf("Require(s3) = %v, %v (want my_s3, the first by name)", got, err)
+	}
+	_, err = s.Require("azure")
+	var missing *MissingSecretError
+	if !errors.As(err, &missing) || missing.SecretType != "azure" {
+		t.Fatalf("Require(azure) err = %v", err)
+	}
+	if vgirpc.ErrorCodeOf(err) != vgirpc.CodeFailedPrecondition {
+		t.Fatalf("code = %v", vgirpc.ErrorCodeOf(err))
+	}
+	if _, err := Secrets(nil).Require("s3"); err == nil {
+		t.Fatal("nil Secrets satisfied Require")
 	}
 }

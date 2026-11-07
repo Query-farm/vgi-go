@@ -4,6 +4,7 @@ package vgi
 
 import (
 	"fmt"
+	"runtime"
 	"runtime/debug"
 	"strings"
 
@@ -153,7 +154,13 @@ type WorkerPanicError struct {
 	Phase        string // bind, init, process, finalize, etc.
 	Recovered    any    // value passed to panic()
 	Stack        []byte
+
+	pcs []uintptr // the panicking stack, for vgirpc.StackTracer
 }
+
+// StackTrace returns the stack at the panic, making the error a
+// vgirpc.StackTracer: the remote traceback shows the panicking code.
+func (e *WorkerPanicError) StackTrace() []uintptr { return e.pcs }
 
 // Error implements the error interface.
 func (e *WorkerPanicError) Error() string {
@@ -180,11 +187,16 @@ func (e *WorkerPanicError) Error() string {
 //	}
 func RecoverPanic(phase, fnName string, errOut *error) {
 	if r := recover(); r != nil {
+		pcs := make([]uintptr, 64)
+		// Skip runtime.Callers and RecoverPanic; the frames that follow start
+		// in the runtime's panic machinery and then the panicking code.
+		pcs = pcs[:runtime.Callers(2, pcs)]
 		*errOut = &WorkerPanicError{
 			FunctionName: fnName,
 			Phase:        phase,
 			Recovered:    r,
 			Stack:        debug.Stack(),
+			pcs:          pcs,
 		}
 	}
 }
@@ -193,6 +205,10 @@ func RecoverPanic(phase, fnName string, errOut *error) {
 // known custom error types to clearer Type strings so DuckDB-side error
 // surfacing matches vgi-python's behaviour. The error's code and kind
 // (vgi_rpc.error_code / error_kind) are carried over.
+//
+// A stack the error recorded (vgirpc.Errorf, vgirpc.WithStack, a recovered
+// panic, any vgirpc.StackTracer in its chain) is kept, so the remote traceback
+// still shows the error site.
 func AsRpcError(err error) *vgirpc.RpcError {
 	if rpcErr, ok := err.(*vgirpc.RpcError); ok {
 		return rpcErr
@@ -200,6 +216,7 @@ func AsRpcError(err error) *vgirpc.RpcError {
 	out := asRpcErrorType(err)
 	out.Code = codeName(err)
 	out.Kind = vgirpc.ErrorKindOf(err)
+	out.SetStackTrace(vgirpc.StackTraceOf(err))
 	return out
 }
 
@@ -217,7 +234,9 @@ func codeName(err error) string {
 // error declared -- an ArgumentError from an attach validator still reaches the
 // client as INVALID_ARGUMENT.
 func rewrapError(typ string, err error) *vgirpc.RpcError {
-	return &vgirpc.RpcError{Type: typ, Message: err.Error(), Code: codeName(err), Kind: vgirpc.ErrorKindOf(err)}
+	out := &vgirpc.RpcError{Type: typ, Message: err.Error(), Code: codeName(err), Kind: vgirpc.ErrorKindOf(err)}
+	out.SetStackTrace(vgirpc.StackTraceOf(err))
+	return out
 }
 
 func asRpcErrorType(err error) *vgirpc.RpcError {

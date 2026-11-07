@@ -182,7 +182,7 @@ func parseArgTag(f reflect.StructField, tag string) (ArgSpec, error) {
 		key, val, hasVal := strings.Cut(raw, "=")
 		key = strings.ToLower(strings.TrimSpace(key))
 		val = strings.TrimSpace(val)
-		val = strings.Trim(val, "'") // permit doc='...' for commas
+		val = unquoteTagValue(val) // permit doc='...' for commas
 		switch key {
 		case "":
 			continue
@@ -296,6 +296,16 @@ func parseArgTag(f reflect.StructField, tag string) (ArgSpec, error) {
 	return spec, nil
 }
 
+// unquoteTagValue strips exactly one pair of enclosing single quotes, and only
+// when the value both starts and ends with one: `'a, b'` -> `a, b`, while an
+// apostrophe that is part of the text (`the users'`) is kept.
+func unquoteTagValue(val string) string {
+	if len(val) >= 2 && val[0] == '\'' && val[len(val)-1] == '\'' {
+		return val[1 : len(val)-1]
+	}
+	return val
+}
+
 // splitTag splits a vgi tag into key=value parts. Two ergonomic exceptions:
 //
 //   - Single-quoted values keep their commas: `doc='hello, world'`.
@@ -317,12 +327,20 @@ func splitTag(tag string) []string {
 				// Consume the rest of the tag as the doc value (unless it
 				// begins with a quote, handled below).
 				cur.WriteByte(c)
-				i++
-				rest := strings.TrimLeft(tag[i:], " ")
+				j := i + 1
+				for j < len(tag) && (tag[j] == ' ' || tag[j] == '\t') {
+					j++
+				}
+				rest := tag[j:]
 				if strings.HasPrefix(rest, "'") {
-					// Quoted form — fall back to normal scanning for this segment.
-					inQuote = true
-					continue
+					// Quoted form: copy through the closing quote verbatim
+					// (commas inside are part of the value), then resume
+					// normal scanning after it.
+					if end := strings.IndexByte(rest[1:], '\''); end >= 0 {
+						cur.WriteString(rest[:end+2])
+						i = j + end + 1
+						continue
+					}
 				}
 				cur.WriteString(rest)
 				i = len(tag)

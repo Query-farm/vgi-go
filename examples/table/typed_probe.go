@@ -72,11 +72,11 @@ func (f *TypedProbeFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCard
 
 type typedProbeState struct {
 	vgi.BatchState
-	tsUS    int64
-	ivMS    int64
-	payload []byte
-	ub      uint64
-	f       float64
+	TSUS    int64
+	IVMS    int64
+	Payload []byte
+	UB      uint64
+	F       float64
 }
 
 func (f *TypedProbeFunction) NewState(params *vgi.ProcessParams) (*typedProbeState, error) {
@@ -86,11 +86,11 @@ func (f *TypedProbeFunction) NewState(params *vgi.ProcessParams) (*typedProbeSta
 	}
 	return &typedProbeState{
 		BatchState: vgi.NewBatchState(args.N, args.N),
-		tsUS:       args.TS.UnixMicro(),
-		ivMS:       args.IV.Milliseconds(),
-		payload:    args.Blob,
-		ub:         args.UB,
-		f:          args.F,
+		TSUS:       args.TS.UnixMicro(),
+		IVMS:       args.IV.Milliseconds(),
+		Payload:    args.Blob,
+		UB:         args.UB,
+		F:          args.F,
 	}, nil
 }
 
@@ -99,11 +99,11 @@ func (f *TypedProbeFunction) Process(ctx context.Context, params *vgi.ProcessPar
 		start := state.Index
 		return []arrow.Array{
 			vgi.BuildUint64Array(size, func(i int64) uint64 { return uint64(start + i) }),
-			vgi.BuildInt64Array(size, func(i int64) int64 { return state.tsUS }),
-			vgi.BuildInt64Array(size, func(i int64) int64 { return state.ivMS }),
-			vgi.BuildBinaryArray(size, func(i int64) []byte { return state.payload }),
-			vgi.BuildUint64Array(size, func(i int64) uint64 { return state.ub }),
-			vgi.BuildFloat64Array(size, func(i int64) float64 { return state.f + float64(start+i) }),
+			vgi.BuildInt64Array(size, func(i int64) int64 { return state.TSUS }),
+			vgi.BuildInt64Array(size, func(i int64) int64 { return state.IVMS }),
+			vgi.BuildBinaryArray(size, func(i int64) []byte { return state.Payload }),
+			vgi.BuildUint64Array(size, func(i int64) uint64 { return state.UB }),
+			vgi.BuildFloat64Array(size, func(i int64) float64 { return state.F + float64(start+i) }),
 		}, nil
 	})
 }

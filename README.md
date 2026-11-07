@@ -44,15 +44,28 @@ This immutable pin is the fix submitted upstream, not a wire-protocol change.
 The default stdio and HTTP transports can use upstream
 `github.com/apache/arrow-go/v18`.
 
-### Embedded engine
+### Embedded engine (optional)
 
-The SDK evaluates pushed-down expression filters with an embedded Haybarn 2.0
-(DuckDB 2.0) engine through cgo, using
-[`haybarn-go`](https://github.com/Query-farm-haybarn/haybarn-go). Builds need
-`CGO_ENABLED=1` and a C compiler. Prebuilt engine libraries cover darwin-arm64,
-linux-amd64, linux-arm64 and windows-amd64; Haybarn 2.0 has no macOS x86_64
-build. The library modules resolve from `haybarn-extensions.query.farm/go`
-(also served by proxy.golang.org), so a restricted `GOPROXY` must allow one of them.
+The core `vgi` package is pure Go: a worker that does not evaluate pushed-down
+filters builds with `CGO_ENABLED=0` and no C compiler (a minimal worker is
+about 38 MB). Evaluating filters -- `ExpressionFilter.Evaluate`,
+`PushdownFilters.Evaluate`/`Apply`, and any function with
+`AutoApplyFilters: true` -- needs the embedded Haybarn 2.0 (DuckDB 2.0) engine.
+Link it with one blank import:
+
+```go
+import _ "github.com/Query-farm/vgi-go/vgi/exprduckdb"
+```
+
+Without it, evaluation returns `vgi.ErrExpressionEvaluatorNotLinked`, and a
+worker with an `AutoApplyFilters` function refuses to start with that error.
+`exprduckdb` uses [`haybarn-go`](https://github.com/Query-farm-haybarn/haybarn-go)
+through cgo, so those builds need `CGO_ENABLED=1` and a C compiler, and the
+binary carries the engine (about 106 MB). Prebuilt engine libraries cover
+darwin-arm64, linux-amd64, linux-arm64 and windows-amd64; Haybarn 2.0 has no
+macOS x86_64 build. The library modules resolve from
+`haybarn-extensions.query.farm/go` (also served by proxy.golang.org), so a
+restricted `GOPROXY` must allow one of them.
 
 ### Shared-memory transport (optional)
 

@@ -2,7 +2,10 @@ package vgi
 
 import (
 	"fmt"
+	"sort"
 	"strings"
+
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
 
 // Secrets holds the resolved secrets passed to a worker, keyed by each secret's
@@ -125,4 +128,51 @@ func (s Secrets) selectForScope(path, secretType string) (map[string]interface{}
 		return fallback, true
 	}
 	return nil, false
+}
+
+// MissingSecretError is returned by Secrets.Require when no secret of the
+// requested type was resolved for the call -- typically because the user has
+// not run CREATE SECRET. Listing a type in FunctionMetadata.RequiredSecrets
+// only asks DuckDB to resolve it if present; it does not fail the call.
+type MissingSecretError struct {
+	// SecretType is the DuckDB secret type that was required (e.g. "s3").
+	SecretType string
+}
+
+// Error implements the error interface.
+func (e *MissingSecretError) Error() string {
+	return fmt.Sprintf("no %s secret found: create one with CREATE SECRET (TYPE %s, ...)", e.SecretType, e.SecretType)
+}
+
+// ErrorCode is FAILED_PRECONDITION: the call is well-formed but the session
+// lacks the secret it needs.
+func (e *MissingSecretError) ErrorCode() vgirpc.Code { return vgirpc.CodeFailedPrecondition }
+
+// Require returns the fields (rendered to strings) of a resolved secret of
+// secretType, or a *MissingSecretError when none was resolved. With several
+// secrets of the type, the one whose name sorts first is returned; use
+// ForScopeOfType to choose by path instead.
+//
+//	creds, err := params.Secrets.Require("s3")
+//	if err != nil {
+//	    return nil, err // "no s3 secret found: ..."
+//	}
+//	keyID := creds["key_id"]
+func (s Secrets) Require(secretType string) (map[string]string, error) {
+	names := make([]string, 0, len(s))
+	for name, fields := range s {
+		if RenderSecretValue(fields["type"]) == secretType {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil, &MissingSecretError{SecretType: secretType}
+	}
+	sort.Strings(names)
+	fields := s[names[0]]
+	out := make(map[string]string, len(fields))
+	for k, v := range fields {
+		out[k] = RenderSecretValue(v)
+	}
+	return out, nil
 }

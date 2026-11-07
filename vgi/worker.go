@@ -390,6 +390,7 @@ type Worker struct {
 	// (WithAttachOptionsForCatalog); a catalog absent here falls back to
 	// attachOptions.
 	catalogAttachOptions map[string][]AttachOptionSpec
+	includeTracebacks    *bool        // nil: VGI_INCLUDE_TRACEBACKS, else on (WIRE_PROTOCOL.md §8)
 	logLevel             slog.Level   // slog.LevelInfo (0) by default — Info level is intentional.
 	logHandler           slog.Handler // nil means default TextHandler to stderr
 	logFormat            LogFormat    // empty means text
@@ -795,6 +796,40 @@ func (w *Worker) attachOptionsFor(catalogName string) []AttachOptionSpec {
 		return specs
 	}
 	return w.attachOptions
+}
+
+// WithIncludeTracebacks decides whether error responses carry the remote
+// stack trace (log_extra traceback and frames). The protocol default is on, on
+// every transport -- the DuckDB extension shows the remote traceback to its
+// user -- so this matters only to turn them off for a worker whose stack traces
+// must not leave the process. The error type, message, code, kind and details
+// are sent either way.
+//
+// Without this option the VGI_INCLUDE_TRACEBACKS environment variable decides
+// (0/false/no/off turns them off; 1/true/yes/on keeps them), and unset means on.
+//
+// The traceback shows where the error was created when the error recorded a
+// stack: return vgirpc.Errorf(...) or vgirpc.WithStack(err) from a handler (a
+// recovered panic records one automatically). Any other error gets a short
+// synthesized trace -- type, message, method and wrapped causes -- not the
+// dispatcher's own frames.
+func WithIncludeTracebacks(enabled bool) WorkerOption {
+	return func(w *Worker) {
+		w.includeTracebacks = &enabled
+	}
+}
+
+// tracebacksEnabled resolves WithIncludeTracebacks, then VGI_INCLUDE_TRACEBACKS,
+// then the protocol default (on).
+func (w *Worker) tracebacksEnabled() bool {
+	if w.includeTracebacks != nil {
+		return *w.includeTracebacks
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("VGI_INCLUDE_TRACEBACKS"))) {
+	case "0", "false", "no", "off":
+		return false
+	}
+	return true
 }
 
 // WithLogLevel sets the minimum log level for the default handler.
@@ -1335,6 +1370,11 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 	if err := w.checkTableInOutContracts(); err != nil {
 		return nil, err
 	}
+	// AutoApplyFilters with no expression evaluator linked would fail every
+	// filtered scan; refuse to start instead, naming the import.
+	if err := w.checkExpressionEvaluator(); err != nil {
+		return nil, err
+	}
 
 	// Bring up the routed catalogs (sub-catalogs import their functions,
 	// homed in their own catalog) before the default catalog is built.
@@ -1352,6 +1392,9 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 	// advertises it via Reflection.v1 and enforces an exact major+minor match
 	// against the client's vgi_rpc.protocol_version at dispatch.
 	s.SetProtocolVersion(ProtocolVersion)
+	// Tracebacks are on by default (WIRE_PROTOCOL.md §8); WithIncludeTracebacks
+	// or VGI_INCLUDE_TRACEBACKS turns them off for every transport.
+	s.SetIncludeTracebacks(w.tracebacksEnabled())
 	// Execution-storage cleanup. The deferred-cleanup heuristic assumes a single
 	// serial dispatch stream (stdio); HTTP disables the deferred step. The unix
 	// (launcher) transport serves concurrent connections, where the hook's

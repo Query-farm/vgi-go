@@ -43,6 +43,9 @@ type TypedTableInOutFunc[S any] interface {
 //   - Defaults OnInit to DefaultInit() (MaxWorkers: 1) unless OnIniter is implemented
 //   - Implements TableInOutResumer when f implements TypedTableInOutResumer[S]
 //     (continued output; see WithMoreOutput)
+//   - Has Worker.RegisterTableInOut reject an S that cannot ride the HTTP
+//     state token intact (unexported fields, interface/chan/func fields), as
+//     AsTableFunction does
 //
 // Usage:
 //

@@ -41,6 +41,12 @@ jobs:
       - name: Build
         run: make build
 
+      # The core SDK must stay cgo-free; only vgi/exprduckdb embeds DuckDB.
+      - name: Build core SDK without cgo
+        run: |
+          CGO_ENABLED=0 go build ./vgi/ ./vgi/vgitest/
+          if go list -deps ./vgi/ | grep -q haybarn; then echo "vgi imports haybarn" >&2; exit 1; fi
+
       - name: Unit tests with coverage
         run: make test-unit
 

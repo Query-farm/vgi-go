@@ -3,10 +3,13 @@
 package vgi
 
 import (
+	"bytes"
 	"context"
+	"encoding"
 	"encoding/gob"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
@@ -60,32 +63,31 @@ type StatisticsProvider interface {
 	Statistics(params *BindParams) ([]ColumnStatistics, error)
 }
 
-// AsTableFunction wraps a TypedTableFunc into a TableFunction for registration
-// with Worker.RegisterTable. The adapter:
-//   - Provides type-safe state casting (returns error instead of panic)
-//   - Defaults OnInit to DefaultInit() (MaxWorkers: 1) unless OnIniter is implemented
-//   - Delegates Cardinality if CardinalityEstimator is implemented
-//
-// Usage:
-//
-//	func NewSequenceFunction() vgi.TableFunction {
-//	    return vgi.AsTableFunction[sequenceState](&SequenceFunction{})
-//	}
-//
-// implementsGobEncoder reports whether t (or *t) defines its own gob encoding,
-// in which case it manages its own serialization and is exempt from inspection.
+// implementsGobEncoder reports whether t (or *t) defines its own gob encoding
+// (gob.GobEncoder, or encoding.BinaryMarshaler which gob also honours), in which
+// case it manages its own serialization and is exempt from inspection.
 func implementsGobEncoder(t reflect.Type) bool {
 	gobEncoder := reflect.TypeOf((*gob.GobEncoder)(nil)).Elem()
-	return t.Implements(gobEncoder) || reflect.PointerTo(t).Implements(gobEncoder)
+	binMarshaler := reflect.TypeOf((*encoding.BinaryMarshaler)(nil)).Elem()
+	return t.Implements(gobEncoder) || reflect.PointerTo(t).Implements(gobEncoder) ||
+		t.Implements(binMarshaler) || reflect.PointerTo(t).Implements(binMarshaler)
 }
 
+// transientTag marks an unexported state field the author knows is dropped
+// between HTTP turns (a cache rebuilt on demand): `vgi:"transient"`.
+const transientTag = "transient"
+
 // validateGobState fails fast (at registration) when the per-scan state type S
-// cannot be gob-encoded for HTTP rehydration. gob otherwise surfaces these only
-// mid-query, on the first HTTP continuation, with a cryptic message. Two pitfalls
-// are caught by walking S's exported, gob-reachable fields:
+// cannot be carried faithfully in the HTTP continuation token. gob otherwise
+// surfaces these only mid-query, on the first HTTP continuation -- or, worse,
+// never: an unexported field is silently dropped, so a cursor kept in one
+// restarts from zero on every HTTP turn (duplicate rows, or a scan that never
+// ends) while stdio and unix sockets, which keep state in memory, work.
+// Every struct reachable from S is walked:
 //
-//   - a struct whose fields are all unexported (e.g. `struct{ done bool }`): gob
-//     encodes nothing and reports "type ... has no exported fields".
+//   - an unexported field (e.g. `struct{ Done bool; cursor int }`): gob drops it.
+//     Export it, or tag it `vgi:"transient"` if losing it between turns is
+//     intended.
 //   - an exported field of a kind gob cannot encode — an interface (the common
 //     case being an Arrow `arrow.Record`/`arrow.Array` stashed in state to emit
 //     later), a chan, a func, or an unsafe.Pointer. The fix is to store plain
@@ -93,61 +95,102 @@ func implementsGobEncoder(t reflect.Type) bool {
 //     batch in Process, mirroring the SDK's static_data.go example.
 //
 // A truly empty `struct{}` is fine, and any type providing its own
-// gob.GobEncoder is exempt (at the top level or as a nested field). Mirrors
-// vgi-python enforcing serializable state at class-definition time.
+// gob.GobEncoder or encoding.BinaryMarshaler is exempt (at the top level or as a
+// nested field). Finally a zero S is round-tripped through gob, as the HTTP
+// transport would. Mirrors vgi-python enforcing serializable state at
+// class-definition time.
 func validateGobState[S any]() {
-	t := reflect.TypeOf((*S)(nil)).Elem()
-	assertGobEncodable(t, t.String(), map[reflect.Type]bool{})
+	if err := checkGobState(reflect.TypeOf((*S)(nil)).Elem()); err != nil {
+		panic("vgi.AsTableFunction: " + err.Error())
+	}
 }
 
-// assertGobEncodable panics if t — reachable from a state field via path — holds
-// a value gob cannot encode. seen guards against self-referential types.
-func assertGobEncodable(t reflect.Type, path string, seen map[reflect.Type]bool) {
+// checkGobState is validateGobState for a reflect.Type, returning the problem
+// instead of panicking.
+func checkGobState(t reflect.Type) error {
+	if err := gobStateProblem(t, t.String(), map[reflect.Type]bool{}); err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	v := reflect.New(t)
+	if err := gob.NewEncoder(&buf).EncodeValue(v); err != nil {
+		return fmt.Errorf("state type %s cannot be gob-encoded for HTTP continuation: %w", t, err)
+	}
+	if err := gob.NewDecoder(&buf).DecodeValue(reflect.New(t)); err != nil {
+		return fmt.Errorf("state type %s does not survive a gob round trip for HTTP continuation: %w", t, err)
+	}
+	return nil
+}
+
+// gobStateProblem reports why t — reachable from a state field via path —
+// holds a value gob cannot encode or would silently drop, or nil. seen guards
+// against self-referential types.
+func gobStateProblem(t reflect.Type, path string, seen map[reflect.Type]bool) error {
 	if t == nil || seen[t] {
-		return
+		return nil
 	}
 	seen[t] = true
 	// A type that defines its own gob serialization handles itself.
 	if implementsGobEncoder(t) {
-		return
+		return nil
 	}
 	switch t.Kind() {
 	case reflect.Interface, reflect.Chan, reflect.Func, reflect.UnsafePointer:
-		panic(fmt.Sprintf(
-			"vgi.AsTableFunction: state field %s has type %s (kind %s), which cannot be "+
+		return fmt.Errorf(
+			"state field %s has type %s (kind %s), which cannot be "+
 				"gob-encoded for HTTP rehydration. Arrow values (arrow.Record/arrow.Array) and "+
 				"other interface/chan/func fields must not live in table-function state — store "+
 				"plain serializable Go values (slices, scalars) and rebuild them in Process (see "+
-				"the static_data.go example), or implement gob.GobEncoder/GobDecoder.",
-			path, t.String(), t.Kind()))
+				"the static_data.go example), or implement gob.GobEncoder/GobDecoder",
+			path, t.String(), t.Kind())
 	case reflect.Pointer, reflect.Slice, reflect.Array:
-		assertGobEncodable(t.Elem(), path+"[]", seen)
+		return gobStateProblem(t.Elem(), path+"[]", seen)
 	case reflect.Map:
-		assertGobEncodable(t.Key(), path+".<key>", seen)
-		assertGobEncodable(t.Elem(), path+".<value>", seen)
-	case reflect.Struct:
-		if t.NumField() == 0 {
-			return // a truly empty struct gob-encodes as nothing
+		if err := gobStateProblem(t.Key(), path+".<key>", seen); err != nil {
+			return err
 		}
-		exported := 0
+		return gobStateProblem(t.Elem(), path+".<value>", seen)
+	case reflect.Struct:
+		var unexported []string
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
 			if !f.IsExported() {
-				continue // gob skips unexported fields, so they cannot break encoding
+				if f.Tag.Get("vgi") != transientTag {
+					unexported = append(unexported, path+"."+f.Name)
+				}
+				continue
 			}
-			exported++
-			assertGobEncodable(f.Type, path+"."+f.Name, seen)
+			if err := gobStateProblem(f.Type, path+"."+f.Name, seen); err != nil {
+				return err
+			}
 		}
-		if exported == 0 {
-			panic(fmt.Sprintf(
-				"vgi.AsTableFunction: state type %s has no exported fields and cannot be "+
-					"gob-encoded for HTTP rehydration — export its fields (e.g. `Done bool`) or "+
-					"implement gob.GobEncoder/GobDecoder.",
-				path))
+		if len(unexported) > 0 {
+			return fmt.Errorf(
+				"state type %s has unexported field(s) %s, so it is not gob-serializable "+
+					"intact: gob drops unexported fields from the HTTP continuation token, so "+
+					"their values reset on every HTTP turn (a cursor kept there restarts the "+
+					"scan: duplicate rows or an endless query) while stdio/unix work. Export "+
+					"them (e.g. `Cursor int`), tag them `vgi:\"transient\"` if losing them "+
+					"between turns is intended, or implement gob.GobEncoder/GobDecoder",
+				t.String(), strings.Join(unexported, ", "))
 		}
 	}
+	return nil
 }
 
+// AsTableFunction wraps a TypedTableFunc into a TableFunction for registration
+// with Worker.RegisterTable. The adapter:
+//   - Provides type-safe state casting (returns error instead of panic)
+//   - Defaults OnInit to DefaultInit() (MaxWorkers: 1) unless OnIniter is implemented
+//   - Delegates Cardinality if CardinalityEstimator is implemented
+//   - Panics if S cannot ride the HTTP continuation token intact (see
+//     validateGobState): unexported fields, interface/chan/func fields
+//
+// Usage:
+//
+//	func NewSequenceFunction() vgi.TableFunction {
+//	    return vgi.AsTableFunction[sequenceState](&SequenceFunction{})
+//	}
 func AsTableFunction[S any](f TypedTableFunc[S]) TableFunction {
 	validateGobState[S]()
 	gob.Register(new(S))

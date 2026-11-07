@@ -211,7 +211,9 @@ const (
 	WriteOpDelete WriteOp = "delete"
 )
 
-// SecretRequirement describes a secret type that a function needs.
+// SecretRequirement describes a secret a function asks DuckDB to resolve (see
+// FunctionMetadata.RequiredSecrets): resolved and passed when present, never
+// enforced -- use Secrets.Require for that.
 type SecretRequirement struct {
 	SecretType string
 	SecretName string // empty = not specified
@@ -300,7 +302,16 @@ type FunctionMetadata struct {
 	// When set, the catalog registers this concrete type instead of ANY.
 	// Leave nil for functions with dynamic return types (resolved at bind time).
 	ReturnType arrow.DataType
-	// RequiredSecrets lists secret types the function needs at bind time.
+	// RequiredSecrets lists the secrets to resolve if present: DuckDB looks up
+	// a secret of each listed type (and name/scope, when given) and passes
+	// whatever it finds in BindParams.Secrets / ProcessParams.Secrets.
+	//
+	// Despite the name it does NOT require them: when the user has created no
+	// matching secret the call still goes ahead, with that secret absent (the
+	// protocol's behaviour; the shared secret_no_secret test asserts it). A
+	// function that cannot work without one must say so itself -- call
+	// Secrets.Require(secretType), which returns a *MissingSecretError naming
+	// the type when none was resolved.
 	RequiredSecrets []SecretRequirement
 	// SupportsBatchIndex opts a table function into per-batch vgi_batch_index
 	// tagging (see EmitBatchIndex). The C++ extension enforces monotonicity.

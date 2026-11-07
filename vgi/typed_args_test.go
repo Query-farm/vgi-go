@@ -148,6 +148,32 @@ func TestDeriveArgSpecs_DocWithCommas(t *testing.T) {
 	}
 }
 
+// Only one enclosing pair of quotes is stripped, and only when the value both
+// starts and ends with one; a quoted doc may follow '=' after whitespace and
+// be followed by further keys.
+func TestDeriveArgSpecs_QuoteHandling(t *testing.T) {
+	type args struct {
+		Apostrophe string `vgi:"pos=0,doc=the users'"`
+		Spaced     string `vgi:"pos=1,doc= 'a, b'"`
+		Inner      string `vgi:"pos=2,doc=''quoted''"`
+		Leading    string `vgi:"pos=3,doc='tis the season"`
+		After      string `vgi:"doc='x, y',name=renamed"`
+		Default    string `vgi:"default='a,b'"`
+	}
+	specs := DeriveArgSpecs(args{})
+	for i, want := range []string{"the users'", "a, b", "'quoted'", "'tis the season", "x, y"} {
+		if specs[i].Doc != want {
+			t.Errorf("spec %d (%s): doc = %q, want %q", i, specs[i].Name, specs[i].Doc, want)
+		}
+	}
+	if specs[4].Name != "renamed" {
+		t.Errorf("key after quoted doc lost: name = %q", specs[4].Name)
+	}
+	if specs[5].DefaultValue != "a,b" {
+		t.Errorf("quoted default = %q", specs[5].DefaultValue)
+	}
+}
+
 func TestDeriveArgSpecs_TypeOverride(t *testing.T) {
 	type args struct {
 		// Go type says int64, but mark it as int32 on the wire.

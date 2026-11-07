@@ -1,11 +1,13 @@
 // Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-package vgi
+package exprduckdb
 
 import (
 	"context"
 	"fmt"
 	"testing"
+
+	"github.com/Query-farm/vgi-go/vgi"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -27,7 +29,7 @@ func TestEvaluatorComparesWithBinaryCollation(t *testing.T) {
 	results := make(chan error, 8)
 	for i := 0; i < cap(results); i++ {
 		go func() {
-			mask, err := evalExpressionAgainstBatch(context.Background(), batch, `"s" < 'a'`)
+			mask, err := Evaluate(context.Background(), batch, `"s" < 'a'`)
 			if err != nil {
 				results <- err
 				return
@@ -64,5 +66,12 @@ func TestEvaluatorIsSingleThreaded(t *testing.T) {
 	}
 	if threads != 1 {
 		t.Fatalf("the evaluator runs %d threads per query, want 1", threads)
+	}
+}
+
+// Importing the package registers it with the SDK.
+func TestImportRegistersTheEvaluator(t *testing.T) {
+	if !vgi.HasExpressionEvaluator() {
+		t.Fatal("importing exprduckdb registered no evaluator")
 	}
 }

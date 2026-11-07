@@ -208,3 +208,17 @@ func TestFunctionInfoCarriesInputRowsPerCall(t *testing.T) {
 	}
 	t.Fatal("probe not listed")
 }
+
+// inOutMixedState has an unexported counter gob would drop between HTTP turns.
+type inOutMixedState struct { //nolint:unused
+	Seen  int64
+	total int64
+}
+
+func TestTableInOutRejectsUnexportedState(t *testing.T) {
+	fn := AsTableInOutFunction[inOutMixedState](contractProbe[inOutMixedState]{})
+	err := checkTableInOutContract("probe", fn)
+	if err == nil || !strings.Contains(err.Error(), "inOutMixedState.total") {
+		t.Fatalf("checkTableInOutContract = %v", err)
+	}
+}

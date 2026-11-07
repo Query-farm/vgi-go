@@ -42,7 +42,7 @@ The worker supports two transport modes:
 ## Dependencies
 
 - `github.com/Query-farm/vgi-rpc-go` — VGI RPC framework (published module, Apache-2.0)
-- `github.com/Query-farm-haybarn/haybarn-go/v2` — embedded Haybarn 2.0 (DuckDB 2.0) engine for expression-filter evaluation (cgo; no darwin-amd64 build)
+- `github.com/Query-farm-haybarn/haybarn-go/v2` — embedded Haybarn 2.0 (DuckDB 2.0) engine for expression-filter evaluation, used only by `vgi/exprduckdb` (cgo; no darwin-amd64 build). `vgi` itself must stay cgo-free; workers opt in with `import _ ".../vgi/exprduckdb"`
 - `github.com/apache/arrow-go/v18` — Arrow IPC. stdio and HTTP run on upstream;
   the shared-memory (shm) transport requires the `github.com/Query-farm/arrow-go/v18`
   fork via a `replace` directive (see README's shared-memory section).

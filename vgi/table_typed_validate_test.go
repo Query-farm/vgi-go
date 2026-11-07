@@ -5,6 +5,9 @@ package vgi
 import (
 	"context"
 	"encoding/gob"
+	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
@@ -112,4 +115,69 @@ func TestAsTableFunctionRejectsUnexportedState(t *testing.T) {
 		}
 	}()
 	_ = AsTableFunction[badState](validateProbe[badState]{})
+}
+
+// mixedState is the HTTP-only footgun: one exported field keeps gob happy, so
+// the old check passed it, while the unexported cursor silently reset to zero on
+// every HTTP continuation (duplicate rows / a scan that never ends).
+type mixedState struct { //nolint:unused
+	Done   bool
+	cursor int64
+}
+
+// nestedMixedState hides the unexported field one struct down.
+type nestedMixedState struct { //nolint:unused
+	Page struct {
+		Token  string
+		offset int
+	}
+}
+
+// transientState opts an unexported cache out of the check.
+type transientState struct { //nolint:unused
+	Cursor int64
+	cache  map[string]int `vgi:"transient"`
+}
+
+// binaryState has unexported fields behind encoding.BinaryMarshaler.
+type binaryState struct{ n int } //nolint:unused
+
+func (b binaryState) MarshalBinary() ([]byte, error) { return nil, nil }
+func (b *binaryState) UnmarshalBinary([]byte) error  { return nil }
+
+func TestValidateGobStateRejectsAnyUnexportedField(t *testing.T) {
+	for name, fn := range map[string]func() error{
+		"mixed":  func() error { return checkGobState(reflect.TypeOf(mixedState{})) },
+		"nested": func() error { return checkGobState(reflect.TypeOf(nestedMixedState{})) },
+	} {
+		err := fn()
+		if err == nil {
+			t.Errorf("%s: unexported field accepted", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "unexported field(s)") {
+			t.Errorf("%s: error = %v", name, err)
+		}
+	}
+	if err := checkGobState(reflect.TypeOf(mixedState{})); err == nil || !strings.Contains(err.Error(), "mixedState.cursor") {
+		t.Errorf("error must name the field: %v", err)
+	}
+	if err := checkGobState(reflect.TypeOf(nestedMixedState{})); err == nil || !strings.Contains(err.Error(), ".Page.offset") {
+		t.Errorf("error must name the nested field: %v", err)
+	}
+	for name, typ := range map[string]reflect.Type{
+		"transient": reflect.TypeOf(transientState{}),
+		"binary":    reflect.TypeOf(binaryState{}),
+	} {
+		if err := checkGobState(typ); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	defer func() {
+		r := recover()
+		if r == nil || !strings.Contains(fmt.Sprint(r), "cursor") {
+			t.Errorf("AsTableFunction[mixedState]: panic = %v", r)
+		}
+	}()
+	_ = AsTableFunction[mixedState](validateProbe[mixedState]{})
 }

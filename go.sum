@@ -8,8 +8,8 @@ github.com/Query-farm-haybarn/haybarn-go/v2 v2.20000.0-rc.9 h1:L/hy2rCwP+2/Gt3X7
 github.com/Query-farm-haybarn/haybarn-go/v2 v2.20000.0-rc.9/go.mod h1:JerA7Efvt+EcmZgJ1Rb064IKG5xh2F1KdgO5hyPKLOs=
 github.com/Query-farm/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4 h1:hH37wAlNZG3LEfHxwnlE9aMtFqZndL26cHOEP0nhWJ8=
 github.com/Query-farm/arrow-go/v18 v18.0.0-20260220022719-2d45cbd918a4/go.mod h1:IJTMBTlHe7cDOhRh0ioGuEKBl5iTR6xPfl5BN4AgirU=
-github.com/Query-farm/vgi-rpc-go v0.36.0 h1:uzvZxIxATT1r++HC1OnsqShiNEINObF7uGMJX+79LJ0=
-github.com/Query-farm/vgi-rpc-go v0.36.0/go.mod h1:/7M2bvcmgZ56Cb8qsxlC8AmpNU3s/k2vcmKvxqM778U=
+github.com/Query-farm/vgi-rpc-go v0.37.0 h1:8faMw5ev3acNJZKNcuqOypthh+b3qbC2LG8rO7YxH3A=
+github.com/Query-farm/vgi-rpc-go v0.37.0/go.mod h1:/7M2bvcmgZ56Cb8qsxlC8AmpNU3s/k2vcmKvxqM778U=
 github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.0 h1:Av+r55X18WVsJDiutKz0FD2N7lAuyN8GHDc1vDt9DYE=
 github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.0/go.mod h1:kmNX5o0qcvMyFFeAgdnbodJeuQizm6Br8+fDcQj223s=
 github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtnceM=

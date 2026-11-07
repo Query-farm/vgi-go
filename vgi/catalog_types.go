@@ -86,7 +86,9 @@ type FunctionInfo struct {
 	// at most this many rows. Nil sends a whole chunk per call.
 	InputRowsPerCall *int64
 	RequiredSettings []string
-	RequiredSecrets  []SecretRequirement
+	// RequiredSecrets are secrets to resolve if present -- not enforced; see
+	// FunctionMetadata.RequiredSecrets and Secrets.Require.
+	RequiredSecrets []SecretRequirement
 
 	// catalogHome is the single catalog that owns this registration. It lives
 	// on the entry rather than in a name-keyed map because two catalogs served
