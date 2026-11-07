@@ -246,6 +246,13 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewMultiSecretDemoFunction())
 	w.RegisterTable(table.NewRepeatValueStrFunction())
 	w.RegisterTable(table.NewScopedSecretDemoFunction())
+	// Secret-lookup conformance fixtures (vgi docs/secret_lookup_fixtures.md;
+	// test/sql/integration/secret/secret_lookup_*.test).
+	w.RegisterTable(table.NewSecretValueByTypeFunction())
+	w.RegisterTable(table.NewSecretValueByNameFunction())
+	w.RegisterTable(table.NewSecretValueForScopeFunction())
+	w.RegisterTable(table.NewSecretValueRequiredFunction())
+	w.RegisterTable(table.NewSecretTypesSeenFunction())
 	w.RegisterTable(table.NewSecretDemoFunction())
 	w.RegisterTable(table.NewSequenceFunction())
 	w.RegisterTable(table.NewSettingsAwareFunction())

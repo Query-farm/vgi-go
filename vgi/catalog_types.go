@@ -150,6 +150,9 @@ func buildFunctionInfoRecord(info *FunctionInfo) (arrow.RecordBatch, error) {
 	default:
 		return nil, fmt.Errorf("function %q has unknown function_type %q", info.Name, info.FunctionType)
 	}
+	if err := validateSecretRequirements(info.Name, info.RequiredSecrets); err != nil {
+		return nil, err
+	}
 	if info.ArgumentMonotonicity != nil {
 		if functionType != FunctionTypeScalar {
 			return nil, fmt.Errorf("argument_monotonicity is only valid for scalar functions")

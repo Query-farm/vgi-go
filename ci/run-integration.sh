@@ -131,6 +131,11 @@ install -m 0755 "$DATABASE_WORKER_FIXTURE" \
 # parallel-init tests observe the worker's real max_workers (mirrors the Makefile).
 export VGI_SYNC_INIT_GLOBAL=1
 
+# The example worker implements the five secret-lookup conformance fixtures
+# (examples/table/secret_lookup.go; vgi docs/secret_lookup_fixtures.md), so opt
+# in to test/sql/integration/secret/secret_lookup_*.test on every lane.
+export VGI_SECRET_LOOKUP_FIXTURES=1
+
 # Coverage: when COVERAGE=1 the workers were built with `make build COVER=1`
 # (go build -cover -covermode=atomic). Exporting GOCOVERDIR makes every worker
 # process this run spawns — the main worker, the versioned HTTP workers, and the
@@ -394,6 +399,18 @@ if [ "${RUNNER_LINKS_EXTENSIONS:-0}" = "1" ]; then
   # published for its engine hash. Keep the standalone release lane strict.
   EXPECTED_SKIP_REASONS+=('require spatial')
 fi
+# Engine-gated files (vgi Makefile VGI_ENGINE_TEST_VARS). The native runner
+# exports each VGI_ENGINE_* var its engine supports (=1, from the artifact
+# manifest): files for engines WITHOUT the feature then skip with
+# "require-env-not V"; on an engine lacking it, the files that need it skip with
+# "require-env V 1". Exactly one side of each pair runs, as in the vgi Makefile.
+for engine_var in VGI_ENGINE_CORRELATED_NAMED_ARGS VGI_ENGINE_DELETE_RETURNING_VIRTUAL_COLUMNS; do
+  if [ "${!engine_var:-}" = "1" ]; then
+    EXPECTED_SKIP_REASONS+=("require-env-not $engine_var")
+  else
+    EXPECTED_SKIP_REASONS+=("require-env $engine_var 1")
+  fi
+done
 # Lane-specific additions — a skip that is expected on one lane is a red flag on
 # another (e.g. VGI_TEST_DEDICATED_WORKER skipping on stdio would mean the crash
 # tests silently stopped running).

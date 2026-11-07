@@ -51,37 +51,121 @@ func (s Secrets) NamedField(name, field string) (string, bool) {
 	return "", false
 }
 
-// SecretType returns the DuckDB secret type of the named secret (its serialized
-// "type" field).
+// SecretType returns the DuckDB secret type of the named secret: its serialized
+// "type" field, or -- for a secret serialized without one -- the type implied by
+// its column name (see secretTypeOf). ok is false when no such secret exists.
 func (s Secrets) SecretType(name string) (string, bool) {
-	return s.NamedField(name, "type")
+	fields, ok := s[name]
+	if !ok {
+		return "", false
+	}
+	return secretTypeOf(name, fields), true
 }
 
-// OfType returns every resolved secret whose serialized "type" field matches
-// secretType (since secrets are keyed by name, not type).
-func (s Secrets) OfType(secretType string) []map[string]interface{} {
-	var out []map[string]interface{}
-	for _, fields := range s {
-		if RenderSecretValue(fields["type"]) == secretType {
-			out = append(out, fields)
+// defaultSecretPrefix is the prefix DuckDB gives an unnamed secret: an unnamed
+// CREATE SECRET (TYPE brave, ...) is stored as "__default_brave".
+const defaultSecretPrefix = "__default_"
+
+// secretTypeOf returns the DuckDB secret type of a resolved secret. The extension
+// keys each secret by its unique DuckDB NAME, not its type, and serializes the
+// type in the "type" field, so that field is authoritative. Only when it is
+// absent (an older extension) does the column name stand in: "__default_<type>"
+// for an unnamed secret, otherwise the name itself.
+func secretTypeOf(name string, fields map[string]interface{}) string {
+	if v, ok := fields["type"]; ok && v != nil {
+		return RenderSecretValue(v)
+	}
+	return strings.TrimPrefix(name, defaultSecretPrefix)
+}
+
+// secretScopes returns a secret's scope prefixes (the connector serializes them
+// newline-joined); nil means the secret is unscoped.
+func secretScopes(fields map[string]interface{}) []string {
+	var out []string
+	for _, prefix := range strings.Split(RenderSecretValue(fields["scope"]), "\n") {
+		if prefix != "" {
+			out = append(out, prefix)
 		}
 	}
 	return out
 }
 
-// ForScope returns the fields of the resolved secret whose "scope" is the
-// longest prefix of path. Use this when the worker requested secrets for several
-// scopes (e.g. one per cloud path / bucket) and must pick the right one per path.
-// The connector serializes each secret's scope as a newline-joined list of
-// prefixes; a secret with no (or empty) scope matches as a last-resort fallback.
-// ok is false only when there are no candidate secrets.
+// namesOfType returns the names of the secrets of secretType, sorted, so every
+// selector is deterministic (Go map iteration is not).
+func (s Secrets) namesOfType(secretType string) []string {
+	var names []string
+	for name, fields := range s {
+		if secretType == "" || secretTypeOf(name, fields) == secretType {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// OfType returns every resolved secret of secretType, ordered by secret name.
+// The type is matched against each secret's serialized "type" field -- never the
+// column name, which is the secret's DuckDB name: an unnamed secret arrives as
+// "__default_<type>", and a named one under whatever name the user chose.
+func (s Secrets) OfType(secretType string) []map[string]interface{} {
+	names := s.namesOfType(secretType)
+	if len(names) == 0 {
+		return nil
+	}
+	out := make([]map[string]interface{}, 0, len(names))
+	for _, name := range names {
+		out = append(out, s[name])
+	}
+	return out
+}
+
+// Lookup selects the secret of secretType the way the client's own by-type
+// lookup does: a secret of that type with an empty scope, failing that the first
+// secret of that type (by name). ok is false when none of that type was resolved.
+// This is the selector for a requirement declared with a type and no scope.
+//
+//	creds, ok := params.Secrets.Lookup("brave")
+//	if ok { apiKey := vgi.RenderSecretValue(creds["api_key"]) }
+func (s Secrets) Lookup(secretType string) (map[string]interface{}, bool) {
+	names := s.namesOfType(secretType)
+	for _, name := range names {
+		if len(secretScopes(s[name])) == 0 {
+			return s[name], true
+		}
+	}
+	if len(names) > 0 {
+		return s[names[0]], true
+	}
+	return nil, false
+}
+
+// LookupNamed selects the secret called name, but only if it is of secretType
+// (an empty secretType accepts any type). ok is false when no secret of that
+// name was resolved or it has another type.
+func (s Secrets) LookupNamed(secretType, name string) (map[string]interface{}, bool) {
+	fields, ok := s[name]
+	if !ok {
+		return nil, false
+	}
+	if secretType != "" && secretTypeOf(name, fields) != secretType {
+		return nil, false
+	}
+	return fields, true
+}
+
+// ForScope returns the fields of the resolved secret (of any type) whose scope
+// has the longest prefix of path; failing that, an unscoped secret. Prefer
+// ForScopeOfType, which restricts the candidates to one secret type.
+// ok is false when no secret's scope matches and none is unscoped.
 func (s Secrets) ForScope(path string) (map[string]interface{}, bool) {
 	return s.selectForScope(path, "")
 }
 
-// ForScopeOfType is like ForScope but only over secrets of secretType — the
-// precise selector for cloud paths (e.g. the s3 secret matching a given s3://…
-// URL when several buckets are in play).
+// ForScopeOfType selects, among the secrets of secretType, the one whose scope
+// (newline-joined prefixes) has the longest prefix of path; failing that, one
+// with an empty scope; failing that, none (ok false). Use it when a function
+// requested several secrets of one type for different scopes (e.g. one per
+// cloud bucket) and must pick the right one per path.
 func (s Secrets) ForScopeOfType(path, secretType string) (map[string]interface{}, bool) {
 	return s.selectForScope(path, secretType)
 }
@@ -97,24 +181,18 @@ func (s Secrets) FieldForScope(path, field string) (string, bool) {
 }
 
 func (s Secrets) selectForScope(path, secretType string) (map[string]interface{}, bool) {
-	var best map[string]interface{}
+	var best, fallback map[string]interface{}
 	bestLen := -1
-	var fallback map[string]interface{}
-	for _, fields := range s {
-		if secretType != "" && RenderSecretValue(fields["type"]) != secretType {
-			continue
-		}
-		scope := RenderSecretValue(fields["scope"])
-		if scope == "" {
+	for _, name := range s.namesOfType(secretType) {
+		fields := s[name]
+		scopes := secretScopes(fields)
+		if len(scopes) == 0 {
 			if fallback == nil {
 				fallback = fields
 			}
 			continue
 		}
-		for _, prefix := range strings.Split(scope, "\n") {
-			if prefix == "" {
-				continue
-			}
+		for _, prefix := range scopes {
 			if strings.HasPrefix(path, prefix) && len(prefix) > bestLen {
 				bestLen = len(prefix)
 				best = fields
@@ -148,10 +226,10 @@ func (e *MissingSecretError) Error() string {
 // lacks the secret it needs.
 func (e *MissingSecretError) ErrorCode() vgirpc.Code { return vgirpc.CodeFailedPrecondition }
 
-// Require returns the fields (rendered to strings) of a resolved secret of
-// secretType, or a *MissingSecretError when none was resolved. With several
-// secrets of the type, the one whose name sorts first is returned; use
-// ForScopeOfType to choose by path instead.
+// Require returns the fields (rendered to strings) of the resolved secret of
+// secretType that Lookup selects (an unscoped one, else the first by name), or a
+// *MissingSecretError when none was resolved. Use ForScopeOfType to choose by
+// path instead.
 //
 //	creds, err := params.Secrets.Require("s3")
 //	if err != nil {
@@ -159,20 +237,40 @@ func (e *MissingSecretError) ErrorCode() vgirpc.Code { return vgirpc.CodeFailedP
 //	}
 //	keyID := creds["key_id"]
 func (s Secrets) Require(secretType string) (map[string]string, error) {
-	names := make([]string, 0, len(s))
-	for name, fields := range s {
-		if RenderSecretValue(fields["type"]) == secretType {
-			names = append(names, name)
-		}
-	}
-	if len(names) == 0 {
+	fields, ok := s.Lookup(secretType)
+	if !ok {
 		return nil, &MissingSecretError{SecretType: secretType}
 	}
-	sort.Strings(names)
-	fields := s[names[0]]
 	out := make(map[string]string, len(fields))
 	for k, v := range fields {
 		out[k] = RenderSecretValue(v)
 	}
 	return out, nil
+}
+
+// validateSecretRequirements rejects a requirement the client could not resolve.
+// A SecretRequirement without a SecretType used to be serialized as-is, so the
+// extension never asked DuckDB for anything and the function silently ran with no
+// secret; it is now an error naming the function and the offending entry.
+func validateSecretRequirements(function string, reqs []SecretRequirement) error {
+	for i, rs := range reqs {
+		if strings.TrimSpace(rs.SecretType) == "" {
+			return fmt.Errorf("function %q: RequiredSecrets[%d] has no SecretType (name=%q, scope=%q); "+
+				"every requirement must name the DuckDB secret type to resolve, e.g. vgi.SecretRequirement{SecretType: \"s3\"}",
+				function, i, rs.SecretName, rs.Scope)
+		}
+	}
+	return nil
+}
+
+// validateSecretLookups is validateSecretRequirements for a two-phase bind's
+// SecretScopeRequest.
+func validateSecretLookups(function string, lookups []SecretLookup) error {
+	for i, sl := range lookups {
+		if strings.TrimSpace(sl.SecretType) == "" {
+			return fmt.Errorf("function %q: SecretScopeRequest[%d] has no SecretType (name=%q, scope=%q)",
+				function, i, sl.SecretName, sl.Scope)
+		}
+	}
+	return nil
 }

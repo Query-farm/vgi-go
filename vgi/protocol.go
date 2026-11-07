@@ -814,6 +814,9 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 	// Two-phase bind: if the function requests scoped secret lookup, return
 	// the lookup columns instead of an output schema.
 	if bindResp.SecretScopeRequest != nil {
+		if err := validateSecretLookups(req.FunctionName, bindResp.SecretScopeRequest); err != nil {
+			return BindResponseWire{}, err
+		}
 		LogRPC.Debug("bind: two-phase scope request", "function", req.FunctionName, "lookups", len(bindResp.SecretScopeRequest))
 		types := make([]string, len(bindResp.SecretScopeRequest))
 		scopes := make([]string, len(bindResp.SecretScopeRequest))
