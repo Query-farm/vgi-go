@@ -4,6 +4,7 @@ package vgi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -167,10 +168,27 @@ func ValidateArgConstraints(specs []ArgSpec, args *Arguments) error {
 		if !spec.IsConst || !specHasValueConstraints(spec) {
 			continue
 		}
-		if spec.Position < 0 || spec.Position >= len(args.Positional) {
-			continue
+		var col arrow.Array
+		if spec.Position >= 0 {
+			if spec.Position >= len(args.Positional) {
+				continue
+			}
+			col = args.Positional[spec.Position]
+		} else {
+			// A named argument: DuckDB delivers it by name (ParseArguments
+			// stores both "name" and "named_name"). When the caller omitted it,
+			// the declared default is what the function will see, so that is
+			// checked instead -- an out-of-range default is a declaration bug
+			// the caller cannot work around.
+			var present bool
+			col, present = namedConstArg(args, spec.Name)
+			if !present {
+				if err := validateDeclaredDefault(spec); err != nil {
+					return err
+				}
+				continue
+			}
 		}
-		col := args.Positional[spec.Position]
 		if col == nil || col.Len() == 0 || col.IsNull(0) {
 			continue
 		}
@@ -181,6 +199,41 @@ func ValidateArgConstraints(specs []ArgSpec, args *Arguments) error {
 		if err := validateConstValue(spec, value); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// namedConstArg returns a named argument's array and whether the caller passed
+// it at all.
+func namedConstArg(args *Arguments, name string) (arrow.Array, bool) {
+	if col, ok := args.Named[name]; ok {
+		return col, true
+	}
+	if col, ok := args.Named["named_"+name]; ok {
+		return col, true
+	}
+	return nil, false
+}
+
+// validateDeclaredDefault checks an omitted named argument's declared default
+// against its constraints. No default, or a null/unparseable one, passes.
+func validateDeclaredDefault(spec ArgSpec) error {
+	if !spec.HasDefault {
+		return nil
+	}
+	value, ok := parseDefaultTyped(spec.ArrowType, spec.DefaultValue)
+	if !ok || value == nil {
+		return nil
+	}
+	if u, isUint := value.(uint64); isUint {
+		value = float64(u)
+	}
+	if err := validateConstValue(spec, value); err != nil {
+		var argErr *ArgumentError
+		if errors.As(err, &argErr) {
+			argErr.Detail = fmt.Sprintf("declared default %s %s", spec.DefaultValue, argErr.Detail)
+		}
+		return err
 	}
 	return nil
 }

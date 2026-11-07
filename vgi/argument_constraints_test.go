@@ -3,6 +3,7 @@
 package vgi
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -338,5 +339,78 @@ func TestValidateAggregateConstConstraints(t *testing.T) {
 	named := &Arguments{Named: map[string]arrow.Array{"positional_0": mk(5.0)}}
 	if err := ValidateAggregateConstConstraints(specs, named); err == nil {
 		t.Fatal("named-delivered percentile 5.0 should be rejected")
+	}
+}
+
+// Named (Position < 0) const arguments are enforced too: looked up by name as
+// DuckDB delivers them ("named_<name>" and "<name>"), with an omitted one's
+// declared default checked instead.
+func TestValidateArgConstraints_NamedArgs(t *testing.T) {
+	type namedArgs struct {
+		Count int64  `vgi:"pos=0"`
+		Step  int64  `vgi:"default=1,ge=1,le=100"`
+		Mode  string `vgi:"choices='fast,slow'"`
+		Code  string `vgi:"pattern='[A-Z]{2}'"`
+	}
+	specs := DeriveArgSpecs(namedArgs{})
+	i64 := func(v int64) arrow.Array {
+		b := array.NewInt64Builder(memory.DefaultAllocator)
+		defer b.Release()
+		b.Append(v)
+		return b.NewArray()
+	}
+	str := func(v string) arrow.Array {
+		b := array.NewStringBuilder(memory.DefaultAllocator)
+		defer b.Release()
+		b.Append(v)
+		return b.NewArray()
+	}
+	null := func() arrow.Array {
+		b := array.NewInt64Builder(memory.DefaultAllocator)
+		defer b.Release()
+		b.AppendNull()
+		return b.NewArray()
+	}
+	call := func(named map[string]arrow.Array) error {
+		return ValidateArgConstraints(specs, &Arguments{Positional: []arrow.Array{i64(3)}, Named: named})
+	}
+	for name, tc := range map[string]struct {
+		named map[string]arrow.Array
+		want  string // "" = accepted
+	}{
+		"all absent (default 1 is valid)": {map[string]arrow.Array{}, ""},
+		"step := 0 below ge":              {map[string]arrow.Array{"named_step": i64(0), "step": i64(0)}, "must be >= 1"},
+		"step := 101 above le":            {map[string]arrow.Array{"step": i64(101)}, "must be <= 100"},
+		"step := 5 ok":                    {map[string]arrow.Array{"named_step": i64(5)}, ""},
+		"step := NULL skips":              {map[string]arrow.Array{"step": null()}, ""},
+		"mode not a choice":               {map[string]arrow.Array{"mode": str("medium")}, "must be one of"},
+		"mode a choice":                   {map[string]arrow.Array{"mode": str("slow")}, ""},
+		"code fails pattern":              {map[string]arrow.Array{"code": str("ab")}, "must match pattern"},
+		"code matches unanchored":         {map[string]arrow.Array{"code": str("xxABxx")}, ""},
+	} {
+		err := call(tc.named)
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: unexpected error %v", name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: error = %v, want %q", name, err, tc.want)
+		}
+	}
+
+	// An omitted named argument whose declared default violates its own
+	// constraints is rejected, naming the default.
+	type badDefault struct {
+		Step int64 `vgi:"default=0,ge=1"`
+	}
+	err := ValidateArgConstraints(DeriveArgSpecs(badDefault{}), &Arguments{Named: map[string]arrow.Array{}})
+	if err == nil || !strings.Contains(err.Error(), "declared default") {
+		t.Fatalf("bad default: %v", err)
+	}
+	// Absent with no default passes.
+	type noDefault struct {
+		Step int64 `vgi:"ge=1"`
+	}
+	if err := ValidateArgConstraints(DeriveArgSpecs(noDefault{}), &Arguments{Named: map[string]arrow.Array{}}); err != nil {
+		t.Fatalf("absent, no default: %v", err)
 	}
 }
