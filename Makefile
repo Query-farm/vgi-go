@@ -170,21 +170,14 @@ test-unit:
 # Landing-surface conformance: boot the example HTTP worker and run the
 # cross-language landing checker (schema validation + asset marker + column
 # endpoints) against it. Requires Python with the `jsonschema` package.
-# Scaffold a new VGI worker module from templates/worker. Usage:
-#   make new-worker NAME=myproj            # creates ./myproj/
-#   make new-worker NAME=myproj DIR=../    # creates ../myproj/
-DIR ?= .
+# Retired: new workers start from the vgi-starter-go template, which has tests, CI,
+# Docker and releases. Kept so the old command points somewhere useful.
 new-worker:
-	@test -n "$(NAME)" || { echo "usage: make new-worker NAME=<module-name> [DIR=<parent>]"; exit 2; }
-	@dest="$(DIR)/$(NAME)"; \
-	if [ -e "$$dest" ]; then echo "$$dest already exists"; exit 1; fi; \
-	mkdir -p "$$dest"; \
-	for f in templates/worker/*.tmpl; do \
-		out="$$dest/$$(basename $${f%.tmpl})"; \
-		sed "s/__NAME__/$(NAME)/g" "$$f" > "$$out"; \
-	done; \
-	echo "scaffolded $$dest"; \
-	echo "next: cd $$dest && go mod tidy && go build ./..."
+	@echo "make new-worker is retired. Start from the template instead:"
+	@echo "  gh repo create my-worker --template Query-farm/vgi-starter-go --private --clone"
+	@echo "  cd my-worker && make init NAME=my_worker && make check"
+	@echo "See https://github.com/Query-farm/vgi-starter-go"
+	@exit 2
 
 # Run the full integration test suite.
 # Rebuilds the workers first to ensure tests use the latest code.
