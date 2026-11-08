@@ -57,6 +57,14 @@ type ProcessParams struct {
 	// session; used to scope persistent state via Storage.AttachStore(scope).
 	// Nil when the call has no attach context.
 	AttachScope []byte
+	// TransactionOpaqueData is the plaintext transaction id of the DuckDB
+	// transaction this call runs in (minted by TransactionHooks.Begin or the
+	// SDK's default), or nil outside a transaction / on an ATTACH that does
+	// not support transactions. Available in NewState, Process and Finalize,
+	// including on rehydrated HTTP turns. Opened by the SDK on HTTP, where it
+	// travels sealed, so it is the same id the transaction hooks receive and
+	// a client cannot forge it.
+	TransactionOpaqueData []byte
 	// InitOpaqueData is the opaque data from the init response.
 	InitOpaqueData []byte
 	// PushdownFilters is the original serialized snapshot, retained for

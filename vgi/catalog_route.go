@@ -189,13 +189,8 @@ func (w *Worker) dispatchRouted(ctx context.Context, cc *vgirpc.CallContext, met
 	}
 	// The routed catalog never sees a sealed value: open the transaction here,
 	// bound to the sealed attach, before handing over the inner attach.
-	if tf := reflect.ValueOf(reqPtr).Elem().FieldByName("TransactionOpaqueData"); w.sealOpaqueData &&
-		tf.IsValid() && tf.Kind() == reflect.Pointer && !tf.IsNil() {
-		txPlain, err := w.openTransaction(tf.Elem().Bytes(), sealedAttach, cc)
-		if err != nil {
-			return nil, true, err
-		}
-		tf.Set(reflect.ValueOf(&txPlain))
+	if err := w.openTransactionField(reflect.ValueOf(reqPtr).Elem().FieldByName("TransactionOpaqueData"), sealedAttach, cc); err != nil {
+		return nil, true, err
 	}
 	af.SetBytes(inner)
 	out, err := m(ctx, cc, reqPtr)

@@ -302,12 +302,33 @@ func (w *Worker) unwrapReqOpaque(reqPtr any, cc *vgirpc.CallContext) error {
 	if !w.sealOpaqueData {
 		return nil
 	}
-	if tf := v.FieldByName("TransactionOpaqueData"); tf.IsValid() && tf.Kind() == reflect.Ptr && !tf.IsNil() {
+	return w.openTransactionField(v.FieldByName("TransactionOpaqueData"), sealedAttach, cc)
+}
+
+// openTransactionField opens a request's TransactionOpaqueData field in place.
+// Both shapes are opened: the optional *[]byte of catalog_version and the
+// listings, and the required []byte of catalog_transaction_commit /
+// catalog_transaction_rollback, so the commit/rollback hooks and the
+// transaction-scoped storage see the same plaintext id the functions saw. A
+// missing field, nil pointer or empty value is left as is; pass-through on the
+// unsealed transports.
+func (w *Worker) openTransactionField(tf reflect.Value, sealedAttach []byte, cc *vgirpc.CallContext) error {
+	if !w.sealOpaqueData || !tf.IsValid() {
+		return nil
+	}
+	switch {
+	case tf.Kind() == reflect.Pointer && !tf.IsNil():
 		plain, err := w.openTransaction(tf.Elem().Bytes(), sealedAttach, cc)
 		if err != nil {
 			return err
 		}
 		tf.Set(reflect.ValueOf(&plain))
+	case tf.Kind() == reflect.Slice && tf.Len() > 0:
+		plain, err := w.openTransaction(tf.Bytes(), sealedAttach, cc)
+		if err != nil {
+			return err
+		}
+		tf.SetBytes(plain)
 	}
 	return nil
 }

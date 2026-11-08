@@ -111,6 +111,45 @@ func WithConstraintReadProfile() WorkerOption {
 	}
 }
 
+// WithConstraintEnforceProfile makes the worker's default catalog advertise
+// and (when the client offers it, alongside ConstraintRecordsReadProfile)
+// select ConstraintEnforceProfile on every ATTACH, and implies
+// WithConstraintReadProfile. The SDK negotiates it by itself when a registered
+// CatalogTable has both Constraints and a write function; use this option when
+// writable constrained tables are served some other way (handlers), where the
+// SDK cannot see them at ATTACH. DuckDB refuses to write to a table that
+// carries constraint records unless the profile was negotiated ("constraint
+// enforcement profile was not negotiated"); by advertising it the worker
+// promises its write functions keep the ENFORCED constraints.
+func WithConstraintEnforceProfile() WorkerOption {
+	return func(w *Worker) {
+		w.constraintReadProfile = true
+		w.constraintEnforceProfile = true
+	}
+}
+
+// declarativeWriteProfiles returns the write profiles the declarative catalog
+// tables served to an attach of name need: ConstraintEnforceProfile when any
+// of them carries Constraints and a write function (mirrors the TypeScript
+// SDK's catalogWriteProfiles), or always under WithConstraintEnforceProfile.
+func (w *Worker) declarativeWriteProfiles(name string) []string {
+	if w.constraintEnforceProfile {
+		return []string{ConstraintEnforceProfile}
+	}
+	_, aliasOnly := w.catalogAliasInfos[name]
+	for schema, tables := range w.catalogTables {
+		if aliasOnly && schema != "main" {
+			continue
+		}
+		for i := range tables {
+			if len(tables[i].Constraints) > 0 && tables[i].writable() {
+				return []string{ConstraintEnforceProfile}
+			}
+		}
+	}
+	return nil
+}
+
 // constraintReadProfiles are the profiles a catalog that serves records reads under.
 var constraintReadProfiles = []string{ConstraintRecordsReadProfile, ScalarExpressionReadProfile}
 
@@ -137,17 +176,11 @@ func (w *Worker) declarativeReadProfiles(name string) []string {
 	return nil
 }
 
-// mergeReadProfiles adds the SDK's own read profiles to an attach result's
+// mergeCapabilities adds the SDK's own profiles to an attach result's
 // capability records without replacing what an attach validator decided:
-// the advertised read list is the union, and the selected read list is the
-// validator's selection plus the client-offered SDK profiles. Other
-// categories (ddl/write/transaction) pass through unchanged. With no SDK
+// each advertised list is the union, and each selected list is the
+// validator's selection plus the client-offered SDK profiles. With no SDK
 // profiles the validator's bytes are returned untouched.
-func mergeReadProfiles(sdk []string, available, selected *[]byte, clientCapabilities *[]byte) (*[]byte, *[]byte, error) {
-	return mergeCapabilities(CatalogCapabilities{Read: sdk}, available, selected, clientCapabilities)
-}
-
-// mergeCapabilities is mergeReadProfiles for every category.
 func mergeCapabilities(sdk CatalogCapabilities, available, selected *[]byte, clientCapabilities *[]byte) (*[]byte, *[]byte, error) {
 	if len(sdk.Read)+len(sdk.Ddl)+len(sdk.Write)+len(sdk.Transaction) == 0 {
 		return available, selected, nil

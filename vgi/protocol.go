@@ -905,6 +905,10 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		Phase:        phase,
 		Settings:     bindParams.Settings,
 		Secrets:      bindParams.Secrets,
+		AttachScope:  bindParams.AttachOpaqueData,
+		// Opened from the init's bind_call by parseBindRequest (sealed on
+		// HTTP), never taken from bind opaque data a client could rewrite.
+		TransactionOpaqueData: bindParams.TransactionOpaqueData,
 	}
 	if req.ProjectionIDs != nil {
 		// int64 on the wire, int32 in the worker-facing API. A projection id is
@@ -1008,26 +1012,27 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 
 	// Build process params
 	processParams := &ProcessParams{
-		FunctionName:     bindReq.FunctionName,
-		FunctionType:     normalizeFunctionType(FunctionType(bindReq.FunctionType)),
-		Args:             bindParams.Args,
-		OutputSchema:     processOutputSchema,
-		BindOutputSchema: outputSchema,
-		BindOpaqueData:   initParams.BindOpaqueData,
-		InputSchema:      bindParams.InputSchema,
-		ProjectionIDs:    initParams.ProjectionIDs,
-		Settings:         bindParams.Settings,
-		Secrets:          bindParams.Secrets,
-		PushdownFilters:  initParams.PushdownFilters,
-		JoinKeys:         initParams.JoinKeys,
-		JoinKeyBatches:   initParams.JoinKeyBatches,
-		OrderByHint:      initParams.OrderByHint,
-		TableSampleHint:  initParams.TableSampleHint,
-		AtUnit:           bindParams.AtUnit,
-		AtValue:          bindParams.AtValue,
-		AttachScope:      bindParams.AttachOpaqueData,
-		CopyFrom:         bindParams.CopyFrom,
-		CopyTo:           bindParams.CopyTo,
+		FunctionName:          bindReq.FunctionName,
+		FunctionType:          normalizeFunctionType(FunctionType(bindReq.FunctionType)),
+		Args:                  bindParams.Args,
+		OutputSchema:          processOutputSchema,
+		BindOutputSchema:      outputSchema,
+		BindOpaqueData:        initParams.BindOpaqueData,
+		InputSchema:           bindParams.InputSchema,
+		ProjectionIDs:         initParams.ProjectionIDs,
+		Settings:              bindParams.Settings,
+		Secrets:               bindParams.Secrets,
+		PushdownFilters:       initParams.PushdownFilters,
+		JoinKeys:              initParams.JoinKeys,
+		JoinKeyBatches:        initParams.JoinKeyBatches,
+		OrderByHint:           initParams.OrderByHint,
+		TableSampleHint:       initParams.TableSampleHint,
+		AtUnit:                bindParams.AtUnit,
+		AtValue:               bindParams.AtValue,
+		AttachScope:           bindParams.AttachOpaqueData,
+		TransactionOpaqueData: bindParams.TransactionOpaqueData,
+		CopyFrom:              bindParams.CopyFrom,
+		CopyTo:                bindParams.CopyTo,
 	}
 	if req.SubstreamID != nil {
 		processParams.SubstreamID = *req.SubstreamID

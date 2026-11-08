@@ -32,6 +32,17 @@ type InitParams struct {
 	Secrets Secrets
 	// IsSecondary is true if this is a secondary init (worker init).
 	IsSecondary bool
+	// AttachScope is the per-ATTACH plaintext (the catalog's
+	// attach_opaque_data with the framework UUID stripped); the same bytes as
+	// BindParams.AttachOpaqueData and ProcessParams.AttachScope. Nil when the
+	// call has no attach context.
+	AttachScope []byte
+	// TransactionOpaqueData is the plaintext transaction id of the DuckDB
+	// transaction this scan runs in (minted by TransactionHooks.Begin or the
+	// SDK's default), or nil outside a transaction / on an ATTACH that does
+	// not support transactions. Opened by the SDK on HTTP, where it travels
+	// sealed, so it is the same id the transaction hooks receive.
+	TransactionOpaqueData []byte
 
 	// SplitTokens are the raw envelopes as they arrived; SplitPayloads are the
 	// verified worker payloads after the framework stripped them. A function

@@ -48,6 +48,10 @@ import (
 //   [N]T (N>0, T!=byte)   → fixed_list of N inferred T
 //   struct{ ... }         → struct of inferred field types
 //   time.Time             → timestamp[us, UTC]
+//   *T                    → as T, but optional: nil when the argument is
+//                           omitted or NULL (unless default= is given), so a
+//                           named argument can default to NULL and NULL is
+//                           told apart from the zero value
 //   interface{} / any     → "any" (ArrowDataType nil; pair with bound=)
 //
 // The tag may override inference via type= or by attaching ArrowDataType
@@ -518,6 +522,10 @@ func inferArrowType(t reflect.Type) arrowTypeInfo {
 		return info
 	}
 	switch t.Kind() {
+	case reflect.Pointer:
+		// *T is an optional T: the same Arrow type, bound to nil when the
+		// argument is omitted or NULL (and no default= is declared).
+		return inferArrowType(t.Elem())
 	case reflect.String:
 		return arrowTypeInfo{ArrowTypeName: "varchar", DataType: arrow.BinaryTypes.String}
 	case reflect.Bool:
@@ -725,6 +733,14 @@ func lookupKey(spec ArgSpec) any {
 // unsupported field kinds so callers can extend Arguments to handle them.
 func assignScalar(field reflect.Value, args *Arguments, key any) error {
 	ft := field.Type()
+	if ft.Kind() == reflect.Pointer {
+		elem := reflect.New(ft.Elem())
+		if err := assignScalar(elem.Elem(), args, key); err != nil {
+			return err
+		}
+		field.Set(elem)
+		return nil
+	}
 	switch {
 	case ft == timeType:
 		t, err := args.GetScalarTime(key)
@@ -799,6 +815,14 @@ func assignScalar(field reflect.Value, args *Arguments, key any) error {
 
 // assignDefault parses the textual DefaultValue and writes it into field.
 func assignDefault(field reflect.Value, def string) error {
+	if field.Kind() == reflect.Pointer {
+		elem := reflect.New(field.Type().Elem())
+		if err := assignDefault(elem.Elem(), def); err != nil {
+			return err
+		}
+		field.Set(elem)
+		return nil
+	}
 	if field.Type() == timeType {
 		t, err := time.Parse(time.RFC3339Nano, def)
 		if err != nil {

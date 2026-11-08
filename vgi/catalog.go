@@ -189,10 +189,9 @@ type TableCreateRequestWire struct {
 
 // DefaultReadOnlyCatalog auto-generates from registered functions.
 type DefaultReadOnlyCatalog struct {
-	catalogName      string
-	schemas          map[string]*catalogSchemaInfo
-	version          int64
-	attachOpaqueData []byte
+	catalogName string
+	schemas     map[string]*catalogSchemaInfo
+	version     int64
 	// functionCache holds the built function listings (see
 	// catalog_function_listing.go). The catalog is immutable once built, so
 	// they never go stale; a rebuilt catalog starts with an empty cache.
@@ -676,10 +675,9 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 		}
 	}
 	// Generate a simple attach ID
+	// The attach value is per ATTACH: it lives only in this call's result,
+	// never in shared worker state (concurrent ATTACHes over HTTP would race).
 	attachOpaqueData := []byte(req.Name)
-	if w.catalog != nil {
-		w.catalog.attachOpaqueData = attachOpaqueData
-	}
 	version := int64(1)
 	if w.catalog != nil {
 		version = w.catalog.version
@@ -766,6 +764,7 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 	var resolvedData, resolvedImpl *string
 	var catalogCapabilities, selectedCapabilities *[]byte
 	var err error
+	supportsTransactions := w.supportsTransactions
 	if w.attachValidator != nil {
 		decision, vErr := w.attachValidator(&req, callCtx)
 		if vErr != nil {
@@ -783,9 +782,9 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 			if decision.AttachOpaqueData != nil {
 				attachOpaqueData = decision.AttachOpaqueData
 				attachOpaqueDataRequired = true
-				if w.catalog != nil {
-					w.catalog.attachOpaqueData = attachOpaqueData
-				}
+			}
+			if decision.SupportsTransactions != nil {
+				supportsTransactions = *decision.SupportsTransactions
 			}
 			if decision.ResolvedDataVersion != "" {
 				v := decision.ResolvedDataVersion
@@ -800,8 +799,11 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 	// Constraint records are readable only under a negotiated profile: the
 	// SDK advertises and selects it itself when the declarative tables this
 	// attach serves carry records, merged with any validator decision.
-	if catalogCapabilities, selectedCapabilities, err = mergeReadProfiles(
-		w.declarativeReadProfiles(req.Name), catalogCapabilities, selectedCapabilities, req.ClientCapabilities); err != nil {
+	// Writes to a constrained table need the enforcement write profile,
+	// negotiated the same way when a writable CatalogTable carries records.
+	if catalogCapabilities, selectedCapabilities, err = mergeCapabilities(
+		CatalogCapabilities{Read: w.declarativeReadProfiles(req.Name), Write: w.declarativeWriteProfiles(req.Name)},
+		catalogCapabilities, selectedCapabilities, req.ClientCapabilities); err != nil {
 		return CatalogAttachResultWire{}, rewrapError("ValueError", err)
 	}
 	// Aliases registered with discovery metadata (WithCatalogAliasInfo)
@@ -818,9 +820,6 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 		scope = append(scope, u[:]...)
 		attachOpaqueData = scope
 		attachOpaqueDataRequired = true
-		if w.catalog != nil {
-			w.catalog.attachOpaqueData = attachOpaqueData
-		}
 		if aliasInfo.DataVersionSpec != nil {
 			resolvedData = aliasInfo.DataVersionSpec
 		}
@@ -844,7 +843,7 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 	defaultSchema := "main"
 	result := CatalogAttachResultWire{
 		AttachOpaqueData:              attachOpaqueData,
-		SupportsTransactions:          w.supportsTransactions,
+		SupportsTransactions:          supportsTransactions,
 		SupportsTimeTravel:            supportsTimeTravel,
 		CatalogVersionFrozen:          true,
 		CatalogVersion:                version,
@@ -907,37 +906,35 @@ func (w workerService) CatalogContents(ctx context.Context, callCtx *vgirpc.Call
 	return w.catalogContents(req, callCtx)
 }
 
-// CatalogTransactionBegin serves vgi.v3 catalog_transaction_begin — allocate a
-// fresh transaction id when the worker advertises transaction support, so
-// DuckDB threads it through bind/scan inside BEGIN/COMMIT (enables
-// transaction-scoped storage).
+// CatalogTransactionBegin serves vgi.v3 catalog_transaction_begin — mint the
+// transaction id (TransactionHooks.Begin, else a random 16-byte id) when the
+// worker can advertise transaction support, so DuckDB threads it through
+// bind/init/scan inside BEGIN/COMMIT.
 func (w workerService) CatalogTransactionBegin(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTransactionBeginParams) (TransactionBeginResponseWire, error) {
-	if !w.supportsTransactions {
+	if !w.mayBeginTransactions() {
 		return TransactionBeginResponseWire{}, nil
 	}
-	id, err := uuid.NewRandom()
-	if err != nil {
+	tx, err := w.beginTransaction(ctx, callCtx, req.AttachOpaqueData)
+	if err != nil || tx == nil {
 		return TransactionBeginResponseWire{}, err
 	}
 	// Sealed for the caller and bound to the sealed attach in the
 	// unaryCatalog wrapper (sealTransactionResult), which still holds
 	// the sealed attach this handler only sees opened.
-	tx := append([]byte(nil), id[:]...)
 	return TransactionBeginResponseWire{TransactionOpaqueData: &tx}, nil
 }
 
-// CatalogTransactionCommit serves vgi.v3 catalog_transaction_commit — clear
+// CatalogTransactionCommit serves vgi.v3 catalog_transaction_commit: runs the
+// TransactionHooks.Commit hook (whose error fails the COMMIT) and clears
 // per-transaction storage.
 func (w workerService) CatalogTransactionCommit(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTransactionCommitParams) error {
-	w.clearTransactionState(req.TransactionOpaqueData)
-	return nil
+	return w.endTransaction(ctx, callCtx, req.AttachOpaqueData, req.TransactionOpaqueData, true)
 }
 
-// CatalogTransactionRollback serves vgi.v3 catalog_transaction_rollback — same
-// cleanup path as commit.
+// CatalogTransactionRollback serves vgi.v3 catalog_transaction_rollback: runs
+// the TransactionHooks.Rollback hook and clears per-transaction storage.
 func (w workerService) CatalogTransactionRollback(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTransactionRollbackParams) error {
-	w.clearTransactionState(req.TransactionOpaqueData)
-	return nil
+	return w.endTransaction(ctx, callCtx, req.AttachOpaqueData, req.TransactionOpaqueData, false)
 }
 
 // CatalogSchemas serves vgi.v3 catalog_schemas.
@@ -1350,7 +1347,7 @@ func (w workerService) CatalogTableInsertFunctionGet(ctx context.Context, callCt
 		}
 	}
 	if w.writableByAttachOpaqueData(req.AttachOpaqueData) == nil {
-		return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Code: string(vgirpc.CodeFailedPrecondition), Message: fmt.Sprintf("table %s.%s is read-only (attach_opaque_data=%x len=%d, extra_catalogs=%d)", req.SchemaPath, req.Name, req.AttachOpaqueData, len(req.AttachOpaqueData), len(w.extraCatalogs))}
+		return w.declarativeWriteFunctionGet(WriteOpInsert, req.SchemaPath, req.Name)
 	}
 	return buildScanFunctionGetResponse(&ScanFunctionResult{
 		FunctionName: writableInsertFunctionName,
@@ -1373,7 +1370,7 @@ func (w workerService) CatalogTableUpdateFunctionGet(ctx context.Context, callCt
 		}
 	}
 	if w.writableByAttachOpaqueData(req.AttachOpaqueData) == nil {
-		return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Code: string(vgirpc.CodeFailedPrecondition), Message: fmt.Sprintf("table %s.%s is read-only (attach_opaque_data=%x len=%d, extra_catalogs=%d)", req.SchemaPath, req.Name, req.AttachOpaqueData, len(req.AttachOpaqueData), len(w.extraCatalogs))}
+		return w.declarativeWriteFunctionGet(WriteOpUpdate, req.SchemaPath, req.Name)
 	}
 	return buildScanFunctionGetResponse(&ScanFunctionResult{
 		FunctionName: writableUpdateFunctionName,
@@ -1396,7 +1393,7 @@ func (w workerService) CatalogTableDeleteFunctionGet(ctx context.Context, callCt
 		}
 	}
 	if w.writableByAttachOpaqueData(req.AttachOpaqueData) == nil {
-		return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Code: string(vgirpc.CodeFailedPrecondition), Message: fmt.Sprintf("table %s.%s is read-only (attach_opaque_data=%x len=%d, extra_catalogs=%d)", req.SchemaPath, req.Name, req.AttachOpaqueData, len(req.AttachOpaqueData), len(w.extraCatalogs))}
+		return w.declarativeWriteFunctionGet(WriteOpDelete, req.SchemaPath, req.Name)
 	}
 	return buildScanFunctionGetResponse(&ScanFunctionResult{
 		FunctionName: writableDeleteFunctionName,
@@ -1406,6 +1403,36 @@ func (w workerService) CatalogTableDeleteFunctionGet(ctx context.Context, callCt
 		},
 		SchemaPath: w.resolveFunctionSchema(kindTableInOut, writableDeleteFunctionName, req.SchemaPath),
 	})
+}
+
+// declarativeWriteFunctionGet answers catalog_table_{insert,update,delete}_function_get
+// for a registered CatalogTable: its write function, or a CatalogReadOnlyError
+// ("... does not support UPDATE") when it has none.
+func (w *Worker) declarativeWriteFunctionGet(op WriteOp, schemaPath SchemaPath, name string) (TableScanFunctionGetResponseWire, error) {
+	ct := w.findCatalogTable(schemaPath, name)
+	if ct == nil {
+		return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "NotImplementedError", Code: string(vgirpc.CodeFailedPrecondition),
+			Message: fmt.Sprintf("table %s.%s is read-only: it does not support %s", schemaPathDisplay(schemaPath), name, strings.ToUpper(string(op)))}
+	}
+	res := w.writeFunctionResult(schemaPath, ct, op)
+	if res == nil {
+		return TableScanFunctionGetResponseWire{}, &vgirpc.RpcError{Type: "CatalogReadOnlyError", Code: string(vgirpc.CodeFailedPrecondition),
+			Message: fmt.Sprintf("Table %s.%s does not support %s", schemaPathDisplay(schemaPath), ct.Name, strings.ToUpper(string(op)))}
+	}
+	return buildScanFunctionGetResponse(res)
+}
+
+// writeFunctionResult is the function-get result for a table's write function
+// (no catalog-supplied arguments), or nil when the table has none for op.
+func (w *Worker) writeFunctionResult(schemaPath SchemaPath, ct *CatalogTable, op WriteOp) *ScanFunctionResult {
+	fn := ct.writeFunction(op)
+	if fn == nil {
+		return nil
+	}
+	return &ScanFunctionResult{
+		FunctionName: fn.Name(),
+		SchemaPath:   w.resolveFunctionSchema(kindTableInOut, fn.Name(), schemaPath),
+	}
 }
 
 // CatalogTableColumnStatisticsGet serves vgi.v3
@@ -1596,6 +1623,32 @@ func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*Tab
 		CardinalityEstimate:      ct.CardinalityEstimate,
 		CardinalityMax:           ct.CardinalityMax,
 		RequiredFilters:          ct.RequiredFilters,
+	}
+
+	if err := ct.validateWrites(); err != nil {
+		return nil, err
+	}
+	info.WriteResultModes = ct.wireWriteResultModes()
+	// Write functions take no catalog-supplied arguments (DuckDB passes the
+	// rows and write_options), so they are always inlined and the extension
+	// skips the per-statement catalog_table_{insert,update,delete}_function_get.
+	for _, op := range writeOps {
+		res := w.writeFunctionResult(schemaPath, ct, op)
+		if res == nil {
+			continue
+		}
+		data, err := SerializeScanFunctionResult(res)
+		if err != nil {
+			return nil, fmt.Errorf("inlining %s_function for table %s: %w", op, ct.Name, err)
+		}
+		switch op {
+		case WriteOpInsert:
+			info.InsertFunction = data
+		case WriteOpUpdate:
+			info.UpdateFunction = data
+		case WriteOpDelete:
+			info.DeleteFunction = data
+		}
 	}
 
 	// Inline the scan function for function-backed tables so the C++ extension

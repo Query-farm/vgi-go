@@ -311,6 +311,9 @@ type Worker struct {
 	globalFunctionNames  []string
 	globalFunctionPrefix string
 	supportsTransactions bool
+	// transactionHooks are the BEGIN/COMMIT/ROLLBACK callbacks
+	// (WithTransactionHooks).
+	transactionHooks TransactionHooks
 	// catalogContentsDisabled turns off catalog_contents advertising on the
 	// default catalog's attach (WithCatalogContents(false)).
 	catalogContentsDisabled bool
@@ -365,6 +368,7 @@ type Worker struct {
 	catalogInfoOverride           *CatalogInfo
 	attachValidator               AttachValidator
 	constraintReadProfile         bool // WithConstraintReadProfile
+	constraintEnforceProfile      bool // WithConstraintEnforceProfile
 	schemaContentsHandler         SchemaContentsHandler
 	attachTableGetHandler         AttachTableGetHandler
 	attachScanFunctionGetHandler  AttachScanFunctionGetHandler
@@ -547,8 +551,10 @@ func WithGlobalFunctionPrefix(prefix string) WorkerOption {
 }
 
 // WithSupportsTransactions makes the catalog report supports_transactions=true
-// on attach, so DuckDB threads a transaction_opaque_data through bind/scan
-// inside BEGIN/COMMIT (needed by transaction-scoped storage like tx_cached_value).
+// on attach, so DuckDB threads a transaction_opaque_data through bind/init/scan
+// inside BEGIN/COMMIT (needed by transaction-scoped storage like tx_cached_value)
+// and calls the TransactionHooks. To decide per ATTACH instead (e.g. from an
+// ATTACH option), leave this off and set AttachDecision.SupportsTransactions.
 func WithSupportsTransactions(v bool) WorkerOption {
 	return func(w *Worker) {
 		w.supportsTransactions = v
@@ -593,6 +599,12 @@ type AttachDecision struct {
 	// prerequisites. Nil preserves the default catalog's absent agreement.
 	CatalogCapabilities  []byte
 	SelectedCapabilities []byte
+	// SupportsTransactions, when non-nil, overrides WithSupportsTransactions
+	// for this ATTACH: true makes DuckDB call catalog_transaction_begin /
+	// commit / rollback (the TransactionHooks) and thread the transaction id
+	// to this ATTACH's functions inside BEGIN ... COMMIT; false keeps the
+	// ATTACH non-transactional. Nil keeps the worker-wide setting.
+	SupportsTransactions *bool
 }
 
 // AttachValidator is invoked by the default catalog_attach handler. It may
@@ -1197,9 +1209,27 @@ func (w *Worker) RegisterCatalogTable(schemaPath string, table CatalogTable) {
 }
 
 // RegisterCatalogTablePath registers a table in an arbitrarily nested schema.
+//
+// Its InsertFunction / UpdateFunction / DeleteFunction, if set, are registered
+// as table in-out functions in the table's schema (deduped by name). Panics on
+// an invalid write declaration (see CatalogTable.WriteResultModes), a
+// developer error that should fail at startup.
 func (w *Worker) RegisterCatalogTablePath(schemaPath SchemaPath, table CatalogTable) {
+	if err := table.validateWrites(); err != nil {
+		panic(fmt.Errorf("vgi.RegisterCatalogTable: %w", err))
+	}
 	key := schemaPathKey(schemaPath)
 	w.catalogTables[key] = append(w.catalogTables[key], table)
+	// Write functions are dispatched like any table in-out function, homed
+	// in the table's schema (where catalog_table_*_function_get names them).
+	for _, fn := range []TableInOutFunction{table.InsertFunction, table.UpdateFunction, table.DeleteFunction} {
+		if fn == nil {
+			continue
+		}
+		if _, exists := w.tableInOuts[fn.Name()]; !exists {
+			w.RegisterTableInOutInSchemaPath(schemaPath, fn)
+		}
+	}
 	if table.Function != nil {
 		if _, exists := w.tables[table.Function.Name()]; !exists {
 			w.tables[table.Function.Name()] = append(w.tables[table.Function.Name()], table.Function)

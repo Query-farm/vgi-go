@@ -36,6 +36,34 @@ type CatalogTable struct {
 	Function TableFunction
 	// FuncArgs are the arguments to pass when calling the backing function.
 	FuncArgs []CatalogTableArg
+	// InsertFunction is the table in-out function backing INSERT INTO this
+	// table. It receives the new rows (the table's user columns) and returns
+	// a WriteResultSchema batch for the mode ParseWriteOptions reports. Nil
+	// means the table does not accept INSERT. Registered automatically.
+	InsertFunction TableInOutFunction
+	// UpdateFunction is the table in-out function backing UPDATE. It
+	// receives the row-id column (RowIDField, which the scan Function must
+	// emit) plus the SET columns for each updated row. Requires Function,
+	// which must support projection pushdown (see RowIDField). Nil means
+	// UPDATE fails with "... does not support UPDATE". Registered
+	// automatically.
+	UpdateFunction TableInOutFunction
+	// DeleteFunction is the table in-out function backing DELETE. It
+	// receives the row-id column of each deleted row. Requires Function, as
+	// UpdateFunction does. Registered automatically.
+	DeleteFunction TableInOutFunction
+	// WriteResultModes is the richest result mode each write function
+	// produces: WriteResultCount (plain DML), WriteResultRows (RETURNING) or
+	// WriteResultChanges (old/new pairs). Ordered count < rows < changes;
+	// supporting one mode promises every lower one. An operation with a
+	// write function but no entry defaults to count. Served as
+	// TableInfo.write_result_modes.
+	//
+	// A writable table that carries Constraints makes the catalog negotiate
+	// ConstraintEnforceProfile: its write functions must then keep the
+	// ENFORCED constraints (e.g. reject NULLs in NOT NULL columns and refuse
+	// to change primary-key columns).
+	WriteResultModes map[WriteOp]WriteResultMode
 	// NotNull lists column names with NOT NULL constraints.
 	//
 	// Deprecated: vgi.v3 has no legacy constraint fields and a table that sets

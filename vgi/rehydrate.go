@@ -225,7 +225,14 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 	// The values init opened with the live caller, when it had one; else the
 	// raw (unsealed-transport) value with its UUID stripped.
 	attachScope := coldAttachScope(bindParams.AttachOpaqueData)
+	// Without opened scopes the raw transaction value is plaintext only on
+	// the unsealed transports; a sealed envelope is never handed to a function.
+	var txScope []byte
+	if !w.sealOpaqueData {
+		txScope = bindParams.TransactionOpaqueData
+	}
 	if recipe.ScopesOpened {
+		txScope = recipe.TransactionScope
 		attachScope = recipe.AttachScope
 		bindParams.AttachOpaqueData = recipe.AttachScope
 		bindParams.TransactionOpaqueData = recipe.TransactionScope
@@ -263,24 +270,25 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 	}
 
 	params := &ProcessParams{
-		FunctionName:     recipe.FunctionName,
-		FunctionType:     normalizeFunctionType(recipe.FunctionType),
-		Args:             bindParams.Args,
-		OutputSchema:     processOutputSchema,
-		BindOutputSchema: outputSchema,
-		InputSchema:      bindParams.InputSchema,
-		ProjectionIDs:    recipe.ProjectionIDs,
-		Settings:         bindParams.Settings,
-		Secrets:          bindParams.Secrets,
-		ExecutionID:      recipe.ExecutionID,
-		SubstreamID:      recipe.SubstreamID,
-		InitOpaqueData:   recipe.InitOpaqueData,
-		BindOpaqueData:   recipe.BindOpaqueData,
-		AtUnit:           bindParams.AtUnit,
-		AtValue:          bindParams.AtValue,
-		AttachScope:      attachScope,
-		CopyFrom:         bindParams.CopyFrom,
-		CopyTo:           bindParams.CopyTo,
+		FunctionName:          recipe.FunctionName,
+		FunctionType:          normalizeFunctionType(recipe.FunctionType),
+		Args:                  bindParams.Args,
+		OutputSchema:          processOutputSchema,
+		BindOutputSchema:      outputSchema,
+		InputSchema:           bindParams.InputSchema,
+		ProjectionIDs:         recipe.ProjectionIDs,
+		Settings:              bindParams.Settings,
+		Secrets:               bindParams.Secrets,
+		ExecutionID:           recipe.ExecutionID,
+		SubstreamID:           recipe.SubstreamID,
+		InitOpaqueData:        recipe.InitOpaqueData,
+		BindOpaqueData:        recipe.BindOpaqueData,
+		AtUnit:                bindParams.AtUnit,
+		AtValue:               bindParams.AtValue,
+		AttachScope:           attachScope,
+		TransactionOpaqueData: txScope,
+		CopyFrom:              bindParams.CopyFrom,
+		CopyTo:                bindParams.CopyTo,
 	}
 
 	// Restore pushdown filters

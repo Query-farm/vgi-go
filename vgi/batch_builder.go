@@ -302,6 +302,32 @@ func makeAppender(builder array.Builder, dt arrow.DataType) func(any) error {
 			}
 			return nil
 		}
+	case *array.StructBuilder:
+		// Struct columns take a name-keyed map[string]any (missing keys and
+		// nil values are NULL children), as AppendRow does for a whole row.
+		st := dt.(*arrow.StructType)
+		children := make([]func(any) error, st.NumFields())
+		for i := range children {
+			children[i] = makeAppender(b.FieldBuilder(i), st.Field(i).Type)
+		}
+		return func(v any) error {
+			m, ok := deref(v).(map[string]any)
+			if !ok {
+				return typeErr(v, "struct (map[string]any)")
+			}
+			b.Append(true)
+			for i, f := range st.Fields() {
+				cv, present := m[f.Name]
+				if !present || isNil(cv) {
+					b.FieldBuilder(i).AppendNull()
+					continue
+				}
+				if err := children[i](cv); err != nil {
+					return fmt.Errorf("field %q: %w", f.Name, err)
+				}
+			}
+			return nil
+		}
 	}
 	// Fallback: type not specifically supported. Surface a clear error so
 	// callers know to extend the builder.
