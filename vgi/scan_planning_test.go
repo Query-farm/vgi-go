@@ -72,15 +72,19 @@ func TestScanBranchStatisticsValidation(t *testing.T) {
 	if _, err := SerializeScanBranch(&ScanBranch{FunctionName: "f", RowCount: &neg}); err == nil {
 		t.Fatal("negative RowCount accepted")
 	}
-	stat := ColumnStatistics{ColumnName: "n", Type: arrow.PrimitiveTypes.Int64, Min: int64(0), Max: int64(1), HasNotNull: true}
-	if _, err := SerializeScanBranch(&ScanBranch{FunctionName: "f", ColumnStatistics: []ColumnStatistics{stat, stat}}); err == nil {
+	stat := BranchColumnStatistics{ColumnName: "n", Type: arrow.PrimitiveTypes.Int64, Min: int64(0), Max: int64(1)}
+	if _, err := SerializeScanBranch(&ScanBranch{FunctionName: "f", ColumnStatistics: []BranchColumnStatistics{stat, stat}}); err == nil {
 		t.Fatal("duplicate column statistics accepted")
 	}
-	contradictory := stat
-	contradictory.HasNotNull = false
-	if _, err := SerializeScanBranch(&ScanBranch{FunctionName: "f", ColumnStatistics: []ColumnStatistics{contradictory}}); err == nil ||
-		!strings.Contains(err.Error(), "HasNotNull") {
-		t.Fatalf("Min/Max with HasNotNull=false accepted: %v", err)
+	for _, bad := range []BranchColumnStatistics{
+		{ColumnName: "n", Type: arrow.PrimitiveTypes.Int64, Min: int64(0), AllNull: true},
+		{ColumnName: "n", Type: arrow.PrimitiveTypes.Int64, Max: int64(0), AllNull: true},
+		{ColumnName: "n", NoNulls: true, AllNull: true},
+	} {
+		if _, err := SerializeScanBranch(&ScanBranch{FunctionName: "f", ColumnStatistics: []BranchColumnStatistics{bad}}); err == nil ||
+			!strings.Contains(err.Error(), "AllNull") {
+			t.Fatalf("contradictory branch statistics %+v accepted: %v", bad, err)
+		}
 	}
 	// Absent statistics stay NULL on the wire.
 	data, err := SerializeScanBranch(&ScanBranch{FunctionName: "f"})
@@ -210,8 +214,8 @@ func TestScanBranchesPlanHandlerDispatch(t *testing.T) {
 				file   string
 				lo, hi int64
 			}{{"a.parquet", 0, 9}, {"b.parquet", 10, 19}} {
-				stats := []ColumnStatistics{{ColumnName: "n", Type: arrow.PrimitiveTypes.Int64, Min: day.lo, Max: day.hi, HasNotNull: true}}
-				if filters.MayMatch(stats) {
+				stats := []BranchColumnStatistics{{ColumnName: "n", Type: arrow.PrimitiveTypes.Int64, Min: day.lo, Max: day.hi}}
+				if filters.MayMatchBranch(stats) {
 					rows := day.hi - day.lo + 1
 					branches = append(branches, ScanBranch{FunctionName: "read_parquet",
 						PositionalArguments: []ScanArg{{Value: day.file, Type: arrow.BinaryTypes.String}},
@@ -281,5 +285,50 @@ func TestScanBranchesZeroBranchesIsLegal(t *testing.T) {
 	}
 	if res.Branches == nil || len(res.Branches) != 0 {
 		t.Fatalf("zero branches must encode as an empty, non-null list: %#v", res.Branches)
+	}
+}
+
+// A zero-value BranchColumnStatistics (bounds only) makes the conservative
+// claim on the wire: NULLs possible and values present, so a client never
+// prunes the branch for IS NULL / IS NOT NULL.
+func TestBranchColumnStatisticsZeroValueIsConservative(t *testing.T) {
+	data, err := SerializeScanBranch(&ScanBranch{FunctionName: "f", ColumnStatistics: []BranchColumnStatistics{
+		{ColumnName: "n", Type: arrow.PrimitiveTypes.Int64, Min: int64(0), Max: int64(9)},
+		{ColumnName: "m"},
+		{ColumnName: "k", Type: arrow.PrimitiveTypes.Int64, Min: int64(1), Max: int64(2), NoNulls: true},
+		{ColumnName: "z", AllNull: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch, err := DeserializeRecordBatch(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer branch.Release()
+	payload := branch.Column(branch.Schema().FieldIndices("column_statistics")[0]).(*array.Binary).Value(0)
+	stats, err := DeserializeRecordBatch(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stats.Release()
+	hasNull := stats.Column(stats.Schema().FieldIndices("has_null")[0]).(*array.Boolean)
+	hasNotNull := stats.Column(stats.Schema().FieldIndices("has_not_null")[0]).(*array.Boolean)
+	for i, want := range []struct{ hasNull, hasNotNull bool }{{true, true}, {true, true}, {false, true}, {true, false}} {
+		if hasNull.Value(i) != want.hasNull || hasNotNull.Value(i) != want.hasNotNull {
+			t.Errorf("row %d: has_null=%v has_not_null=%v, want %v/%v", i, hasNull.Value(i), hasNotNull.Value(i), want.hasNull, want.hasNotNull)
+		}
+	}
+
+	isNull := &PushdownFilters{Filters: []Filter{&IsNullFilter{columnName: "n"}}}
+	if !isNull.MayMatchBranch([]BranchColumnStatistics{{ColumnName: "n", Type: arrow.PrimitiveTypes.Int64, Min: int64(0), Max: int64(9)}}) {
+		t.Fatal("zero-value branch statistics pruned IS NULL")
+	}
+	if isNull.MayMatchBranch([]BranchColumnStatistics{{ColumnName: "n", NoNulls: true}}) {
+		t.Fatal("NoNulls must prune IS NULL")
+	}
+	eq := &PushdownFilters{Filters: []Filter{&ConstantFilter{columnName: "n", Op: OpEQ, Value: scalar.NewInt64Scalar(5)}}}
+	if eq.MayMatchBranch([]BranchColumnStatistics{{ColumnName: "n", AllNull: true}}) {
+		t.Fatal("AllNull must prune a comparison")
 	}
 }

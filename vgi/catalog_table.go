@@ -261,17 +261,12 @@ type ScanBranch struct {
 	RowCount *int64
 	// ColumnStatistics are conservative per-column claims about EVERY row this
 	// branch produces, keyed by the table's declared column names (protocol
-	// 3.2; same payload as TableInfo.column_statistics). Columns may be
+	// 3.2; same wire payload as TableInfo.column_statistics). Columns may be
 	// omitted; nil sends none. A client drops the branch when a query predicate
 	// is provably false against them, so wrong statistics silently lose rows:
-	// leave a column out rather than guess.
-	//
-	// Unlike vgi-python, whose has_null/has_not_null default to true, Go's
-	// zero value claims HasNull=false ("no NULLs") and HasNotNull=false
-	// ("entirely NULL"). Set both explicitly. A statistic with Min or Max set
-	// but HasNotNull=false is contradictory and refused by SerializeScanBranch.
-	// See docs/protocol/scan-planning.md in vgi-python.
-	ColumnStatistics []ColumnStatistics
+	// leave a column out rather than guess. BranchColumnStatistics' zero value
+	// is the conservative claim (NULLs possible, not entirely NULL).
+	ColumnStatistics []BranchColumnStatistics
 }
 
 // ScanBranchesResult is the list of physical sources backing a multi-branch

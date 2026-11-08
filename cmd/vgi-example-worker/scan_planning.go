@@ -38,11 +38,11 @@ func plannedDayFile(day time.Time) string {
 	return branchPath("planned_days_" + day.Format(time.DateOnly) + ".parquet")
 }
 
-func plannedDayStats(day time.Time) []vgi.ColumnStatistics {
+func plannedDayStats(day time.Time) []vgi.BranchColumnStatistics {
 	d := arrow.Date32FromTime(day)
-	return []vgi.ColumnStatistics{{
+	return []vgi.BranchColumnStatistics{{
 		ColumnName: "event_date", Type: arrow.FixedWidthTypes.Date32,
-		Min: d, Max: d, HasNull: false, HasNotNull: true,
+		Min: d, Max: d, NoNulls: true,
 	}}
 }
 
@@ -86,7 +86,7 @@ func plannedDaysScanBranchesPlan(_ []byte, schemaPath vgi.SchemaPath, name strin
 	case "planned_days":
 		var days, files []string
 		for _, day := range plannedDays {
-			if filters == nil || filters.MayMatch(plannedDayStats(day)) {
+			if filters == nil || filters.MayMatchBranch(plannedDayStats(day)) {
 				days = append(days, day.Format(time.DateOnly))
 				files = append(files, plannedDayFile(day))
 			}

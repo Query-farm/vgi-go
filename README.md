@@ -250,8 +250,8 @@ table's declared columns:
 vgi.WithAttachScanBranchesPlanHandler(func(attach []byte, schema vgi.SchemaPath, name string,
     atUnit, atValue *string, filters *vgi.ScanPlanningFilters) (*vgi.ScanBranchesResult, bool, error) {
     var branches []vgi.ScanBranch
-    for _, f := range manifest { // f.Stats: []vgi.ColumnStatistics with HasNull/HasNotNull set
-        if filters.MayMatch(f.Stats) { // nil filters (none collected) match everything
+    for _, f := range manifest { // f.Stats: []vgi.BranchColumnStatistics
+        if filters.MayMatchBranch(f.Stats) { // nil filters (none collected) match everything
             branches = append(branches, vgi.ScanBranch{FormatName: &parquet, FormatLocations: []string{f.URL},
                 RowCount: &f.Rows, ColumnStatistics: f.Stats})
         }
@@ -265,10 +265,12 @@ ignores the filters, so existing workers behave unchanged. Every predicate is
 advisory and re-applied by the client: return any superset of the files that
 could match, never fewer. `filters.Decode()` gives the full `*PushdownFilters`.
 `ScanBranch.RowCount` / `ColumnStatistics` let the client prune branches
-itself (for "bind" tables too); statistics are claims about every row, so leave
-a column out rather than guess, and set `HasNull`/`HasNotNull` explicitly (Go's
-zero value claims an entirely-NULL column). A filtered table cannot have a
-`Function` (it would inline a fixed scan). The spec is vgi-python's
+itself (for "bind" tables too). Statistics are claims about every row, so leave
+a column out rather than guess. `vgi.BranchColumnStatistics` is safe by
+default: its zero value claims NULLs are possible and values are present; set
+`NoNulls` or `AllNull` only when known (`AllNull` with `Min`/`Max` or `NoNulls`
+is refused). A filtered table cannot have a `Function` (it would inline a fixed
+scan). The spec is vgi-python's
 `docs/protocol/scan-planning.md`.
 
 ### Attach options

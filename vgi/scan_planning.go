@@ -107,10 +107,11 @@ func (f *ScanPlanningFilters) Decode() (*PushdownFilters, error) {
 }
 
 // MayMatch reports false only when the predicates provably exclude every row
-// of a candidate (a file, a partition, a branch) described by stats, the same
-// way ScanBranch.ColumnStatistics describes a branch: every non-null value of a
-// column lies within [Min, Max], HasNull=false means no NULLs, HasNotNull=false
-// means entirely NULL. Use it to prune a manifest before returning branches.
+// of a candidate (a file, a partition, a branch) described by stats: every
+// non-null value of a column lies within [Min, Max], HasNull=false means no
+// NULLs, HasNotNull=false means entirely NULL. Use it (or MayMatchBranch, with
+// the safe-by-default BranchColumnStatistics) to prune a manifest before
+// returning branches.
 // Columns, predicates or types it cannot reason about count as "may match", as
 // does a payload Decode cannot read, so the answer errs towards keeping data.
 func (f *ScanPlanningFilters) MayMatch(stats []ColumnStatistics) bool {
@@ -495,6 +496,66 @@ func floorDiv(a, b int64) int64 {
 	return q
 }
 
+// BranchColumnStatistics is one column's statistics on a ScanBranch
+// (protocol 3.2). Unlike ColumnStatistics, its zero value is the conservative
+// claim, because a client prunes branches by these and an over-strong claim
+// silently drops rows: leaving NoNulls false says the column may hold NULLs
+// (has_null = true on the wire), leaving AllNull false says it may hold values
+// (has_not_null = true). Set NoNulls or AllNull only when it is known.
+type BranchColumnStatistics struct {
+	ColumnName string
+	// Type is the Arrow type of Min/Max (required if either is set). The
+	// supported types are those SerializeColumnStatistics supports.
+	Type arrow.DataType
+	// Min / Max bound every non-null value of the column; nil = unbounded.
+	Min, Max interface{}
+	// NoNulls claims the column has no NULLs in this branch.
+	NoNulls bool
+	// AllNull claims the column is entirely NULL in this branch. It cannot be
+	// combined with Min/Max or NoNulls.
+	AllNull bool
+}
+
+// ColumnStatistics converts to the wire-level statistics record.
+func (s BranchColumnStatistics) ColumnStatistics() ColumnStatistics {
+	return ColumnStatistics{ColumnName: s.ColumnName, Type: s.Type, Min: s.Min, Max: s.Max,
+		HasNull: !s.NoNulls, HasNotNull: !s.AllNull}
+}
+
+func (s BranchColumnStatistics) validate() error {
+	if s.AllNull && (s.Min != nil || s.Max != nil) {
+		return fmt.Errorf("column %q: AllNull cannot be combined with Min/Max", s.ColumnName)
+	}
+	if s.AllNull && s.NoNulls {
+		return fmt.Errorf("column %q: AllNull and NoNulls contradict each other", s.ColumnName)
+	}
+	return nil
+}
+
+// BranchStatistics converts branch statistics to ColumnStatistics, e.g. for
+// PushdownFilters.MayMatch.
+func BranchStatistics(stats []BranchColumnStatistics) []ColumnStatistics {
+	if stats == nil {
+		return nil
+	}
+	out := make([]ColumnStatistics, len(stats))
+	for i, s := range stats {
+		out[i] = s.ColumnStatistics()
+	}
+	return out
+}
+
+// MayMatchBranch is MayMatch over branch statistics, so a worker can prune its
+// candidates with the same values it puts on ScanBranch.ColumnStatistics.
+func (f *ScanPlanningFilters) MayMatchBranch(stats []BranchColumnStatistics) bool {
+	return f.MayMatch(BranchStatistics(stats))
+}
+
+// MayMatchBranch is MayMatch over branch statistics.
+func (pf *PushdownFilters) MayMatchBranch(stats []BranchColumnStatistics) bool {
+	return pf.MayMatch(BranchStatistics(stats))
+}
+
 // serializeBranchStatistics validates and encodes ScanBranch's protocol 3.2
 // statistics fields. Nil ColumnStatistics encodes as an absent (null) column.
 func serializeBranchStatistics(branch *ScanBranch) ([]byte, error) {
@@ -510,12 +571,11 @@ func serializeBranchStatistics(branch *ScanBranch) ([]byte, error) {
 			return nil, fmt.Errorf("ScanBranch.ColumnStatistics names column %q more than once", stat.ColumnName)
 		}
 		seen[stat.ColumnName] = struct{}{}
-		if !stat.HasNotNull && (stat.Min != nil || stat.Max != nil) {
-			return nil, fmt.Errorf("ScanBranch.ColumnStatistics[%q] sets Min/Max but HasNotNull=false, which claims "+
-				"the column is entirely NULL; set HasNotNull (and HasNull) explicitly", stat.ColumnName)
+		if err := stat.validate(); err != nil {
+			return nil, fmt.Errorf("ScanBranch.ColumnStatistics: %w", err)
 		}
 	}
-	data, err := SerializeColumnStatistics(branch.ColumnStatistics, nil)
+	data, err := SerializeColumnStatistics(BranchStatistics(branch.ColumnStatistics), nil)
 	if err != nil {
 		return nil, fmt.Errorf("serializing branch column statistics: %w", err)
 	}
