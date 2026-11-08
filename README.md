@@ -264,6 +264,80 @@ normally has none, since the default is published to every client.
 `vgi_attach_ticket` is reserved for [attach tickets](#attach-tickets-vgiattach_ticketsv1):
 a worker declaring an option of that name (any case) refuses to start.
 
+An `AttachValidator` reads the options (`req.Options`, a one-row Arrow batch)
+and puts what functions need into `AttachDecision.AttachOpaqueData`. Functions
+read it back as `BindParams.AttachOpaqueData`, `InitParams.AttachScope` and
+`ProcessParams.AttachScope`, and transaction hooks as
+`TransactionHookContext.AttachOpaqueData`. Over HTTP the SDK seals the value on
+the wire, so a client can neither read nor forge it.
+
+### Writable catalog tables
+
+A `CatalogTable` accepts DML through table in-out functions declared on it:
+`InsertFunction`, `UpdateFunction`, `DeleteFunction`, with
+`WriteResultModes` giving each one's richest result mode (`count` < `rows` <
+`changes`; default `count`). The SDK registers the functions, serves
+`write_result_modes`, inlines the functions on `TableInfo`, and answers
+`catalog_table_*_function_get` (a table without the function fails with
+`... does not support UPDATE`).
+
+UPDATE and DELETE identify rows by a row-id column: add `vgi.RowIDField("", nil)`
+(`rowid BIGINT`, marked `is_row_id`) to `Columns` and emit it from the scan
+`Function`, which must declare `ProjectionPushdown`. An update function gets
+`rowid` plus the SET columns, a delete function `rowid`, an insert function the
+user columns. A write function declares `vgi.WriteOptionsArgSpec()`, reads the
+requested mode with `vgi.ParseWriteOptions(params.Args)`, binds
+`vgi.WriteResultSchema(mode, columns)` and emits
+`vgi.WriteResultBatch(mode, columns, oldRows, newRows)`:
+
+```go
+w.RegisterCatalogTable("main", vgi.CatalogTable{
+	Name:           "items",
+	Columns:        itemsWithRowID, // user columns + vgi.RowIDField("", nil)
+	Function:       vgi.AsTableFunction[scanState](itemsScan{}),
+	UpdateFunction: vgi.AsTableInOutFunction[updState](itemsUpdate{}),
+	WriteResultModes: map[vgi.WriteOp]vgi.WriteResultMode{
+		vgi.WriteOpUpdate: vgi.WriteResultRows,
+	},
+	Constraints: itemsConstraints,
+})
+```
+
+A writable table that carries constraint records makes the catalog negotiate
+`vgi.constraint.enforce.v1` (DuckDB refuses to write to a constrained table
+without it). Its write functions must then keep the ENFORCED constraints, e.g.
+refuse NULLs in NOT NULL columns and changes to primary-key columns. Tables
+served by handlers opt in with `vgi.WithConstraintEnforceProfile()`.
+`examples/writable_tx` is a complete worker.
+
+### Transactions
+
+`vgi.WithSupportsTransactions(true)` reports `supports_transactions` on every
+ATTACH; to decide per ATTACH (say, from an ATTACH option), set
+`AttachDecision.SupportsTransactions` instead. On such an ATTACH, DuckDB calls
+the worker at BEGIN, COMMIT and ROLLBACK (autocommit statements included) and
+threads the transaction id to every function, which reads it as
+`BindParams`/`InitParams`/`ProcessParams.TransactionOpaqueData`.
+`vgi.WithTransactionHooks` runs your code at those points:
+
+```go
+vgi.WithTransactionHooks(vgi.TransactionHooks{
+	Begin: func(ctx context.Context, tx vgi.TransactionHookContext) ([]byte, error) {
+		return newTxID(), nil // nil: no transaction for this ATTACH
+	},
+	Commit: func(ctx context.Context, tx vgi.TransactionHookContext) error {
+		return store.Apply(tx.TransactionOpaqueData) // an error fails COMMIT with its message
+	},
+	Rollback: func(ctx context.Context, tx vgi.TransactionHookContext) error {
+		return store.Discard(tx.TransactionOpaqueData)
+	},
+})
+```
+
+Without a `Begin` hook the SDK mints a random 16-byte id. Hooks and functions
+see the same plaintext id on every transport; over HTTP it travels sealed and
+bound to its ATTACH, so a client cannot forge one.
+
 ## Function shapes
 
 | Shape                   | Interface                                        | Use case                              |
@@ -478,6 +552,8 @@ The `cmd/vgi-example-worker` binary registers every example function via
 - `examples/table_in_out/` — transform / buffering / aggregation patterns
 - `examples/aggregate/` — cumulative aggregates
 - `examples/schema_reconcile/`, `examples/versioned_tables/` — catalog + write paths
+- `examples/writable_tx/` — writable `CatalogTable`, per-ATTACH transactions,
+  transaction hooks, secret ATTACH options (`cmd/vgi-example-writable-tx-worker`)
 
 ## Build & test
 

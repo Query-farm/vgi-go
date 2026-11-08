@@ -17,7 +17,7 @@ commit used for the test suite. This keeps development wire changes testable
 before the corresponding public extension release.
 
 1. **Build the workers once** — a producer job runs `make build COVER=1` and
-   publishes an archive preserving executable permissions for the five worker
+   publishes an archive preserving executable permissions for the six worker
    binaries. Each transport lane uses that archive.
 2. **Checkout the test suite** — `Query-farm/vgi` at the pinned `VGI_REF`.
 3. **Download matching binaries** — the native checkout's
@@ -92,6 +92,14 @@ the Go write-function plumbing. That var is always a spawned binary — a
 run over subprocess even on the http lane rather than skipping. They run in
 their own `haybarn-unittest` invocation so their warm pooled connections don't
 perturb the immediately-following crash-recovery test.
+
+The `writable_tx/*.test` files (writable descriptor tables, per-ATTACH
+transactions, transaction hooks, secret ATTACH options) run on **every** lane
+against `cmd/vgi-example-writable-tx-worker` (the `examples/writable_tx`
+`txfix` catalog): `VGI_WRITABLE_TX_FIXTURES=1`, and `VGI_WRITABLE_TX_WORKER`
+is a plain path on stdio, `launch:` on the launcher lanes and the fixture's own
+`http://` server on the http lane, so the sealed transaction-id path is covered
+over HTTP. `VGI_TXFIX_STATE_DIR` is a per-run `mktemp -d`.
 
 The crash / pool-recovery tests (`table_in_out/table_buffering_{worker_crash,
 pool_recovery}`) are gated on `VGI_TEST_DEDICATED_WORKER`, set on the **`stdio`

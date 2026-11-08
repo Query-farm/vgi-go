@@ -34,6 +34,8 @@ ATTACH_OPTIONS_BINARY   := vgi-example-attach-options-worker-go
 ATTACH_OPTIONS_CMD      := ./cmd/vgi-example-attach-options-worker
 SIMPLE_WRITABLE_BINARY  := vgi-example-simple-writable-worker-go
 SIMPLE_WRITABLE_CMD     := ./cmd/vgi-example-simple-writable-worker
+WRITABLE_TX_BINARY      := vgi-example-writable-tx-worker-go
+WRITABLE_TX_CMD         := ./cmd/vgi-example-writable-tx-worker
 
 # Path to the DuckDB VGI extension checkout (contains the tests and the built
 # unittest runner). Defaults to a sibling checkout; point it elsewhere with
@@ -91,6 +93,7 @@ VERSIONED_WORKER_PATH        := $(CURDIR)/$(VERSIONED_BINARY)
 VERSIONED_TABLES_WORKER_PATH := $(CURDIR)/$(VERSIONED_TABLES_BINARY)
 ATTACH_OPTIONS_WORKER_PATH   := $(CURDIR)/$(ATTACH_OPTIONS_BINARY)
 SIMPLE_WRITABLE_WORKER_PATH  := $(CURDIR)/$(SIMPLE_WRITABLE_BINARY)
+WRITABLE_TX_WORKER_PATH      := $(CURDIR)/$(WRITABLE_TX_BINARY)
 
 # Test directory inside the extension repo.
 TEST_DIR     := $(VGI_DIR)/test/sql
@@ -141,10 +144,11 @@ build:
 	go build $(GO_BUILD_FLAGS) -o $(VERSIONED_TABLES_BINARY) $(VERSIONED_TABLES_CMD)
 	go build $(GO_BUILD_FLAGS) -o $(ATTACH_OPTIONS_BINARY) $(ATTACH_OPTIONS_CMD)
 	go build $(GO_BUILD_FLAGS) -o $(SIMPLE_WRITABLE_BINARY) $(SIMPLE_WRITABLE_CMD)
+	go build $(GO_BUILD_FLAGS) -o $(WRITABLE_TX_BINARY) $(WRITABLE_TX_CMD)
 
 # Remove built binaries.
 clean:
-	rm -f $(BINARY) $(VERSIONED_BINARY) $(VERSIONED_TABLES_BINARY) $(ATTACH_OPTIONS_BINARY)
+	rm -f $(BINARY) $(VERSIONED_BINARY) $(VERSIONED_TABLES_BINARY) $(ATTACH_OPTIONS_BINARY) $(SIMPLE_WRITABLE_BINARY) $(WRITABLE_TX_BINARY)
 
 # Format all Go source files.
 fmt:
@@ -249,6 +253,7 @@ test: build
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
+	    VGI_WRITABLE_TX_FIXTURES=1 VGI_WRITABLE_TX_WORKER=$(WRITABLE_TX_WORKER_PATH) \
 	    python3 scripts/run_tests.py -j 6 --test-config $(TEST_CONFIG) $(COVERAGE_GATE) \
 	        "test/*" "~test/sql/duckdb2/default_schema.test" "~test/sql/duckdb2/column_paths.test" "~test/sql/duckdb2/required_filter_paths.test" "~test/sql/duckdb2/view_alias_metadata.test" "~test/sql/duckdb2/schema_dependencies.test" "~test/sql/integration/writable/*"
 
@@ -264,6 +269,7 @@ test-single: build
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
+	    VGI_WRITABLE_TX_FIXTURES=1 VGI_WRITABLE_TX_WORKER=$(WRITABLE_TX_WORKER_PATH) \
 	    $(UNITTEST_REL) --test-config $(TEST_CONFIG) "$(TEST)"
 
 # Run the full integration test suite with the shared-memory side-channel
@@ -284,6 +290,7 @@ test-shm: build
 	    VGI_VERSIONED_TABLES_WORKER=$(VERSIONED_TABLES_WORKER_PATH) \
 	    VGI_ATTACH_OPTIONS_WORKER=$(ATTACH_OPTIONS_WORKER_PATH) \
 	    VGI_SIMPLE_WRITABLE_WORKER=$(SIMPLE_WRITABLE_WORKER_PATH) \
+	    VGI_WRITABLE_TX_FIXTURES=1 VGI_WRITABLE_TX_WORKER=$(WRITABLE_TX_WORKER_PATH) \
 	    $(UNITTEST_REL) --test-config $(TEST_CONFIG) "test/*" "~test/sql/duckdb2/default_schema.test" "~test/sql/duckdb2/column_paths.test" "~test/sql/duckdb2/required_filter_paths.test" "~test/sql/duckdb2/view_alias_metadata.test" "~test/sql/duckdb2/schema_dependencies.test" "~test/sql/integration/writable/*"
 
 # Run the full integration test suite over HTTP transport.
@@ -321,6 +328,7 @@ test-launcher: build
 	    VGI_VERSIONED_TABLES_WORKER="launch:$(VERSIONED_TABLES_WORKER_PATH)" \
 	    VGI_ATTACH_OPTIONS_WORKER="launch:$(ATTACH_OPTIONS_WORKER_PATH)" \
 	    VGI_SIMPLE_WRITABLE_WORKER="launch:$(SIMPLE_WRITABLE_WORKER_PATH)" \
+	    VGI_WRITABLE_TX_FIXTURES=1 VGI_WRITABLE_TX_WORKER="launch:$(WRITABLE_TX_WORKER_PATH)" \
 	    $(UNITTEST_REL) --test-config $(TEST_CONFIG) "test/*" "~test/sql/duckdb2/default_schema.test" "~test/sql/duckdb2/column_paths.test" "~test/sql/duckdb2/required_filter_paths.test" "~test/sql/duckdb2/view_alias_metadata.test" "~test/sql/duckdb2/schema_dependencies.test" "~test/sql/integration/writable/*" "~test/sql/vgi_worker_pool.test"
 
 # Run stdio, stdio+shm, HTTP, and launcher tests.

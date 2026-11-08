@@ -52,13 +52,14 @@ INTEGRATION="$VGI_SRC/test/sql/integration"
 TEST_CONFIG="$VGI_SRC/test/configs/no_error_skip.json"
 [ -f "$TEST_CONFIG" ] || { echo "::error::pinned VGI suite is missing $TEST_CONFIG"; exit 1; }
 
-# The five dedicated worker binaries (make build).
+# The dedicated worker binaries (make build).
 WORKER="$BIN_DIR/vgi-example-worker-go"
 VERSIONED="$BIN_DIR/vgi-example-versioned-worker-go"
 VERSIONED_TABLES="$BIN_DIR/vgi-example-versioned-tables-worker-go"
 ATTACH_OPTIONS="$BIN_DIR/vgi-example-attach-options-worker-go"
 SIMPLE_WRITABLE="$BIN_DIR/vgi-example-simple-writable-worker-go"
-for b in "$WORKER" "$VERSIONED" "$VERSIONED_TABLES" "$ATTACH_OPTIONS" "$SIMPLE_WRITABLE"; do
+WRITABLE_TX="$BIN_DIR/vgi-example-writable-tx-worker-go"
+for b in "$WORKER" "$VERSIONED" "$VERSIONED_TABLES" "$ATTACH_OPTIONS" "$SIMPLE_WRITABLE" "$WRITABLE_TX"; do
   [ -x "$b" ] || { echo "::error::missing worker binary $b (run: make build)"; exit 1; }
 done
 
@@ -255,6 +256,16 @@ case "$TRANSPORT" in shm|launch) LAUNCH_PREFIX="launch:" ;; esac
 # it stays a plain binary path, so those tests run over subprocess there rather
 # than skipping.
 export VGI_SIMPLE_WRITABLE_WORKER="${LAUNCH_PREFIX}${SIMPLE_WRITABLE}"
+# The txfix fixture worker un-skips writable_tx/*.test (writable descriptor
+# tables, per-ATTACH transactions, transaction hooks, secret ATTACH options).
+# Its LOCATION follows the lane: a plain path on stdio, launch: on the launcher
+# lanes, and its own http:// server on the http lane (set below), so the
+# sealed transaction-id path is exercised over HTTP. Its state file lives in a
+# per-run directory shared by all of its worker processes.
+export VGI_WRITABLE_TX_FIXTURES=1
+export VGI_WRITABLE_TX_WORKER="${LAUNCH_PREFIX}${WRITABLE_TX}"
+VGI_TXFIX_STATE_DIR="$(mktemp -d)"
+export VGI_TXFIX_STATE_DIR
 # database:// installs and directly executes this package, even when the main
 # lane talks to an already-running HTTP worker.
 export VGI_DATABASE_PACKAGE_WORKER="$WORKER"
@@ -350,6 +361,11 @@ case "$TRANSPORT" in
     # the secondary workers; the single-worker http lane is reliable.)
     boot_http_worker "$WORKER" 1; port="$BOOTED_PORT"
     export VGI_TEST_WORKER="http://localhost:${port}"
+    # The txfix fixture runs over http too (its own server): the writable_tx
+    # tests assert the hooks and functions see the same plaintext transaction
+    # id although it travels sealed.
+    boot_http_worker "$WRITABLE_TX" 1; txfix_port="$BOOTED_PORT"
+    export VGI_WRITABLE_TX_WORKER="http://localhost:${txfix_port}"
     SUITE_GLOB="test/sql/integration/*"
     ;;
   *)

@@ -50,7 +50,8 @@ jobs:
             vgi-example-versioned-worker-go \
             vgi-example-versioned-tables-worker-go \
             vgi-example-attach-options-worker-go \
-            vgi-example-simple-writable-worker-go
+            vgi-example-simple-writable-worker-go \
+            vgi-example-writable-tx-worker-go
 
       - name: Upload workers
         uses: actions/upload-artifact@v4
