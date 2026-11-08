@@ -659,3 +659,121 @@ func TestDependencyAlterSubjectsPreserveRawColumnPaths(t *testing.T) {
 		}
 	}
 }
+
+func stringColumn(t *testing.T, batch arrow.RecordBatch, name string) *array.String {
+	t.Helper()
+	indices := batch.Schema().FieldIndices(name)
+	if len(indices) != 1 {
+		t.Fatalf("expected one %s column, found %d", name, len(indices))
+	}
+	return batch.Column(indices[0]).(*array.String)
+}
+
+// Protocol 3.2 filtered scan planning (vgi-python docs/protocol/scan-planning.md).
+func TestProtocol32ScanPlanningPythonCorpus(t *testing.T) {
+	t.Run("scan_planning_branches_result", func(t *testing.T) {
+		echoCatalogRecord[vgi.TableScanBranchesGetResponseWire](t, "scan_planning_branches_result")
+	})
+	t.Run("scan_planning_empty_branches_result", func(t *testing.T) {
+		echoCatalogRecord[vgi.TableScanBranchesGetResponseWire](t, "scan_planning_empty_branches_result")
+	})
+
+	branch := catalogBatch(t, catalogFixture(t, "scan_planning_branch"))
+	if !branch.Schema().Equal(generated.ScanBranchSchema) {
+		t.Fatalf("ScanBranch schema drift:\nfixture %s\ngenerated %s", branch.Schema(), generated.ScanBranchSchema)
+	}
+	rowCount := branch.Column(branch.Schema().FieldIndices("row_count")[0]).(*array.Int64)
+	if rowCount.IsNull(0) || rowCount.Value(0) != 1000 {
+		t.Fatalf("row_count = %v, want 1000", rowCount)
+	}
+	stats := catalogBatch(t, getBinary(t, branch, "column_statistics"))
+	names := stringColumn(t, stats, "column_name")
+	if stats.NumRows() != 2 || names.Value(0) != "event_date" || names.Value(1) != "n" {
+		t.Fatalf("branch column statistics changed: %v", names)
+	}
+	// The Go statistics writer produces the same payload for the same claims.
+	goStats, err := vgi.SerializeColumnStatistics([]vgi.ColumnStatistics{
+		{ColumnName: "event_date", Type: arrow.FixedWidthTypes.Date32, Min: arrow.Date32(20729), Max: arrow.Date32(20729), HasNull: false, HasNotNull: true},
+		{ColumnName: "n", Type: arrow.PrimitiveTypes.Int64, Min: int64(0), Max: int64(999), HasNull: true, HasNotNull: true},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := catalogBatch(t, goStats); !array.RecordEqual(stats, got) {
+		t.Fatalf("Go column statistics differ from the Python corpus:\nwant %s\ngot %s", stats, got)
+	}
+
+	result := catalogBatch(t, catalogFixture(t, "scan_planning_branches_result"))
+	branches := result.Column(result.Schema().FieldIndices("branches")[0]).(*array.List)
+	start, end := branches.ValueOffsets(0)
+	if end-start != 1 || !bytes.Equal(branches.ListValues().(*array.Binary).Value(int(start)), catalogFixture(t, "scan_planning_branch")) {
+		t.Fatal("ScanBranchesResult no longer carries the branch bytes")
+	}
+	empty := catalogBatch(t, catalogFixture(t, "scan_planning_empty_branches_result"))
+	emptyBranches := empty.Column(empty.Schema().FieldIndices("branches")[0]).(*array.List)
+	if emptyBranches.IsNull(0) {
+		t.Fatal("empty branch list must be present, not NULL")
+	}
+	if start, end := emptyBranches.ValueOffsets(0); end != start {
+		t.Fatal("empty branch list gained branches")
+	}
+
+	info := catalogBatch(t, catalogFixture(t, "scan_planning_table_info"))
+	if !info.Schema().Equal(generated.TableInfoSchema) {
+		t.Fatalf("TableInfo schema drift:\nfixture %s\ngenerated %s", info.Schema(), generated.TableInfoSchema)
+	}
+	if got := stringColumn(t, info, "scan_planning").Value(0); got != vgi.ScanPlanningFiltered {
+		t.Fatalf("scan_planning = %q, want filtered", got)
+	}
+	if !info.Column(info.Schema().FieldIndices("scan_function")[0]).IsNull(0) {
+		t.Fatal("a filtered table must not inline scan_function")
+	}
+	columns, err := vgi.DeserializeSchema(getBinary(t, info, "columns"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := vgi.SerializeTableInfo(&vgi.TableInfo{Name: "events", SchemaPath: []string{"main"}, Columns: columns, ScanPlanning: vgi.ScanPlanningFiltered})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := catalogBatch(t, encoded)
+	for _, name := range []string{"scan_planning", "scan_function", "name", "schema_path"} {
+		index := info.Schema().FieldIndices(name)[0]
+		if !array.Equal(info.Column(index), restored.Column(index)) {
+			t.Fatalf("Go TableInfo %s differs from the Python corpus", name)
+		}
+	}
+
+	filters := vgi.NewScanPlanningFilters(catalogFixture(t, "scan_planning_pushdown_filters"), columns)
+	decoded, err := filters.Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Filters) != 2 {
+		t.Fatalf("decoded %d predicates, want 2", len(decoded.Filters))
+	}
+	// WHERE event_date >= DATE '2026-10-03' AND n < 100
+	day := func(d int32) vgi.ColumnStatistics {
+		return vgi.ColumnStatistics{ColumnName: "event_date", Type: arrow.FixedWidthTypes.Date32, Min: arrow.Date32(d), Max: arrow.Date32(d), HasNotNull: true}
+	}
+	nRange := func(lo, hi int64) vgi.ColumnStatistics {
+		return vgi.ColumnStatistics{ColumnName: "n", Type: arrow.PrimitiveTypes.Int64, Min: lo, Max: hi, HasNull: true, HasNotNull: true}
+	}
+	for _, tc := range []struct {
+		name  string
+		stats []vgi.ColumnStatistics
+		want  bool
+	}{
+		{"corpus branch", []vgi.ColumnStatistics{day(20729), nRange(0, 999)}, true},
+		{"day before", []vgi.ColumnStatistics{day(20728), nRange(0, 999)}, false},
+		{"day after", []vgi.ColumnStatistics{day(20730)}, true},
+		{"n all >= 100", []vgi.ColumnStatistics{day(20729), nRange(100, 999)}, false},
+		{"n touches 99", []vgi.ColumnStatistics{nRange(99, 999)}, true},
+		{"unknown column only", []vgi.ColumnStatistics{{ColumnName: "other", Type: arrow.PrimitiveTypes.Int64, Min: int64(0), Max: int64(1), HasNotNull: true}}, true},
+		{"no statistics", nil, true},
+	} {
+		if got := filters.MayMatch(tc.stats); got != tc.want {
+			t.Errorf("%s: MayMatch = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

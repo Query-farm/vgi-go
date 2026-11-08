@@ -1146,7 +1146,33 @@ func (w workerService) CatalogTableScanFunctionGet(ctx context.Context, callCtx 
 // single scan_function_get result as a one-branch list, mirroring vgi-python's
 // default implementation, so the method is always implemented (never triggers a
 // C++ legacy fallback).
+//
+// Protocol 3.2: the AttachScanBranchesPlanHandler, when installed, sees every
+// call first with the decoded pushdown_filters; falling through from it reaches
+// the 3.1 handler and default, which ignore the filters.
 func (w workerService) CatalogTableScanBranchesGet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableScanBranchesGetParams) (TableScanBranchesGetResponseWire, error) {
+	if w.attachScanBranchesPlanHandler != nil {
+		var filters *ScanPlanningFilters
+		if req.PushdownFilters != nil {
+			filters = &ScanPlanningFilters{Raw: *req.PushdownFilters, tableColumns: func() (*arrow.Schema, error) {
+				return declaredTableColumns(w, CatalogTableGetParams{
+					AttachOpaqueData:      req.AttachOpaqueData,
+					SchemaPath:            req.SchemaPath,
+					Name:                  req.Name,
+					AtUnit:                req.AtUnit,
+					AtValue:               req.AtValue,
+					TransactionOpaqueData: req.TransactionOpaqueData,
+				})
+			}}
+		}
+		result, handled, err := w.attachScanBranchesPlanHandler(req.AttachOpaqueData, req.SchemaPath, req.Name, req.AtUnit, req.AtValue, filters)
+		if err != nil {
+			return TableScanBranchesGetResponseWire{}, rewrapError("ValueError", err)
+		}
+		if handled {
+			return buildScanBranchesGetResponse(result)
+		}
+	}
 	if w.attachScanBranchesGetHandler != nil {
 		result, handled, err := w.attachScanBranchesGetHandler(req.AttachOpaqueData, req.SchemaPath, req.Name, req.AtUnit, req.AtValue)
 		if err != nil {
@@ -1157,8 +1183,14 @@ func (w workerService) CatalogTableScanBranchesGet(ctx context.Context, callCtx 
 		}
 	}
 	// Default: wrap the single scan_function_get result as one branch.
-	// The two methods take the same parameters, so the params convert.
-	sf, err := w.resolveScanFunction(CatalogTableScanFunctionGetParams(req))
+	sf, err := w.resolveScanFunction(CatalogTableScanFunctionGetParams{
+		AttachOpaqueData:      req.AttachOpaqueData,
+		SchemaPath:            req.SchemaPath,
+		Name:                  req.Name,
+		AtUnit:                req.AtUnit,
+		AtValue:               req.AtValue,
+		TransactionOpaqueData: req.TransactionOpaqueData,
+	})
 	if err != nil {
 		return TableScanBranchesGetResponseWire{}, err
 	}
@@ -1558,6 +1590,14 @@ func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*Tab
 	if err := w.checkDeclarativeForeignKeys(schemaPath, ct); err != nil {
 		return nil, err
 	}
+	scanPlanning, err := validateScanPlanning(ct.Name, ct.ScanPlanning, false)
+	if err != nil {
+		return nil, err
+	}
+	if scanPlanning == ScanPlanningFiltered && ct.Function != nil {
+		return nil, fmt.Errorf("table %q: ScanPlanning %q requires Columns and no Function; "+
+			"the scan-branches handler supplies the scan per query", ct.Name, ScanPlanningFiltered)
+	}
 	// Resolve columns: if Function is set but Columns is nil, derive via OnBind
 	columns := ct.Columns
 	if columns == nil && ct.Function != nil {
@@ -1629,6 +1669,7 @@ func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*Tab
 		CardinalityEstimate:      ct.CardinalityEstimate,
 		CardinalityMax:           ct.CardinalityMax,
 		RequiredFilters:          ct.RequiredFilters,
+		ScanPlanning:             scanPlanning,
 	}
 
 	if err := ct.validateWrites(); err != nil {
@@ -1833,10 +1874,13 @@ func (w *Worker) resolveScanFunction(req CatalogTableScanFunctionGetParams) (*Sc
 }
 
 // buildScanBranchesGetResponse serializes each branch to IPC bytes and packs
-// them into the wire response. The branches list must be non-empty per the
-// protocol contract; an empty list is sent through as-is so the C++ extension
-// can surface the "loud at attach" BinderException.
+// them into the wire response. An empty list is sent through as-is: it is legal
+// for a "filtered" table (protocol 3.2, no rows), and for a "bind" table the
+// C++ extension surfaces the "loud at attach" BinderException.
 func buildScanBranchesGetResponse(result *ScanBranchesResult) (TableScanBranchesGetResponseWire, error) {
+	if result == nil {
+		result = &ScanBranchesResult{}
+	}
 	branches := make([][]byte, 0, len(result.Branches))
 	for i := range result.Branches {
 		blob, err := SerializeScanBranch(&result.Branches[i])

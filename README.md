@@ -235,6 +235,42 @@ bounded grammar: literals, column references, `CAST`, comparisons,
 `upper`. Legacy `generated_expression` metadata is translated to the canonical
 form automatically.
 
+### Filtered scan planning (protocol 3.2)
+
+A catalog table whose scan redirects to other sources (`read_parquet` files,
+another table function, a companion catalog's table) normally returns its
+branches from `WithAttachScanBranchesGetHandler` at bind time, before `WHERE`
+exists. Declare `ScanPlanning: vgi.ScanPlanningFiltered` on the `CatalogTable`
+(or `TableInfo`) and the client instead calls `catalog_table_scan_branches_get`
+once per scan, after collecting the query's predicates on the table, and sends
+them as `pushdown_filters`. They reach the planning hook decoded against the
+table's declared columns:
+
+```go
+vgi.WithAttachScanBranchesPlanHandler(func(attach []byte, schema vgi.SchemaPath, name string,
+    atUnit, atValue *string, filters *vgi.ScanPlanningFilters) (*vgi.ScanBranchesResult, bool, error) {
+    var branches []vgi.ScanBranch
+    for _, f := range manifest { // f.Stats: []vgi.ColumnStatistics with HasNull/HasNotNull set
+        if filters.MayMatch(f.Stats) { // nil filters (none collected) match everything
+            branches = append(branches, vgi.ScanBranch{FormatName: &parquet, FormatLocations: []string{f.URL},
+                RowCount: &f.Rows, ColumnStatistics: f.Stats})
+        }
+    }
+    return &vgi.ScanBranchesResult{Branches: branches}, true, nil // zero branches = no rows
+})
+```
+
+Returning `(nil, false, nil)` falls through to the scan-branches handler, which
+ignores the filters, so existing workers behave unchanged. Every predicate is
+advisory and re-applied by the client: return any superset of the files that
+could match, never fewer. `filters.Decode()` gives the full `*PushdownFilters`.
+`ScanBranch.RowCount` / `ColumnStatistics` let the client prune branches
+itself (for "bind" tables too); statistics are claims about every row, so leave
+a column out rather than guess, and set `HasNull`/`HasNotNull` explicitly (Go's
+zero value claims an entirely-NULL column). A filtered table cannot have a
+`Function` (it would inline a fixed scan). The spec is vgi-python's
+`docs/protocol/scan-planning.md`.
+
 ### Attach options
 
 `vgi.WithAttachOptions(...)` declares the options a caller may pass at ATTACH

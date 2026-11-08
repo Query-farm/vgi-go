@@ -376,6 +376,7 @@ type Worker struct {
 	attachTableGetHandler         AttachTableGetHandler
 	attachScanFunctionGetHandler  AttachScanFunctionGetHandler
 	attachScanBranchesGetHandler  AttachScanBranchesGetHandler
+	attachScanBranchesPlanHandler AttachScanBranchesPlanHandler
 	attachWriteFunctionGetHandler AttachWriteFunctionGetHandler
 	catalogVersionHook            CatalogVersionHook
 	// hostedProtocols supplies the protocols hosted beside vgi.v3
@@ -680,6 +681,32 @@ type AttachScanBranchesGetHandler func(attachOpaqueData []byte, schemaPath Schem
 func WithAttachScanBranchesGetHandler(h AttachScanBranchesGetHandler) WorkerOption {
 	return func(w *Worker) {
 		w.attachScanBranchesGetHandler = h
+	}
+}
+
+// AttachScanBranchesPlanHandler plans a table's scan branches with the query's
+// predicates (protocol 3.2). The worker calls it for every
+// catalog_table_scan_branches_get. filters is nil when the client collected no
+// predicates (bind-time planning, or no usable predicate); otherwise it holds
+// the pushdown_filters snapshot, decoded lazily against the table's declared
+// columns by filters.Decode.
+//
+// Return (result, true) to answer; (nil, false) to fall through to the
+// AttachScanBranchesGetHandler and then the single scan-function default, which
+// ignore the filters — so a worker written for 3.1 behaves unchanged.
+//
+// Every predicate is advisory: the client re-applies all of them, so return any
+// superset of the branches and files that could hold matching rows, and never
+// drop one that could. ScanPlanningFilters.MayMatch prunes candidates by
+// min/max statistics. A table declaring ScanPlanning = ScanPlanningFiltered may
+// return zero branches, meaning the scan produces no rows.
+type AttachScanBranchesPlanHandler func(attachOpaqueData []byte, schemaPath SchemaPath, name string, atUnit, atValue *string, filters *ScanPlanningFilters) (result *ScanBranchesResult, handled bool, err error)
+
+// WithAttachScanBranchesPlanHandler installs the protocol 3.2 planning hook for
+// catalog_table_scan_branches_get. See AttachScanBranchesPlanHandler.
+func WithAttachScanBranchesPlanHandler(h AttachScanBranchesPlanHandler) WorkerOption {
+	return func(w *Worker) {
+		w.attachScanBranchesPlanHandler = h
 	}
 }
 
@@ -1358,8 +1385,11 @@ const ProtocolName = "vgi.v3"
 // 2.1.0 adds supports_catalog_contents to CatalogAttachResult and the
 // catalog_contents RPC (the whole catalog in one call; see catalog_contents.go).
 // 3.0.0 is the combined breaking catalog/query successor, routed as vgi.v3;
-// 3.1.0 adds portable exact key grouping and exact range distribution plans.
-const ProtocolVersion = "3.1.0"
+// 3.1.0 adds portable exact key grouping and exact range distribution plans;
+// 3.2.0 adds filtered scan planning (TableInfo.scan_planning, pushdown_filters
+// on catalog_table_scan_branches_get, ScanBranch row_count/column_statistics;
+// see scan_planning.go).
+const ProtocolVersion = "3.2.0"
 
 // buildServer is the one place a worker's server is built, for every
 // transport; see hosting.go for what it hosts. An error means the worker must

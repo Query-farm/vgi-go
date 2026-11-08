@@ -131,6 +131,7 @@ func main() {
 			return narrow_bind.AttachScanFunctionGetHandler(attach, schema, name, atUnit, atValue)
 		}),
 		vgi.WithAttachScanBranchesGetHandler(multiBranchScanBranchesGet),
+		vgi.WithAttachScanBranchesPlanHandler(plannedDaysScanBranchesPlan),
 		vgi.WithAttachWriteFunctionGetHandler(schema_reconcile.AttachWriteFunctionGetHandler),
 		// The example catalog's constraint records (departments, employees,
 		// ...) need no validator: the SDK advertises and selects the
@@ -387,6 +388,12 @@ func main() {
 			}, nil),
 			Comment: "Multi-branch: column reconciliation — used by multi_branch_reconciliation.test",
 		})
+		w.RegisterCatalogTable("data", vgi.CatalogTable{
+			Name:    "multi_branch_comma_filter",
+			Columns: nCol,
+			Comment: "Protocol 3.2: multi-expression branch_filter is rejected",
+		})
+		registerPlannedDaysTables(w)
 	}
 
 	// Function-backed table over the no-arg ten_thousand function. Used by
@@ -1253,6 +1260,13 @@ func multiBranchScanBranchesGet(_ []byte, schemaPath vgi.SchemaPath, name string
 			// The ordinary arm, which never sees a plan call at all.
 			seq(20),
 		}}, true, nil
+	case "multi_branch_comma_filter":
+		// branch_filter must be ONE expression; "n < 5, n > 2" parses as two,
+		// which a 3.2 client rejects (3.1 clients silently kept the first).
+		b := seq(10)
+		b.BranchFilter = strPtr("n < 5, n > 2")
+		b.SchemaPath = &[]string{"main"}
+		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{b}}, true, nil
 	case "multi_branch_empty":
 		// Intentionally empty — exercises the C++ "loud at attach" rejection.
 		return &vgi.ScanBranchesResult{Branches: []vgi.ScanBranch{}}, true, nil

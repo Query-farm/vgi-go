@@ -131,6 +131,14 @@ type CatalogTable struct {
 	// skips the per-scan bind RPC. Safe only for tables whose output schema is
 	// static (the resolved Columns schema is authoritative for every scan).
 	InlineBind bool
+	// ScanPlanning is ScanPlanningBind ("bind", the default; "" means bind) or
+	// ScanPlanningFiltered ("filtered"), protocol 3.2. A filtered table
+	// resolves its scan redirect per query: the client calls
+	// catalog_table_scan_branches_get with the query's predicates, which reach
+	// the WithAttachScanBranchesPlanHandler hook as *ScanPlanningFilters.
+	// Requires Columns and no Function, since a Function table inlines a fixed
+	// scan redirect on TableInfo.
+	ScanPlanning string
 }
 
 // ForeignKeyConstraint describes a foreign key relationship.
@@ -192,7 +200,9 @@ type ScanFunctionResult struct {
 	SchemaPath *[]string
 }
 
-// ScanArg is a single argument value with its Arrow type.
+// ScanArg is a single argument value with its Arrow type. Value is a bool,
+// int/int32/int64, float32/float64, string, []byte, or []string (with Type
+// arrow.ListOf(arrow.BinaryTypes.String)); anything else is sent as NULL.
 type ScanArg struct {
 	Value interface{}
 	Type  arrow.DataType
@@ -243,13 +253,32 @@ type ScanBranch struct {
 	// VGI-side function schema of its own, for a pre-1.5.0 peer, and for a
 	// native DuckDB function. Not to be confused with SourceSchemaPath above, which
 	// names a catalog-table branch's *source table's* schema, a different and
-	// older field. Added in protocol 1.5.0; trailing field of the wire schema.
+	// older field. Added in protocol 1.5.0.
 	SchemaPath *[]string
+	// RowCount is an estimate of the rows this branch produces before any
+	// predicate (protocol 3.2). Used for cardinality estimation only; a client
+	// never trusts it as exact. Nil = unknown. Must be >= 0.
+	RowCount *int64
+	// ColumnStatistics are conservative per-column claims about EVERY row this
+	// branch produces, keyed by the table's declared column names (protocol
+	// 3.2; same payload as TableInfo.column_statistics). Columns may be
+	// omitted; nil sends none. A client drops the branch when a query predicate
+	// is provably false against them, so wrong statistics silently lose rows:
+	// leave a column out rather than guess.
+	//
+	// Unlike vgi-python, whose has_null/has_not_null default to true, Go's
+	// zero value claims HasNull=false ("no NULLs") and HasNotNull=false
+	// ("entirely NULL"). Set both explicitly. A statistic with Min or Max set
+	// but HasNotNull=false is contradictory and refused by SerializeScanBranch.
+	// See docs/protocol/scan-planning.md in vgi-python.
+	ColumnStatistics []ColumnStatistics
 }
 
 // ScanBranchesResult is the list of physical sources backing a multi-branch
-// table. The branches list must be non-empty. It mirrors vgi-python's
-// ScanBranchesResult.
+// table. It mirrors vgi-python's ScanBranchesResult. For a table declaring
+// ScanPlanning = ScanPlanningFiltered, zero branches is legal and means the
+// scan produces no rows (protocol 3.2); for a "bind" table the client still
+// requires at least one branch.
 type ScanBranchesResult struct {
 	Branches []ScanBranch
 	// RequiredExtensions is the union of DuckDB extensions needed across all
@@ -263,6 +292,11 @@ var scanBranchSchema = generated.ScanBranchSchema
 // blob carried in ScanBranchesResult.branches).
 func SerializeScanBranch(branch *ScanBranch) ([]byte, error) {
 	mem := memory.NewGoAllocator()
+
+	statisticsBytes, err := serializeBranchStatistics(branch)
+	if err != nil {
+		return nil, err
+	}
 
 	argBytes, err := serializeScanArgs(mem, branch.PositionalArguments, branch.NamedArguments)
 	if err != nil {
@@ -354,6 +388,17 @@ func SerializeScanBranch(branch *ScanBranch) ([]byte, error) {
 		}(),
 		appendNullableBinary(formatOptionBytes),
 		appendNullablePath(branch.SchemaPath),
+		func() arrow.Array {
+			b := array.NewInt64Builder(mem)
+			defer b.Release()
+			if branch.RowCount != nil {
+				b.Append(*branch.RowCount)
+			} else {
+				b.AppendNull()
+			}
+			return b.NewArray()
+		}(),
+		appendNullableBinary(statisticsBytes),
 	}
 	defer func() {
 		for _, c := range cols {
@@ -509,6 +554,11 @@ func appendValue(b array.Builder, val interface{}) {
 		b.(*array.StringBuilder).Append(v)
 	case []byte:
 		b.(*array.BinaryBuilder).Append(v)
+	case []string:
+		// A list<utf8> argument, e.g. read_parquet's list of files.
+		lb := b.(*array.ListBuilder)
+		lb.Append(true)
+		lb.ValueBuilder().(*array.StringBuilder).AppendValues(v, nil)
 	default:
 		b.AppendNull()
 	}

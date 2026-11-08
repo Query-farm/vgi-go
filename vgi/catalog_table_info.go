@@ -72,6 +72,15 @@ type TableInfo struct {
 	RequiredFilters [][][]string
 	Options         []byte
 	Layout          []byte
+
+	// ScanPlanning is when the client resolves the table's scan redirect
+	// (protocol 3.2): ScanPlanningBind ("bind", the default; "" means bind)
+	// keeps 3.1 behaviour, ScanPlanningFiltered ("filtered") makes the client
+	// call catalog_table_scan_branches_get once per scan with the query's
+	// predicates as pushdown_filters (see WithAttachScanBranchesPlanHandler).
+	// A filtered table must not inline ScanFunction; SerializeTableInfo
+	// refuses that, and any other value.
+	ScanPlanning string
 }
 
 var tableInfoSchema = generated.TableInfoSchema
@@ -93,6 +102,10 @@ func buildTableInfoRecord(source *TableInfo) (arrow.RecordBatch, error) {
 	if len(info.NotNullConstraints)+len(info.UniqueConstraints)+len(info.CheckConstraints)+len(info.PrimaryKeyConstraints)+len(info.ForeignKeyConstraints) > 0 {
 		return nil, methodNotImplemented(fmt.Sprintf("table %q: the legacy NotNullConstraints/UniqueConstraints/CheckConstraints/PrimaryKeyConstraints/ForeignKeyConstraints fields are not sent under vgi.v3; "+
 			"build canonical records with vgi.ConstraintRecord and set TableInfo.Constraints instead", info.Name))
+	}
+	scanPlanning, err := validateScanPlanning(info.Name, info.ScanPlanning, info.ScanFunction != nil)
+	if err != nil {
+		return nil, err
 	}
 	if info.DefinitionRevision != nil && (len(info.DefinitionRevision) == 0 || len(info.DefinitionRevision) > 65536) {
 		return nil, fmt.Errorf("table %q: DefinitionRevision must be nil or a 1..65536-byte token", info.Name)
@@ -268,6 +281,12 @@ func buildTableInfoRecord(source *TableInfo) (arrow.RecordBatch, error) {
 		rfBuilder.NewArray(),
 		appendOptBinary(info.Options),
 		appendOptBinary(info.Layout),
+		func() arrow.Array {
+			b := array.NewStringBuilder(mem)
+			defer b.Release()
+			b.Append(scanPlanning)
+			return b.NewArray()
+		}(),
 	}
 	defer func() {
 		for _, c := range cols {

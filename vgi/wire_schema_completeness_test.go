@@ -268,6 +268,9 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					FormatLocations:     []string{"s3://bucket/a.csv"},
 					FormatOptions:       map[string]ScanArg{"delim": {Value: "|", Type: arrow.BinaryTypes.String}},
 					SchemaPath:          pathPtr("main"),
+					RowCount:            i64Ptr(1000),
+					ColumnStatistics: []ColumnStatistics{{ColumnName: "id", Type: arrow.PrimitiveTypes.Int64,
+						Min: int64(0), Max: int64(999), HasNull: false, HasNotNull: true}},
 				})
 			},
 		},

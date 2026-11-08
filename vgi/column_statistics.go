@@ -5,6 +5,7 @@ package vgi
 import (
 	"bytes"
 	"fmt"
+	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -20,7 +21,7 @@ import (
 type ColumnStatistics struct {
 	ColumnName    string
 	Type          arrow.DataType // Arrow type of Min/Max (required if either is set)
-	Min           interface{}    // e.g. int64(1), float64(0.99), "Accounting", nil
+	Min           interface{}    // e.g. int64(1), float64(0.99), "Accounting", arrow.Date32, time.Time, nil
 	Max           interface{}
 	HasNull       bool
 	HasNotNull    bool
@@ -297,6 +298,48 @@ func buildStatChildArray(mem memory.Allocator, t arrow.DataType, target int8, co
 				continue
 			}
 			b.Append(v.(bool))
+		}
+		return b.NewArray(), nil
+	case arrow.DATE32:
+		b := array.NewDate32Builder(mem)
+		defer b.Release()
+		for i, s := range stats {
+			v := pickScalar(s, wantMin)
+			if codes[i] != target || v == nil {
+				b.AppendNull()
+				continue
+			}
+			d, ok := dateCmp(v, arrow.DATE32)
+			if !ok {
+				return nil, fmt.Errorf("stats date32 child: unsupported %T", v)
+			}
+			b.Append(arrow.Date32(d.i))
+		}
+		return b.NewArray(), nil
+	case arrow.TIMESTAMP:
+		tt := t.(*arrow.TimestampType)
+		b := array.NewTimestampBuilder(mem, tt)
+		defer b.Release()
+		for i, s := range stats {
+			v := pickScalar(s, wantMin)
+			if codes[i] != target || v == nil {
+				b.AppendNull()
+				continue
+			}
+			switch x := v.(type) {
+			case arrow.Timestamp:
+				b.Append(x)
+			case int64:
+				b.Append(arrow.Timestamp(x))
+			case time.Time:
+				ts, err := arrow.TimestampFromTime(x, tt.Unit)
+				if err != nil {
+					return nil, fmt.Errorf("stats timestamp child: %w", err)
+				}
+				b.Append(ts)
+			default:
+				return nil, fmt.Errorf("stats timestamp child: unsupported %T", v)
+			}
 		}
 		return b.NewArray(), nil
 	case arrow.BINARY:
