@@ -213,8 +213,9 @@ new-worker:
 #                    fails the run, so a newly-gated test cannot quietly leave
 #                    the lane.
 #
-# Go runs 331 today (2026-10-06; +5 when the catalog_contents fixtures landed).
-GO_MIN_EXECUTED ?= 305
+# Go runs 329 today (2026-10-06; +5 when the catalog_contents fixtures landed;
+# -2 on 2026-11-08 when the two crash-recovery files moved to vgi test_deferred/).
+GO_MIN_EXECUTED ?= 303
 COVERAGE_GATE := --min-executed $(GO_MIN_EXECUTED) \
 	--allow-skip 'require spatial' \
 	--allow-skip 'require-env VGI_DOCKER_IMAGE' \
@@ -223,7 +224,6 @@ COVERAGE_GATE := --min-executed $(GO_MIN_EXECUTED) \
 	--allow-skip 'require-env VGI_TEST_ICEBERG' \
 	--allow-skip 'require-env VGI_TEST_COMPANION_TARGET' \
 	--allow-skip 'require-env VGI_TEST_BEARER_TOKEN' \
-	--allow-skip 'require-env VGI_TEST_DEDICATED_WORKER' \
 	--allow-skip 'require-env VGI_TEST_BRANCH_DIR' \
 	--allow-skip 'require-env VGI_HTTP_TRANSPORT' \
 	--allow-skip 'require-env VGI_HTTP_DISABLE_ZSTD' \
@@ -306,11 +306,6 @@ test-http: build $(HTTP_TEST_TARGETS)
 # group. Mirrors the vgi Makefile's test_launcher — the point is that the
 # launcher path yields identical query results to the subprocess path, which
 # only a full-suite run demonstrates.
-#
-# The crash tests (table_in_out/table_buffering_{worker_crash,pool_recovery})
-# self-skip here: they require VGI_TEST_DEDICATED_WORKER, which must not be set
-# under a shared-worker transport — crash_on_process SIGKILLs the one launcher
-# worker serving the whole run.
 #
 # vgi_worker_pool.test is excluded: it asserts subprocess-pool PID reuse, which
 # the AF_UNIX launcher transport structurally cannot satisfy (the C++ launcher

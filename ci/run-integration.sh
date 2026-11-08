@@ -272,24 +272,9 @@ export VGI_DATABASE_PACKAGE_WORKER="$WORKER"
 
 case "$TRANSPORT" in
   stdio)
-    # Subprocess transport (the primary lane) — the only lane that spawns a
-    # fresh worker process per DuckDB connection, and so the only one that can
-    # host the crash / pool-recovery tests below.
+    # Subprocess transport (the primary lane) — spawns a fresh worker process
+    # per DuckDB connection.
     export VGI_TEST_WORKER="$WORKER"
-    # Presence gate for the crash / pool-recovery tests
-    # (table_in_out/table_buffering_{worker_crash,pool_recovery}). The value is
-    # not used as a worker spec — the SQL attaches ${VGI_TEST_WORKER}; this only
-    # un-skips the tests.
-    #
-    # DEDICATED (subprocess) LANE ONLY. Those tests call the crash_on_process
-    # fixture, which SIGKILLs its own process. Under subprocess transport that
-    # kills the per-DuckDB-process worker child and the pool recovers — exactly
-    # what the tests assert. Under a SHARED-worker transport (http://, launch:)
-    # it kills the single process serving the whole suite and every later ATTACH
-    # fails. Exporting it unconditionally silently voided 175 of 287 files on
-    # the http lane while still printing "All tests passed" (run 30025057387).
-    # Since shm now rides the launcher, stdio is the ONLY lane that may set it.
-    export VGI_TEST_DEDICATED_WORKER="$WORKER"
     export VGI_VERSIONED_WORKER="$VERSIONED"
     export VGI_VERSIONED_TABLES_WORKER="$VERSIONED_TABLES"
     export VGI_ATTACH_OPTIONS_WORKER="$ATTACH_OPTIONS"
@@ -428,28 +413,25 @@ for engine_var in VGI_ENGINE_CORRELATED_NAMED_ARGS VGI_ENGINE_DELETE_RETURNING_V
   fi
 done
 # Lane-specific additions — a skip that is expected on one lane is a red flag on
-# another (e.g. VGI_TEST_DEDICATED_WORKER skipping on stdio would mean the crash
-# tests silently stopped running).
+# another (e.g. VGI_REQUIRE_LAUNCHER_TRANSPORT skipping on launch would mean the
+# launcher tests silently stopped running).
 case "$TRANSPORT" in
   stdio)
     # The launcher-only tests skip here (this is not the launcher transport).
     EXPECTED_SKIP_REASONS+=('require-env VGI_REQUIRE_LAUNCHER_TRANSPORT')
     ;;
   shm|launch)
-    # Crash tests are stdio-only (VGI_TEST_DEDICATED_WORKER); the versioned
-    # *_http catalogs are booted only on the stdio lane.
+    # The versioned *_http catalogs are booted only on the stdio lane.
     EXPECTED_SKIP_REASONS+=(
-      'require-env VGI_TEST_DEDICATED_WORKER'
       'require-env VGI_VERSIONED_HTTP_WORKER'
       'require-env VGI_VERSIONED_TABLES_HTTP_WORKER'
     )
     ;;
   http)
-    # Over http: crash tests gate off (shared server), launcher tests gate off,
-    # and the subprocess-path worker vars are unset (only their _HTTP_ variants
-    # would apply, and only the main worker is booted).
+    # Over http: launcher tests gate off, and the subprocess-path worker vars
+    # are unset (only their _HTTP_ variants would apply, and only the main
+    # worker is booted).
     EXPECTED_SKIP_REASONS+=(
-      'require-env VGI_TEST_DEDICATED_WORKER'
       'require-env VGI_REQUIRE_LAUNCHER_TRANSPORT'
       'require-env VGI_VERSIONED_HTTP_WORKER'
       'require-env VGI_VERSIONED_TABLES_HTTP_WORKER'
@@ -461,13 +443,14 @@ case "$TRANSPORT" in
     ;;
 esac
 
-# Floor on executed cases (main suite + the isolated simple_writable run,
-# summed). Deliberately a floor, not an equality — the upstream suite grows.
-# Measured 2026-07-24 against Query-farm/vgi @ main: stdio 269, launch/shm 263,
-# http 254 executed. The floors sit ~15 below, leaving headroom for churn while
-# staying far above the handful a silent collapse would leave.
+# Floor on executed cases. Deliberately a floor, not an equality — the upstream
+# suite grows. Measured 2026-07-24 against Query-farm/vgi @ main: stdio 269,
+# launch/shm 263, http 254 executed. The floors sit ~15 below, leaving headroom
+# for churn while staying far above the handful a silent collapse would leave.
+# stdio dropped by 2 when the two crash-recovery files moved out of the suite
+# (vgi test_deferred/crash_recovery/).
 case "$TRANSPORT" in
-  stdio)      MIN_EXECUTED="${MIN_EXECUTED:-255}" ;;
+  stdio)      MIN_EXECUTED="${MIN_EXECUTED:-253}" ;;
   shm|launch) MIN_EXECUTED="${MIN_EXECUTED:-250}" ;;
   http)       MIN_EXECUTED="${MIN_EXECUTED:-240}" ;;
 esac
@@ -574,25 +557,12 @@ run_unittest() {
 # (a progress line per file + the final "All tests passed (.. N assertions ..)"
 # summary). Out-of-scope tests were dropped at staging, so the glob never
 # matches them; any failed assertion exits non-zero and fails the job.
-#
-# simple_writable runs in its OWN invocation (a fresh DuckDB process / worker
-# pool). Its table-in-out write workers otherwise leave warm pooled connections
-# that perturb the immediately-following crash-recovery test
-# (table_in_out/table_buffering_pool_recovery), changing how a re-crash surfaces
-# (Broken-pipe-on-write vs the expected stream-EOF). A separate process gives
-# the crash test a clean pool. Every lane does the split: simple_writable always
-# attaches a spawned binary (VGI_SIMPLE_WRITABLE_WORKER), even on the http lane.
 echo "Running suite ($SUITE_GLOB, transport=$TRANSPORT) ..."
 suite_rc=0
-run_unittest "$SUITE_GLOB" "~test/sql/integration/simple_writable/*" || suite_rc=$?
+run_unittest "$SUITE_GLOB" || suite_rc=$?
 assert_bg_workers_alive || suite_rc=1
 
-echo "Running simple_writable (isolated process) ..."
-run_unittest "test/sql/integration/simple_writable/*" || suite_rc=$?
-assert_bg_workers_alive || suite_rc=1
-
-# The executed-case floor is checked once against the summed total (main suite +
-# the isolated simple_writable run) — see MIN_EXECUTED above.
+# The executed-case floor — see MIN_EXECUTED above.
 if [ "$TOTAL_EXECUTED" -lt "$MIN_EXECUTED" ]; then
   echo "::error::only $TOTAL_EXECUTED test cases executed on the $TRANSPORT lane," \
        "floor is MIN_EXECUTED=$MIN_EXECUTED. This is the signature of a suite-wide" \

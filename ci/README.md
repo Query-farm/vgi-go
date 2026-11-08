@@ -89,9 +89,7 @@ fixture worker (`cmd/vgi-example-simple-writable-worker`, the
 `examples/simple_writable` catalog), so the same cross-language tests exercise
 the Go write-function plumbing. That var is always a spawned binary — a
 `launch:` path on the launcher lanes, a plain path elsewhere — so those tests
-run over subprocess even on the http lane rather than skipping. They run in
-their own `haybarn-unittest` invocation so their warm pooled connections don't
-perturb the immediately-following crash-recovery test.
+run over subprocess even on the http lane rather than skipping.
 
 The `writable_tx/*.test` files (writable descriptor tables, per-ATTACH
 transactions, transaction hooks, secret ATTACH options) run on **every** lane
@@ -101,18 +99,12 @@ is a plain path on stdio, `launch:` on the launcher lanes and the fixture's own
 `http://` server on the http lane, so the sealed transaction-id path is covered
 over HTTP. `VGI_TXFIX_STATE_DIR` is a per-run `mktemp -d`.
 
-The crash / pool-recovery tests (`table_in_out/table_buffering_{worker_crash,
-pool_recovery}`) are gated on `VGI_TEST_DEDICATED_WORKER`, set on the **`stdio`
-lane only**. Their `crash_on_process` fixture SIGKILLs its own process: a
-recoverable per-DuckDB-process child kill under subprocess transport, but under
-any shared-worker transport (`http://`, `launch:`) it kills the one process
-serving the whole suite and every later `ATTACH` fails. Setting it on the http
-lane silently voided 175 of 287 files while still reporting "All tests passed"
-(run 30025057387) — `assert_bg_workers_alive` in the runner now fails the lane
-if the shared http worker dies mid-run (the stdio lane's secondary
-versioned/versioned-tables http workers only warn: they back five files in the
-middle of the run, so an exit after those changes nothing). Because `shm` rides
-the launcher, `stdio` is the only lane that can host these tests.
+If the shared http worker dies mid-run, every later `ATTACH` fails while the
+runner can still report "All tests passed" (run 30025057387 voided 175 of 287
+files that way). `assert_bg_workers_alive` in the runner fails the lane when
+that happens (the stdio lane's secondary versioned/versioned-tables http
+workers only warn: they back five files in the middle of the run, so an exit
+after those changes nothing).
 
 Nothing is dropped on the **launcher** lanes. `test_launcher` upstream excludes
 two files, and neither applies: `test/sql/vgi_worker_pool.test` lives outside
@@ -142,13 +134,12 @@ gap with two guards in `summarize_run`, checked after every invocation:
 
 - **Skip allowlist.** Every skip reason the runner prints must appear in
   `EXPECTED_SKIP_REASONS` (a base list plus per-lane additions — e.g.
-  `VGI_TEST_DEDICATED_WORKER` is an *expected* skip on the shared-worker lanes
-  but a red flag on `stdio`). An unlisted reason — the signature of a whole file
+  `VGI_REQUIRE_LAUNCHER_TRANSPORT` is an *expected* skip on `stdio` and `http`
+  but a red flag on the launcher lanes). An unlisted reason — the signature of a whole file
   silently gated off, like `require httpfs: 227` — fails the lane. When a skip is
   genuinely new and legitimate, add it to the list *with the reason why*.
-- **Executed-case floor.** The summed count of executed cases (main suite + the
-  isolated `simple_writable` run) must stay above a per-lane `MIN_EXECUTED`
-  (stdio 250, launch/shm 245, http 235 — floors ~15 below the measured counts,
+- **Executed-case floor.** The count of executed cases must stay above a
+  per-lane `MIN_EXECUTED` (stdio 253, launch/shm 250, http 240 — floors ~15 below the measured counts,
   leaving room for upstream growth). A collapse in this number is the tell of a
   suite-wide silent skip. It is deliberately a floor, not an equality: **do not
   lower it to make a run pass** — find what stopped running. Ported from
