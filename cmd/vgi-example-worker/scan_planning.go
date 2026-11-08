@@ -91,13 +91,18 @@ func plannedDaysScanBranchesPlan(_ []byte, schemaPath vgi.SchemaPath, name strin
 				files = append(files, plannedDayFile(day))
 			}
 		}
-		// Record what the worker saw so tests can assert the predicates arrived.
-		record, err := json.Marshal(map[string]any{"received_filters": filters != nil, "days": append([]string{}, days...)})
-		if err != nil {
-			return nil, false, err
-		}
-		if err := os.WriteFile(branchPath("planned_days_last_plan.json"), record, 0o644); err != nil {
-			return nil, false, err
+		// Record what a filtered planning call saw so tests can assert the
+		// predicates arrived. Unfiltered calls (vgi_table_branches(), bind-time
+		// planning) must not overwrite it: test files share the branch dir and
+		// run in parallel.
+		if filters != nil {
+			record, err := json.Marshal(map[string]any{"received_filters": true, "days": append([]string{}, days...)})
+			if err != nil {
+				return nil, false, err
+			}
+			if err := os.WriteFile(branchPath("planned_days_last_plan.json"), record, 0o644); err != nil {
+				return nil, false, err
+			}
 		}
 		if len(files) == 0 {
 			return &vgi.ScanBranchesResult{RequiredExtensions: parquet}, true, nil
