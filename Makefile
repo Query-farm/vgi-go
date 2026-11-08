@@ -216,6 +216,24 @@ new-worker:
 # Go runs 329 today (2026-10-06; +5 when the catalog_contents fixtures landed;
 # -2 on 2026-11-08 when the two crash-recovery files moved to vgi test_deferred/).
 GO_MIN_EXECUTED ?= 303
+
+# Engine-gated native tests (VGI_DIR/CLAUDE.md, "Gate only the cases that need
+# the feature"). The native Makefile decides which engine features the built
+# DuckDB has (VGI_ENGINE_TEST_VARS: on Haybarn each is 1, on upstream unset) and
+# the skip reasons that gating produces (VGI_ENGINE_EXPECTED_SKIPS). Take both
+# from VGI_DIR instead of restating them, so a new engine gate needs no change
+# here. The skip list is read with `--eval` (GNU make >= 4); an older make falls
+# back to `require-env-not VAR` for each variable engine_test_env reports set,
+# which is exactly the Haybarn list. `make print-engine-skips` shows both.
+VGI_ENGINE_TEST_ENV := $(shell $(MAKE) -s --no-print-directory -C $(VGI_DIR) engine_test_env 2>/dev/null)
+VGI_ENGINE_EXPECTED_SKIPS := $(strip $(shell $(MAKE) -s --no-print-directory -C $(VGI_DIR) \
+	--eval 'vgi_go_print_engine_skips: ; $$(info $$(VGI_ENGINE_EXPECTED_SKIPS))@:' vgi_go_print_engine_skips 2>/dev/null))
+ifeq ($(VGI_ENGINE_EXPECTED_SKIPS),)
+VGI_ENGINE_EXPECTED_SKIPS := $(foreach kv,$(VGI_ENGINE_TEST_ENV),--allow-skip 'require-env-not $(firstword $(subst =, ,$(kv)))')
+endif
+# Loads engine_test_env's variables into a recipe's shell (run from VGI_DIR).
+LOAD_ENGINE_TEST_ENV = set -a; eval "$$($(MAKE) -s --no-print-directory engine_test_env 2>/dev/null)"; set +a
+
 COVERAGE_GATE := --min-executed $(GO_MIN_EXECUTED) \
 	--allow-skip 'require spatial' \
 	--allow-skip 'require-env VGI_DOCKER_IMAGE' \
@@ -242,10 +260,16 @@ COVERAGE_GATE := --min-executed $(GO_MIN_EXECUTED) \
 	--allow-skip 'require-env VGI_DATABASE_PYTHON_WORKER' \
 	--allow-skip 'require-env VGI_DATABASE_RUST_WORKER' \
 	--allow-skip 'require-env VGI_MALFORMED_BATCH_WORKER' \
-	--allow-skip 'require-env VGI_ROWID_CONSTRAINT_WORKER'
+	--allow-skip 'require-env VGI_ROWID_CONSTRAINT_WORKER' \
+	$(VGI_ENGINE_EXPECTED_SKIPS)
+
+# Show the engine-gated skip reasons and variables taken from VGI_DIR.
+.PHONY: print-engine-skips
+print-engine-skips:
+	@$(info engine env: $(VGI_ENGINE_TEST_ENV))$(info engine skips: $(VGI_ENGINE_EXPECTED_SKIPS)):
 
 test: build
-	cd $(VGI_DIR) && \
+	cd $(VGI_DIR) && $(LOAD_ENGINE_TEST_ENV) && \
 	    VGI_SYNC_INIT_GLOBAL=1 \
 	    VGI_SECRET_LOOKUP_FIXTURES=1 \
 	    VGI_TEST_WORKER=$(WORKER_PATH) \
@@ -261,7 +285,7 @@ test: build
 # Example:
 #   make test-single TEST=test/sql/integration/scalar/add_values.test
 test-single: build
-	cd $(VGI_DIR) && \
+	cd $(VGI_DIR) && $(LOAD_ENGINE_TEST_ENV) && \
 	    VGI_SYNC_INIT_GLOBAL=1 \
 	    VGI_SECRET_LOOKUP_FIXTURES=1 \
 	    VGI_TEST_WORKER=$(WORKER_PATH) \
@@ -281,7 +305,7 @@ test-single: build
 #   make test-shm                         # 256 MiB segment (default)
 #   make test-shm SHM_SIZE_BYTES=67108864 # 64 MiB segment
 test-shm: build
-	cd $(VGI_DIR) && \
+	cd $(VGI_DIR) && $(LOAD_ENGINE_TEST_ENV) && \
 	    VGI_SYNC_INIT_GLOBAL=1 \
 	    VGI_SECRET_LOOKUP_FIXTURES=1 \
 	    VGI_RPC_SHM_SIZE_BYTES=$(SHM_SIZE_BYTES) \
@@ -314,7 +338,7 @@ test-http: build $(HTTP_TEST_TARGETS)
 # SUITE_GLOB is test/sql/integration/* only). Excluding it here keeps `make
 # test-launcher` matching what CI actually runs.
 test-launcher: build
-	cd $(VGI_DIR) && \
+	cd $(VGI_DIR) && $(LOAD_ENGINE_TEST_ENV) && \
 	    VGI_SYNC_INIT_GLOBAL=1 \
 	    VGI_SECRET_LOOKUP_FIXTURES=1 \
 	    VGI_REQUIRE_LAUNCHER_TRANSPORT=1 \
