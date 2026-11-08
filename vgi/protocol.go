@@ -909,6 +909,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		// Opened from the init's bind_call by parseBindRequest (sealed on
 		// HTTP), never taken from bind opaque data a client could rewrite.
 		TransactionOpaqueData: bindParams.TransactionOpaqueData,
+		attachOptions:         bindParams.attachOptions,
 	}
 	if req.ProjectionIDs != nil {
 		// int64 on the wire, int32 in the worker-facing API. A projection id is
@@ -1031,6 +1032,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		AtValue:               bindParams.AtValue,
 		AttachScope:           bindParams.AttachOpaqueData,
 		TransactionOpaqueData: bindParams.TransactionOpaqueData,
+		attachOptions:         bindParams.attachOptions,
 		CopyFrom:              bindParams.CopyFrom,
 		CopyTo:                bindParams.CopyTo,
 	}
@@ -1056,6 +1058,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		recipe.ScopesOpened = true
 		recipe.AttachScope = bindParams.AttachOpaqueData
 		recipe.TransactionScope = bindParams.TransactionOpaqueData
+		recipe.AttachOptionsScope = bindParams.attachFramework
 	}
 	if req.PushdownFilters != nil {
 		recipe.PushdownFilterIPC = *req.PushdownFilters
@@ -1662,13 +1665,28 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 		// prefix stripped. Rehydration (callCtx == nil) has no auth context to
 		// reopen the auth-scoped seal, so it keeps the raw value.
 		if callCtx != nil {
-			plain, err := w.openAttach(*req.AttachOpaqueData, callCtx)
+			full, err := w.openAttachFull(*req.AttachOpaqueData, callCtx)
 			if err != nil {
 				return nil, err
 			}
+			_, _, _, plain, _, ok := splitAttachPlaintext(full)
+			if !ok {
+				return nil, attachRejected()
+			}
 			params.AttachOpaqueData = plain
+			if params.attachOptions, err = w.attachOptionsOf(full); err != nil {
+				return nil, err
+			}
+			params.attachFramework = attachFrameworkPart(full)
 		} else {
 			params.AttachOpaqueData = *req.AttachOpaqueData
+			// Unsealed transports: the raw value is the plaintext.
+			if !w.sealOpaqueData {
+				var err error
+				if params.attachOptions, err = w.attachOptionsOf(params.AttachOpaqueData); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if req.TransactionOpaqueData != nil {

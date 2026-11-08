@@ -38,4 +38,8 @@ type InitRecipe struct {
 	ScopesOpened     bool
 	AttachScope      []byte
 	TransactionScope []byte
+	// AttachOptionsScope is the opened attach value's uuid || options
+	// section (secret options still encrypted under the worker's key), so a
+	// rehydrated turn can decode ProcessParams.AttachOptions again.
+	AttachOptionsScope []byte
 }

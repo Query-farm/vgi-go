@@ -123,6 +123,8 @@ type ProcessParams struct {
 	// IfModifiedSince is the conditional-revalidation validator carrying the
 	// client's stored Last-Modified. Companion to IfNoneMatch. Nil otherwise.
 	IfModifiedSince *string
+	// attachOptions are the ATTACH's options (AttachOptions).
+	attachOptions *AttachOptions
 	// clientLog forwards an in-band log message to the client (surfaced in
 	// duckdb_logs() with type='VGI'). Set by the framework on the unary
 	// table-buffering RPCs, which have no streaming OutputCollector. Nil when
@@ -137,3 +139,10 @@ func (p *ProcessParams) ClientLog(level vgirpc.LogLevel, msg string) {
 		p.clientLog(level, msg)
 	}
 }
+
+// AttachOptions returns the options of the ATTACH this call runs under,
+// secret ones included (the SDK carries them encrypted inside the attach
+// value and decrypts them here, on every transport and on rehydrated HTTP
+// turns). Nil when the call has no attach or the ATTACH had no options.
+// Never log secret values or copy them into state or bind opaque data.
+func (p *ProcessParams) AttachOptions() *AttachOptions { return p.attachOptions }

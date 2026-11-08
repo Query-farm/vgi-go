@@ -314,6 +314,9 @@ type Worker struct {
 	// transactionHooks are the BEGIN/COMMIT/ROLLBACK callbacks
 	// (WithTransactionHooks).
 	transactionHooks TransactionHooks
+	// attachSecretRoot is the configured root key for secret ATTACH options
+	// (WithAttachSecretOptionsKey); empty uses the signing / host-local key.
+	attachSecretRoot []byte
 	// catalogContentsDisabled turns off catalog_contents advertising on the
 	// default catalog's attach (WithCatalogContents(false)).
 	catalogContentsDisabled bool

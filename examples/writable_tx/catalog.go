@@ -5,57 +5,41 @@
 // worker transaction hooks, and a secret ATTACH option that must reach every
 // function. It is built only with vgi-go's public API (CatalogTable write
 // functions, AttachDecision.SupportsTransactions, WithTransactionHooks,
-// ProcessParams.TransactionOpaqueData and the write-result helpers), and backs
+// ProcessParams.TransactionOpaqueData, AttachOptions for the secret token and
+// the write-result helpers), and backs
 // the vgi repo's test/sql/integration/writable_tx/*.test files (gated on
 // VGI_WRITABLE_TX_FIXTURES and VGI_WRITABLE_TX_WORKER). The contract is the
 // vgi repo's docs/writable_tx_fixtures.md.
 package writable_tx
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
 
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
-	"github.com/google/uuid"
 )
 
 // CatalogName is the catalog the tests ATTACH.
 const CatalogName = "txfix"
 
-// attachInfo is what an ATTACH's options resolve to. It travels inside the
-// attach value (sealed by the SDK on HTTP), so every function and hook of
-// that ATTACH reads it back from its attach bytes.
-type attachInfo struct {
-	Token         *string `json:"token"`
-	Transactional bool    `json:"transactional"`
-	ID            string  `json:"id"`
+// tokenOf is the ATTACH's secret token, read only through the SDK's
+// attach-options accessor (the SDK carries it encrypted in the attach value;
+// it is never in this catalog's attach bytes). Nil when absent.
+func tokenOf(opts *vgi.AttachOptions) *string {
+	if v, ok := opts.String("token"); ok {
+		return &v
+	}
+	return nil
 }
 
-// encodeAttach is "txfix\x00" + JSON: the catalog name before the NUL keeps
-// the catalog's function scoping, the JSON carries the options.
-func encodeAttach(info attachInfo) ([]byte, error) {
-	body, err := json.Marshal(info)
-	if err != nil {
-		return nil, err
-	}
-	return append(append([]byte(CatalogName), 0), body...), nil
-}
-
-// decodeAttach reads an ATTACH's options back from its attach bytes
-// (BindParams.AttachOpaqueData, ProcessParams.AttachScope,
-// TransactionHookContext.AttachOpaqueData).
-func decodeAttach(attach []byte) attachInfo {
-	var info attachInfo
-	if i := bytes.IndexByte(attach, 0); i >= 0 {
-		_ = json.Unmarshal(attach[i+1:], &info)
-	}
-	return info
+// transactionalOf is the ATTACH's transactional option (default false).
+func transactionalOf(opts *vgi.AttachOptions) bool {
+	v, _ := opts.Bool("transactional")
+	return v
 }
 
 // attachOptions declares the ATTACH options: transactional (default false)
@@ -73,62 +57,44 @@ func attachOptions() []vgi.AttachOptionSpec {
 	}
 }
 
-// decideAttach resolves an ATTACH: its options go into the attach value, and
-// supports_transactions follows the transactional option for this ATTACH only.
+// decideAttach makes supports_transactions follow the transactional option
+// for this ATTACH only. It stores nothing in the attach value: the options,
+// the secret token included, reach functions and hooks through the SDK.
 func decideAttach(req *vgi.CatalogAttachRequestWire, _ *vgirpc.CallContext) (*vgi.AttachDecision, error) {
-	info := attachInfo{ID: uuid.NewString()}
+	transactional := false
 	if req.Options != nil && len(*req.Options) > 0 {
 		batch, err := vgi.DeserializeRecordBatch(*req.Options)
 		if err != nil {
 			return nil, fmt.Errorf("txfix: attach options: %w", err)
 		}
 		defer batch.Release()
-		if batch.NumRows() > 0 {
-			for i, f := range batch.Schema().Fields() {
-				col := batch.Column(i)
-				if col.IsNull(0) {
-					continue
-				}
-				switch f.Name {
-				case "transactional":
-					if c, ok := col.(*array.Boolean); ok {
-						info.Transactional = c.Value(0)
-					}
-				case "token":
-					if c, ok := col.(*array.String); ok {
-						v := c.Value(0)
-						info.Token = &v
-					}
-				}
+		if idx := batch.Schema().FieldIndices("transactional"); len(idx) > 0 && batch.NumRows() > 0 {
+			if c, ok := batch.Column(idx[0]).(*array.Boolean); ok && !c.IsNull(0) {
+				transactional = c.Value(0)
 			}
 		}
 	}
-	attach, err := encodeAttach(info)
-	if err != nil {
-		return nil, err
-	}
-	transactional := info.Transactional
-	return &vgi.AttachDecision{AttachOpaqueData: attach, SupportsTransactions: &transactional}, nil
+	return &vgi.AttachDecision{SupportsTransactions: &transactional}, nil
 }
 
 // transactionHooks stage-and-commit the transactional ATTACH's writes.
 func transactionHooks() vgi.TransactionHooks {
 	return vgi.TransactionHooks{
 		Begin: func(_ context.Context, tx vgi.TransactionHookContext) ([]byte, error) {
-			if !decodeAttach(tx.AttachOpaqueData).Transactional {
+			if !transactionalOf(tx.AttachOptions()) {
 				return nil, nil
 			}
 			id := make([]byte, 16)
 			if _, err := rand.Read(id); err != nil {
 				return nil, err
 			}
-			return id, withState(decodeAttach(tx.AttachOpaqueData).Token, true, func(s *state) error {
+			return id, withState(tokenOf(tx.AttachOptions()), true, func(s *state) error {
 				s.record("begin", id, true)
 				return nil
 			})
 		},
 		Commit: func(_ context.Context, tx vgi.TransactionHookContext) error {
-			return withState(decodeAttach(tx.AttachOpaqueData).Token, true, func(s *state) error {
+			return withState(tokenOf(tx.AttachOptions()), true, func(s *state) error {
 				key := txHex(tx.TransactionOpaqueData)
 				staged := s.Pending[key]
 				delete(s.Pending, key)
@@ -142,7 +108,7 @@ func transactionHooks() vgi.TransactionHooks {
 			})
 		},
 		Rollback: func(_ context.Context, tx vgi.TransactionHookContext) error {
-			return withState(decodeAttach(tx.AttachOpaqueData).Token, true, func(s *state) error {
+			return withState(tokenOf(tx.AttachOptions()), true, func(s *state) error {
 				delete(s.Pending, txHex(tx.TransactionOpaqueData))
 				s.record("rollback", tx.TransactionOpaqueData, true)
 				return nil

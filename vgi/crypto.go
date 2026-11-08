@@ -219,12 +219,25 @@ func callAuth(cc *vgirpc.CallContext) *vgirpc.AuthContext {
 // the catalog's own bytes (uuid(16) || catalog_bytes; storage shards on the
 // UUID, which comes from crypto/rand) and seal the result for the caller.
 func (w *Worker) mintAttach(catalogBytes []byte, cc *vgirpc.CallContext) ([]byte, error) {
+	return w.mintAttachWithOptions(catalogBytes, nil, nil, cc)
+}
+
+// mintAttachWithOptions is mintAttach that also records the ATTACH's options
+// (see attach_options_secret.go): uuid(16) || options section || catalog_bytes,
+// the secret options encrypted and bound to the UUID. Without options the
+// value is exactly mintAttach's.
+func (w *Worker) mintAttachWithOptions(catalogBytes, optionsIPC []byte, specs []AttachOptionSpec, cc *vgirpc.CallContext) ([]byte, error) {
 	u, err := uuid.NewRandom()
 	if err != nil {
 		return nil, err
 	}
-	minted := make([]byte, 0, attachUUIDLen+len(catalogBytes))
+	section, err := w.attachOptionsSection(u[:], optionsIPC, specs)
+	if err != nil {
+		return nil, err
+	}
+	minted := make([]byte, 0, attachUUIDLen+len(section)+len(catalogBytes))
 	minted = append(minted, u[:]...)
+	minted = append(minted, section...)
 	minted = append(minted, catalogBytes...)
 	return w.sealAttach(minted, cc)
 }
@@ -250,7 +263,11 @@ func (w *Worker) openAttach(envelope []byte, cc *vgirpc.CallContext) ([]byte, er
 	if len(full) < attachUUIDLen {
 		return full, nil
 	}
-	return full[attachUUIDLen:], nil
+	_, _, _, catalog, _, ok := splitAttachPlaintext(full)
+	if !ok {
+		return nil, attachRejected()
+	}
+	return catalog, nil
 }
 
 // openTransaction opens a transaction_opaque_data envelope. attachEnvelope is
@@ -284,10 +301,19 @@ func (w *Worker) unwrapReqOpaque(reqPtr any, cc *vgirpc.CallContext) error {
 		// handler bodies always see the catalog's own bytes regardless of
 		// transport. No shape of value skips the open.
 		if len(sealedAttach) > 0 {
-			plain, err := w.openAttach(sealedAttach, cc)
+			full, err := w.openAttachFull(sealedAttach, cc)
 			if err != nil {
 				return err
 			}
+			_, _, _, plain, _, ok := splitAttachPlaintext(full)
+			if !ok {
+				return attachRejected()
+			}
+			opts, err := w.attachOptionsOf(full)
+			if err != nil {
+				return err
+			}
+			withContextAttachOptions(cc, opts)
 			af.SetBytes(plain)
 			if cc != nil {
 				scope := sha256.Sum256(sealedAttach)

@@ -153,12 +153,15 @@ func TestTxfixTransactionsOverHTTP(t *testing.T) {
 	c := newTxfixClient(t)
 	plain, plainTx := attachWithOptions(t, c, "txfix", map[string]any{"token": "tok-123"})
 	ttx, ttxTx := attachWithOptions(t, c, "txfix", map[string]any{"token": "tok-123", "transactional": true})
+	if bytes.Contains(plain, []byte("tok-123")) || bytes.Contains(ttx, []byte("tok-123")) {
+		t.Fatal("the secret token is on the wire in the attach value")
+	}
 	if plainTx || !ttxTx {
 		t.Fatalf("supports_transactions: plain %v, transactional %v", plainTx, ttxTx)
 	}
 	mustScan(t, c, plain, nil, "reset")
 	for _, attach := range [][]byte{plain, ttx} {
-		if who := mustScan(t, c, attach, nil, "whoami"); who[0]["token"] != "tok-123" {
+		if who := mustScan(t, c, attach, nil, "whoami"); who[0]["token"] != "tok-123" || who[0]["token_in_attach_data"] != "false" {
 			t.Fatalf("whoami %v", who)
 		}
 	}

@@ -264,12 +264,35 @@ normally has none, since the default is published to every client.
 `vgi_attach_ticket` is reserved for [attach tickets](#attach-tickets-vgiattach_ticketsv1):
 a worker declaring an option of that name (any case) refuses to start.
 
-An `AttachValidator` reads the options (`req.Options`, a one-row Arrow batch)
-and puts what functions need into `AttachDecision.AttachOpaqueData`. Functions
-read it back as `BindParams.AttachOpaqueData`, `InitParams.AttachScope` and
-`ProcessParams.AttachScope`, and transaction hooks as
-`TransactionHookContext.AttachOpaqueData`. Over HTTP the SDK seals the value on
-the wire, so a client can neither read nor forge it.
+Functions and transaction hooks read the ATTACH's options, **secret ones
+included**, with `AttachOptions()` on `BindParams`, `InitParams`,
+`ProcessParams`, `AggregateProcessParams` and `TransactionHookContext`:
+
+```go
+func (f *myScan) Process(ctx context.Context, p *vgi.ProcessParams, st *state, out *vgirpc.OutputCollector) error {
+	key, ok := p.AttachOptions().String("api_key") // also Bool, Int64, Float64, Value
+	...
+}
+```
+
+The SDK records the declared options in the attach value it mints and
+encrypts the secret ones there (XChaCha20-Poly1305, bound to that ATTACH),
+under a key the client never has: `WithAttachSecretOptionsKey`, else the HTTP
+signing key (`VGI_SIGNING_KEY`) on HTTP, else a host-local key file shared by
+the user's VGI workers (`$VGI_ATTACH_SECRET_KEY_FILE`, else
+`$XDG_RUNTIME_DIR/vgi/attach-secret-options.key`, else
+`<temp>/vgi-<user>/attach-secret-options.key`; 32 bytes, mode 0600, created on
+first use). Workers that serve the same ATTACH must share that key. **Never
+put a credential into your own attach bytes** (`AttachDecision.AttachOpaqueData`)
+or into bind opaque data or function state: read it through `AttachOptions()`.
+A catalog that only needs to tell credentials apart can keep a digest instead.
+
+An `AttachValidator` can still put other per-ATTACH data into
+`AttachDecision.AttachOpaqueData`; functions read it back as
+`BindParams.AttachOpaqueData` / `InitParams.AttachScope` /
+`ProcessParams.AttachScope`, hooks as `TransactionHookContext.AttachOpaqueData`.
+Over HTTP the SDK seals the attach value, so a client can neither read nor
+forge it.
 
 ### Writable catalog tables
 

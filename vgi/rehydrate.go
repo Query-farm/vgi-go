@@ -205,7 +205,7 @@ func (w *Worker) rehydrateFinalize(s *FinalizeProducerState) error {
 // scope from the live request instead; this is the subprocess best-effort.
 func coldAttachScope(raw []byte) []byte {
 	if len(raw) >= attachUUIDLen {
-		return raw[attachUUIDLen:]
+		return stripAttachPlaintext(raw)
 	}
 	return raw
 }
@@ -231,7 +231,11 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 	if !w.sealOpaqueData {
 		txScope = bindParams.TransactionOpaqueData
 	}
+	attachOptions := bindParams.attachOptions
 	if recipe.ScopesOpened {
+		if attachOptions, err = w.attachOptionsOf(recipe.AttachOptionsScope); err != nil {
+			return nil, nil, err
+		}
 		txScope = recipe.TransactionScope
 		attachScope = recipe.AttachScope
 		bindParams.AttachOpaqueData = recipe.AttachScope
@@ -287,6 +291,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		AtValue:               bindParams.AtValue,
 		AttachScope:           attachScope,
 		TransactionOpaqueData: txScope,
+		attachOptions:         attachOptions,
 		CopyFrom:              bindParams.CopyFrom,
 		CopyTo:                bindParams.CopyTo,
 	}

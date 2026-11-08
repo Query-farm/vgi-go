@@ -44,6 +44,8 @@ type InitParams struct {
 	// sealed, so it is the same id the transaction hooks receive.
 	TransactionOpaqueData []byte
 
+	attachOptions *AttachOptions
+
 	// SplitTokens are the raw envelopes as they arrived; SplitPayloads are the
 	// verified worker payloads after the framework stripped them. A function
 	// reads SplitPayloads — an unverified token never reaches user code.
@@ -92,3 +94,7 @@ type GlobalInitResponse struct {
 	// OpaqueData is optional data passed to secondary inits.
 	OpaqueData []byte
 }
+
+// AttachOptions returns the options of the ATTACH this call runs under,
+// secret ones included. See BindParams.AttachOptions.
+func (p *InitParams) AttachOptions() *AttachOptions { return p.attachOptions }

@@ -31,7 +31,13 @@ type TransactionHookContext struct {
 	// Call is the RPC call context (auth, client logging). Nil when the hook
 	// is invoked outside an RPC, e.g. from a unit test.
 	Call *vgirpc.CallContext
+
+	attachOptions *AttachOptions
 }
+
+// AttachOptions returns the options of the transaction's ATTACH, secret ones
+// included (decrypted by the SDK). See ProcessParams.AttachOptions.
+func (c TransactionHookContext) AttachOptions() *AttachOptions { return c.attachOptions }
 
 // TransactionHooks are the worker's callbacks for DuckDB's BEGIN / COMMIT /
 // ROLLBACK on an ATTACH whose catalog_attach result reported
@@ -93,7 +99,8 @@ func (w *Worker) mayBeginTransactions() bool {
 // beginTransaction mints a transaction id for an opened attach value.
 func (w *Worker) beginTransaction(ctx context.Context, cc *vgirpc.CallContext, attach []byte) ([]byte, error) {
 	if w.transactionHooks.Begin != nil {
-		tx, err := w.transactionHooks.Begin(ctx, TransactionHookContext{AttachOpaqueData: attach, Call: cc})
+		tx, err := w.transactionHooks.Begin(ctx, TransactionHookContext{AttachOpaqueData: attach, Call: cc,
+			attachOptions: contextAttachOptions(cc)})
 		return tx, err
 	}
 	id, err := uuid.NewRandom()
@@ -114,7 +121,8 @@ func (w *Worker) endTransaction(ctx context.Context, cc *vgirpc.CallContext, att
 	}
 	var err error
 	if hook != nil {
-		err = hook(ctx, TransactionHookContext{AttachOpaqueData: attach, TransactionOpaqueData: tx, Call: cc})
+		err = hook(ctx, TransactionHookContext{AttachOpaqueData: attach, TransactionOpaqueData: tx, Call: cc,
+			attachOptions: contextAttachOptions(cc)})
 	}
 	w.clearTransactionState(tx)
 	return err

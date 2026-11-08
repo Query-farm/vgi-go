@@ -36,6 +36,8 @@ type AggregateProcessParams struct {
 	Auth         *vgirpc.AuthContext
 	// AttachOpaqueData is the catalog the function was invoked under (nil for ad-hoc calls).
 	AttachOpaqueData []byte
+	// attachOptions are the ATTACH's options (AttachOptions).
+	attachOptions *AttachOptions
 }
 
 // AggregateFunction is the interface every aggregate implements.
@@ -150,3 +152,7 @@ func gobDecodeState(data []byte) (interface{}, error) {
 	}
 	return state, nil
 }
+
+// AttachOptions returns the options of the ATTACH this aggregate runs under,
+// secret ones included. See ProcessParams.AttachOptions.
+func (p *AggregateProcessParams) AttachOptions() *AttachOptions { return p.attachOptions }

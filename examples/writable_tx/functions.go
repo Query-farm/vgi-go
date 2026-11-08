@@ -3,6 +3,7 @@
 package writable_tx
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
@@ -88,7 +89,7 @@ func (itemsScan) NewState(*vgi.ProcessParams) (*scanState, error) { return &scan
 func (itemsScan) Process(_ context.Context, p *vgi.ProcessParams, st *scanState, out *vgirpc.OutputCollector) error {
 	return emitOnce(st, out, p.OutputSchema, func() ([]map[string]any, error) {
 		var rows []map[string]any
-		err := withState(decodeAttach(p.AttachScope).Token, false, func(s *state) error {
+		err := withState(tokenOf(p.AttachOptions()), false, func(s *state) error {
 			for _, it := range s.visibleItems(p.TransactionOpaqueData) {
 				rows = append(rows, itemRow(it))
 			}
@@ -115,7 +116,7 @@ func (labelsScan) NewState(*vgi.ProcessParams) (*scanState, error) { return &sca
 func (labelsScan) Process(_ context.Context, p *vgi.ProcessParams, st *scanState, out *vgirpc.OutputCollector) error {
 	return emitOnce(st, out, p.OutputSchema, func() ([]map[string]any, error) {
 		var rows []map[string]any
-		err := withState(decodeAttach(p.AttachScope).Token, false, func(s *state) error {
+		err := withState(tokenOf(p.AttachOptions()), false, func(s *state) error {
 			for _, l := range s.Labels {
 				row := map[string]any{"id": l.ID}
 				if l.Label != nil {
@@ -180,7 +181,7 @@ func (itemsUpdate) Process(_ context.Context, p *vgi.ProcessParams, _ *writeStat
 		}
 	}
 	var olds, news []map[string]any
-	err = withState(decodeAttach(p.AttachScope).Token, true, func(s *state) error {
+	err = withState(tokenOf(p.AttachOptions()), true, func(s *state) error {
 		current := map[int32]Item{}
 		for _, it := range s.visibleItems(tx) {
 			current[it.ID] = it
@@ -284,7 +285,7 @@ func (resetFn) OnBind(*vgi.BindParams) (*vgi.BindResponse, error) {
 func (resetFn) NewState(*vgi.ProcessParams) (*scanState, error) { return &scanState{}, nil }
 func (resetFn) Process(_ context.Context, p *vgi.ProcessParams, st *scanState, out *vgirpc.OutputCollector) error {
 	return emitOnce(st, out, p.OutputSchema, func() ([]map[string]any, error) {
-		err := withState(decodeAttach(p.AttachScope).Token, true, func(s *state) error {
+		err := withState(tokenOf(p.AttachOptions()), true, func(s *state) error {
 			*s = *initialState()
 			return nil
 		})
@@ -297,6 +298,7 @@ type whoamiFn struct{}
 var whoamiSchema = arrow.NewSchema([]arrow.Field{
 	{Name: "token", Type: arrow.BinaryTypes.String, Nullable: true},
 	{Name: "transactional", Type: arrow.FixedWidthTypes.Boolean},
+	{Name: "token_in_attach_data", Type: arrow.FixedWidthTypes.Boolean},
 }, nil)
 
 func (whoamiFn) Name() string { return "whoami" }
@@ -310,10 +312,14 @@ func (whoamiFn) OnBind(*vgi.BindParams) (*vgi.BindResponse, error) {
 func (whoamiFn) NewState(*vgi.ProcessParams) (*scanState, error) { return &scanState{}, nil }
 func (whoamiFn) Process(_ context.Context, p *vgi.ProcessParams, st *scanState, out *vgirpc.OutputCollector) error {
 	return emitOnce(st, out, p.OutputSchema, func() ([]map[string]any, error) {
-		info := decodeAttach(p.AttachScope)
-		row := map[string]any{"transactional": info.Transactional}
-		if info.Token != nil {
-			row["token"] = *info.Token
+		opts := p.AttachOptions()
+		token := tokenOf(opts)
+		// Conformance: the token must never be in the attach bytes the SDK
+		// hands the catalog.
+		inAttach := token != nil && bytes.Contains(p.AttachScope, []byte(*token))
+		row := map[string]any{"transactional": transactionalOf(opts), "token_in_attach_data": inAttach}
+		if token != nil {
+			row["token"] = *token
 		}
 		return []map[string]any{row}, nil
 	})
@@ -363,7 +369,7 @@ func (eventsFn) NewState(*vgi.ProcessParams) (*scanState, error) { return &scanS
 func (eventsFn) Process(_ context.Context, p *vgi.ProcessParams, st *scanState, out *vgirpc.OutputCollector) error {
 	return emitOnce(st, out, p.OutputSchema, func() ([]map[string]any, error) {
 		var rows []map[string]any
-		err := withState(decodeAttach(p.AttachScope).Token, false, func(s *state) error {
+		err := withState(tokenOf(p.AttachOptions()), false, func(s *state) error {
 			for _, e := range s.Events {
 				rows = append(rows, map[string]any{"seq": e.Seq, "kind": e.Kind, "tx_id": e.TxID, "ok": e.OK})
 			}

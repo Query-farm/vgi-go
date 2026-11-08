@@ -645,7 +645,11 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 		// Minted and sealed like every other attach value: the
 		// "writable:<name>" bytes travel inside the seal, never as a
 		// plaintext the worker would trust on sight.
-		if res.AttachOpaqueData, err = w.mintAttach(res.AttachOpaqueData, callCtx); err != nil {
+		var wOptions []byte
+		if req.Options != nil {
+			wOptions = *req.Options
+		}
+		if res.AttachOpaqueData, err = w.mintAttachWithOptions(res.AttachOpaqueData, wOptions, w.attachOptionsFor(req.Name), callCtx); err != nil {
 			return CatalogAttachResultWire{}, err
 		}
 		return res, nil
@@ -877,7 +881,9 @@ func (w workerService) CatalogAttach(ctx context.Context, callCtx *vgirpc.CallCo
 	// Seal the attach value into an AEAD envelope bound to the
 	// caller's identity before it leaves the worker (HTTP transport;
 	// pass-through on subprocess / unix).
-	sealed, sErr := w.mintAttach(result.AttachOpaqueData, callCtx)
+	// The ATTACH's options travel in the attach value, secret ones
+	// encrypted (AttachOptions); never in the catalog's own bytes.
+	sealed, sErr := w.mintAttachWithOptions(result.AttachOpaqueData, optionsIPC, w.attachOptionsFor(req.Name), callCtx)
 	if sErr != nil {
 		return CatalogAttachResultWire{}, sErr
 	}

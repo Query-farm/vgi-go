@@ -57,6 +57,11 @@ type BindParams struct {
 	// Always non-nil; unauthenticated requests receive vgirpc.Anonymous().
 	Auth *vgirpc.AuthContext
 
+	// attachOptions are the ATTACH's options (AttachOptions); attachFramework
+	// is the opened uuid || options section, carried to rehydrated turns.
+	attachOptions   *AttachOptions
+	attachFramework []byte
+
 	// txBackend is the worker's shared storage backend, injected so OnBind can
 	// reach transaction-scoped state via TransactionStorage(). Unexported.
 	txBackend FunctionStorage
@@ -143,3 +148,8 @@ type BindResponse struct {
 	// ResolvedSecretsProvided=true and the resolved secrets in Secrets.
 	SecretScopeRequest []SecretLookup
 }
+
+// AttachOptions returns the options of the ATTACH this bind runs under,
+// secret ones included (decrypted by the SDK; never in the attach bytes).
+// Nil when the call has no attach or the ATTACH had no options.
+func (p *BindParams) AttachOptions() *AttachOptions { return p.attachOptions }

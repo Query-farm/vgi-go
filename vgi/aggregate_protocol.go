@@ -342,6 +342,7 @@ func (w *Worker) handleAggregateUpdate(ctx context.Context, callCtx *vgirpc.Call
 	if req.AttachOpaqueData != nil {
 		// Opened (and so verified) by shardKeyForAttachPtr above.
 		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
+		params.attachOptions, _ = w.openAttachOptions(*req.AttachOpaqueData, callCtx)
 	}
 
 	uniqueGIDs := uniqueInt64(gids)
@@ -435,6 +436,7 @@ func (w *Worker) handleAggregateCombine(ctx context.Context, callCtx *vgirpc.Cal
 	if req.AttachOpaqueData != nil {
 		// Opened (and so verified) by shardKeyForAttachPtr above.
 		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
+		params.attachOptions, _ = w.openAttachOptions(*req.AttachOpaqueData, callCtx)
 	}
 
 	allGIDs := uniqueInt64(append(append([]int64{}, srcIDs...), tgtIDs...))
@@ -528,6 +530,7 @@ func (w *Worker) handleAggregateFinalize(ctx context.Context, callCtx *vgirpc.Ca
 	if req.AttachOpaqueData != nil {
 		// Opened (and so verified) by shardKeyForAttachPtr above.
 		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
+		params.attachOptions, _ = w.openAttachOptions(*req.AttachOpaqueData, callCtx)
 	}
 
 	stored, err := bucket.loadStates(gids)
@@ -602,6 +605,7 @@ func (w *Worker) handleAggregateWindowInit(ctx context.Context, callCtx *vgirpc.
 		if req.AttachOpaqueData != nil {
 			// Opened (and so verified) by shardKeyForAttachPtr above.
 			params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
+			params.attachOptions, _ = w.openAttachOptions(*req.AttachOpaqueData, callCtx)
 		}
 		ws, err := wfn.WindowInit(partition, params)
 		if err != nil {
@@ -653,6 +657,7 @@ func (w *Worker) handleAggregateWindow(ctx context.Context, callCtx *vgirpc.Call
 	if req.AttachOpaqueData != nil {
 		// Opened (and so verified) by shardKeyForAttachPtr above.
 		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
+		params.attachOptions, _ = w.openAttachOptions(*req.AttachOpaqueData, callCtx)
 	}
 	if len(req.FrameStarts) != len(req.FrameEnds) {
 		return AggregateWindowResponseWire{}, fmt.Errorf("aggregate_window: frame_starts/frame_ends length mismatch")
@@ -709,6 +714,7 @@ func (w *Worker) handleAggregateWindowBatch(ctx context.Context, callCtx *vgirpc
 	if req.AttachOpaqueData != nil {
 		// Opened (and so verified) by shardKeyForAttachPtr above.
 		params.AttachOpaqueData, _ = w.openAttach(*req.AttachOpaqueData, callCtx)
+		params.attachOptions, _ = w.openAttachOptions(*req.AttachOpaqueData, callCtx)
 	}
 
 	if int(req.Count) != len(req.FramesPerRow) {

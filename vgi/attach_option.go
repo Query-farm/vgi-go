@@ -40,6 +40,11 @@ import (
 //
 //	ATTACH 'sales' (TYPE vgi, LOCATION 'https://worker.example.com', api_key getenv('SALES_API_KEY'));
 //
+// Functions and transaction hooks read a secret option's value with
+// AttachOptions() (ProcessParams, BindParams, InitParams,
+// TransactionHookContext, ...): the SDK carries it encrypted inside the attach
+// value, never in plaintext and never in the catalog's own attach bytes.
+//
 // Secret combines freely with Required (a credential the catalog cannot be
 // attached without). It is allowed with a default, but a secret option
 // normally has none: a default credential would be published to every client
