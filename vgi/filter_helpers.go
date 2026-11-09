@@ -3,6 +3,7 @@
 package vgi
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -302,13 +303,68 @@ func reprFilter(f Filter) string {
 	}
 }
 
+// ErrFilterNotTranslatable is returned (wrapped) by [PushdownFilters.ToSQLExact]
+// when a pushed filter has no exact SQL rendering. Test for it with errors.Is.
+var ErrFilterNotTranslatable = errors.New("vgi: filter has no exact SQL translation")
+
 // ToSQL converts filters to a SQL WHERE clause with parameters.
 // The quoteIdentifier function is used to quote column names (default: double quotes).
 // The placeholder is the parameter placeholder style ("?", "%s", etc.).
 // Returns the clause (excluding "WHERE" keyword) and parameter values.
+//
+// Deprecated: ToSQL WIDENS any filter it cannot translate to "1=1" (or, under
+// NOT, drops the whole negation to "1=1"). DuckDB removes every predicate it
+// pushes into a table function from its own plan and never re-checks the rows
+// the function returns, so a worker that builds its query from ToSQL silently
+// returns rows the query excludes whenever a filter is untranslatable. Use
+// [PushdownFilters.ToSQLExact], which returns an error naming the
+// untranslatable predicate instead, or set FunctionMetadata.AutoApplyFilters so
+// the SDK re-applies the filters to the rows the worker emits. ToSQL is kept
+// for source compatibility; for every filter ToSQLExact accepts, the two return
+// the same clause and parameters.
 func (pf *PushdownFilters) ToSQL(quoteIdentifier func(string) string, placeholder string) (string, []interface{}) {
-	if len(pf.Filters) == 0 {
-		return "", nil
+	sql, params, _ := pf.toSQL(quoteIdentifier, placeholder, true)
+	return sql, params
+}
+
+// ToSQLExact converts filters to a SQL WHERE clause (excluding the "WHERE"
+// keyword) with parameter values, exactly: the clause keeps precisely the rows
+// the pushed predicates keep, or ToSQLExact returns an error. It never widens.
+//
+// quoteIdentifier quotes column names (nil means Go-style double quotes) and
+// placeholder is the parameter marker repeated for each value ("?", "%s", ...).
+// An empty filter set yields ("", nil, nil).
+//
+// Translated shapes: comparisons of a column with a literal, IS [NOT] NULL,
+// IN and NOT IN over a literal or resolved join-key set (including DuckDB's
+// `not(in(...))` form and `in` with negated=true), boolean-column predicates,
+// AND / OR of translatable children, NOT of a translatable child, and struct
+// field filters. Any other predicate — e.g. an opaque v2 expression such as a
+// function call, arithmetic, a cast, or a column-to-column comparison — makes
+// ToSQLExact return an error wrapping [ErrFilterNotTranslatable] that names the
+// predicate. The caller should then fall back to filtering the rows itself
+// (FunctionMetadata.AutoApplyFilters, or [PushdownFilters.Apply]) and may still
+// push a weaker clause on its own responsibility.
+//
+// NULL semantics follow standard SQL three-valued logic, which DuckDB also
+// implements: `col NOT IN (a, NULL)` keeps no rows, a NULL column value never
+// satisfies IN / NOT IN over a non-empty set, and NOT of a NULL is NULL. A NULL
+// set element is passed as a nil parameter, which database/sql binds as SQL
+// NULL. An empty set renders as the constant "1=0" (IN) or "1=1" (NOT IN),
+// matching DuckDB, rather than the non-portable `col IN ()`.
+//
+// What ToSQLExact cannot guarantee is that the target database compares values
+// the way DuckDB does: collation and case sensitivity, implicit type coercion
+// (e.g. SQLite type affinity), NaN ordering, and timestamp/time-zone handling
+// are properties of the target engine. Where those differ, pair ToSQLExact with
+// AutoApplyFilters.
+func (pf *PushdownFilters) ToSQLExact(quoteIdentifier func(string) string, placeholder string) (string, []any, error) {
+	return pf.toSQL(quoteIdentifier, placeholder, false)
+}
+
+func (pf *PushdownFilters) toSQL(quoteIdentifier func(string) string, placeholder string, lenient bool) (string, []any, error) {
+	if pf == nil || len(pf.Filters) == 0 {
+		return "", nil, nil
 	}
 
 	if quoteIdentifier == nil {
@@ -316,15 +372,18 @@ func (pf *PushdownFilters) ToSQL(quoteIdentifier func(string) string, placeholde
 	}
 
 	var conditions []string
-	var params []interface{}
+	var params []any
 
 	for _, f := range pf.Filters {
-		sql, ps := filterToSQL(f, quoteIdentifier, placeholder)
+		sql, ps, err := filterToSQL(f, quoteIdentifier, placeholder, lenient)
+		if err != nil {
+			return "", nil, err
+		}
 		conditions = append(conditions, sql)
 		params = append(params, ps...)
 	}
 
-	return strings.Join(conditions, " AND "), params
+	return strings.Join(conditions, " AND "), params, nil
 }
 
 // collectColumnFilters collects filters for a column from top-level and
@@ -351,54 +410,174 @@ func (pf *PushdownFilters) collectColumnFilters(name string) []Filter {
 // SQL generation helper
 // ---------------------------------------------------------------------------
 
-func filterToSQL(f Filter, quote func(string) string, placeholder string) (string, []interface{}) {
-	col := quote(f.ColumnName())
-
+// filterToSQL renders one filter. With lenient=false an untranslatable filter
+// is an error wrapping ErrFilterNotTranslatable. With lenient=true (the
+// deprecated ToSQL behaviour) it widens to "1=1" instead. Widening is only
+// monotone outside NOT — under NOT "1=1" would become FALSE and drop every
+// row — so a NOT whose child is untranslatable widens as a whole.
+func filterToSQL(f Filter, quote func(string) string, placeholder string, lenient bool) (string, []any, error) {
 	switch ft := f.(type) {
 	case *ConstantFilter:
-		return fmt.Sprintf("%s %s %s", col, ft.Op.Symbol(), placeholder), []interface{}{scalarToGo(ft.Value)}
+		return fmt.Sprintf("%s %s %s", quote(f.ColumnName()), ft.Op.Symbol(), placeholder), []any{scalarToGo(ft.Value)}, nil
 
 	case *IsNullFilter:
-		return fmt.Sprintf("%s IS NULL", col), nil
+		return fmt.Sprintf("%s IS NULL", quote(f.ColumnName())), nil, nil
 
 	case *IsNotNullFilter:
-		return fmt.Sprintf("%s IS NOT NULL", col), nil
+		return fmt.Sprintf("%s IS NOT NULL", quote(f.ColumnName())), nil, nil
 
 	case *InFilter:
-		placeholders := make([]string, ft.Values.Len())
-		for i := range placeholders {
-			placeholders[i] = placeholder
+		if ft.Values == nil {
+			break
 		}
-		vals := arrayToGoSlice(ft.Values)
-		return fmt.Sprintf("%s IN (%s)", col, strings.Join(placeholders, ", ")), vals
+		sql, params := inListSQL(quote(f.ColumnName()), ft.Values, false, placeholder)
+		return sql, params, nil
 
-	case *AndFilter:
-		var parts []string
-		var params []interface{}
-		for _, child := range ft.Children {
-			sql, ps := filterToSQL(child, quote, placeholder)
+	case *AndFilter, *OrFilter:
+		var children []Filter
+		joiner := " AND "
+		if af, ok := ft.(*AndFilter); ok {
+			children = af.Children
+		} else {
+			children = ft.(*OrFilter).Children
+			joiner = " OR "
+		}
+		parts := make([]string, 0, len(children))
+		var params []any
+		for _, child := range children {
+			sql, ps, err := filterToSQL(child, quote, placeholder, lenient)
+			if err != nil {
+				return "", nil, err
+			}
 			parts = append(parts, sql)
 			params = append(params, ps...)
 		}
-		return fmt.Sprintf("(%s)", strings.Join(parts, " AND ")), params
-
-	case *OrFilter:
-		var parts []string
-		var params []interface{}
-		for _, child := range ft.Children {
-			sql, ps := filterToSQL(child, quote, placeholder)
-			parts = append(parts, sql)
-			params = append(params, ps...)
-		}
-		return fmt.Sprintf("(%s)", strings.Join(parts, " OR ")), params
+		return fmt.Sprintf("(%s)", strings.Join(parts, joiner)), params, nil
 
 	case *StructFilter:
 		nestedCol := fmt.Sprintf("%s.%s", f.ColumnName(), ft.ChildName)
-		return filterToSQL(ft.ChildFilter, func(_ string) string { return quote(nestedCol) }, placeholder)
+		return filterToSQL(ft.ChildFilter, func(_ string) string { return quote(nestedCol) }, placeholder, lenient)
 
-	default:
-		return "1=1", nil
+	case *v2FilterView:
+		if sql, params, ok := v2ViewToSQL(ft.expr, quote, placeholder); ok {
+			return sql, params, nil
+		}
 	}
+	if lenient {
+		return "1=1", nil, nil
+	}
+	return "", nil, fmt.Errorf("%w: %s", ErrFilterNotTranslatable, describeFilter(f))
+}
+
+// v2ViewToSQL renders the v2 shapes publicV2Filter deliberately leaves as an
+// opaque view because no ergonomic Filter type expresses them — today, the
+// negations. It reports ok=false for anything it cannot render exactly. The
+// child of a NOT is always rendered strictly: there is no exact negation of a
+// widened clause.
+func v2ViewToSQL(e *v2Expr, quote func(string) string, placeholder string) (string, []any, bool) {
+	if e == nil {
+		return "", nil, false
+	}
+	switch e.Node {
+	case "in":
+		// publicV2Filter projects only the positive form onto InFilter.
+		if e.Negated && e.Expression != nil && e.Expression.Node == "column_ref" && e.Set != nil && e.Set.Values != nil {
+			sql, params := inListSQL(quote(e.Expression.ColumnName), e.Set.Values, true, placeholder)
+			return sql, params, true
+		}
+	case "not":
+		if e.Expression == nil {
+			return "", nil, false
+		}
+		child := publicV2Filter(e.Expression)
+		// NOT (col IN set) is col NOT IN set under three-valued logic; render
+		// the idiomatic form. NOT (col NOT IN set) is the positive IN.
+		if in, ok := child.(*InFilter); ok && in.Values != nil {
+			sql, params := inListSQL(quote(in.ColumnName()), in.Values, true, placeholder)
+			return sql, params, true
+		}
+		if view, ok := child.(*v2FilterView); ok && view.expr != nil && view.expr.Node == "in" && view.expr.Negated &&
+			view.expr.Expression != nil && view.expr.Expression.Node == "column_ref" && view.expr.Set != nil && view.expr.Set.Values != nil {
+			sql, params := inListSQL(quote(view.expr.Expression.ColumnName), view.expr.Set.Values, false, placeholder)
+			return sql, params, true
+		}
+		sql, params, err := filterToSQL(child, quote, placeholder, false)
+		if err != nil {
+			return "", nil, false
+		}
+		return "NOT (" + sql + ")", params, true
+	}
+	return "", nil, false
+}
+
+// inListSQL renders col [NOT] IN (?, ...). An empty set is a constant, as in
+// DuckDB: IN () keeps nothing and NOT IN () keeps everything, NULLs included.
+func inListSQL(col string, values arrow.Array, negated bool, placeholder string) (string, []any) {
+	if values.Len() == 0 {
+		if negated {
+			return "1=1", nil
+		}
+		return "1=0", nil
+	}
+	placeholders := make([]string, values.Len())
+	for i := range placeholders {
+		placeholders[i] = placeholder
+	}
+	op := "IN"
+	if negated {
+		op = "NOT IN"
+	}
+	return fmt.Sprintf("%s %s (%s)", col, op, strings.Join(placeholders, ", ")), arrayToGoSlice(values)
+}
+
+// describeFilter names a filter for an error message: its Repr, plus the v2
+// expression shape for an opaque v2 view (whose Repr is only its type name).
+func describeFilter(f Filter) string {
+	if view, ok := f.(*v2FilterView); ok {
+		return fmt.Sprintf("%s v2 expression %s", reprFilter(f), describeV2Expr(view.expr))
+	}
+	return reprFilter(f)
+}
+
+// describeV2Expr renders the node structure of a v2 expression, e.g.
+// not(in(column_ref(region), set[2])). Values are summarised, not printed.
+func describeV2Expr(e *v2Expr) string {
+	if e == nil {
+		return "<nil>"
+	}
+	var args []string
+	switch e.Node {
+	case "column_ref":
+		return "column_ref(" + e.ColumnName + ")"
+	case "field_ref":
+		return "field_ref(" + describeV2Expr(e.Expression) + "." + e.FieldName + ")"
+	case "literal":
+		return "literal"
+	case "call":
+		args = append(args, e.Function)
+		for _, a := range e.Arguments {
+			args = append(args, describeV2Expr(a))
+		}
+	default:
+		if e.Op != "" {
+			args = append(args, e.Op)
+		}
+		for _, child := range []*v2Expr{e.Expression, e.Left, e.Right} {
+			if child != nil {
+				args = append(args, describeV2Expr(child))
+			}
+		}
+		for _, child := range e.Children {
+			args = append(args, describeV2Expr(child))
+		}
+		if e.Set != nil && e.Set.Values != nil {
+			args = append(args, fmt.Sprintf("set[%d]", e.Set.Values.Len()))
+		}
+		if e.Negated {
+			args = append(args, "negated")
+		}
+	}
+	return e.Node + "(" + strings.Join(args, ", ") + ")"
 }
 
 // ---------------------------------------------------------------------------

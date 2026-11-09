@@ -4,6 +4,7 @@ package vgi
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -478,4 +479,225 @@ func TestFilterV2NonBooleanColumnIsStillRefusedAsPredicateRoot(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "predicate root") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// NOT IN, negated IN, and the exact SQL rendering
+//
+// DuckDB sends `region NOT IN ('west','east')` as not(in(...)) and may send a
+// negated IN directly. Neither projects onto an ergonomic Filter type, so both
+// reached ToSQL as an opaque v2FilterView and rendered "1=1": the worker
+// returned every row, and DuckDB — which removed the predicate from its own
+// plan when it pushed it — returned them to the user. ToSQLExact renders them
+// exactly and refuses, with an error, anything it cannot render.
+// ---------------------------------------------------------------------------
+
+func regionOutputSchema() *arrow.Schema {
+	return arrow.NewSchema([]arrow.Field{
+		{Name: "region", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	}, nil)
+}
+
+// regionInputBatch is region = west, east, north, NULL with n = 1..4.
+func regionInputBatch(t *testing.T) arrow.RecordBatch {
+	t.Helper()
+	mem := memory.NewGoAllocator()
+	regions := array.NewStringBuilder(mem)
+	regions.AppendValues([]string{"west", "east", "north", ""}, []bool{true, true, true, false})
+	regionArray := regions.NewArray()
+	regions.Release()
+	ints := array.NewInt64Builder(mem)
+	ints.AppendValues([]int64{1, 2, 3, 4}, nil)
+	intArray := ints.NewArray()
+	ints.Release()
+	batch := array.NewRecordBatch(regionOutputSchema(), []arrow.Array{regionArray, intArray}, 4)
+	regionArray.Release()
+	intArray.Release()
+	return batch
+}
+
+const regionRef = `{"node":"column_ref","column_index":0,"column_name":"region"}`
+const regionNRef = `{"node":"column_ref","column_index":1,"column_name":"n"}`
+
+// regionFilters decodes one required predicate against regionOutputSchema.
+// value_0 is a list<string> literal set (a nil element is a NULL); value_1 is
+// the int64 literal 2, for comparisons.
+func regionFilters(t *testing.T, expression string, set []*string) *PushdownFilters {
+	t.Helper()
+	mem := memory.NewGoAllocator()
+	lb := array.NewListBuilder(mem, arrow.BinaryTypes.String)
+	vb := lb.ValueBuilder().(*array.StringBuilder)
+	lb.Append(true)
+	for _, v := range set {
+		if v == nil {
+			vb.AppendNull()
+		} else {
+			vb.Append(*v)
+		}
+	}
+	// The decoded filters reference the payload arrays, so they live as long
+	// as the test.
+	list := lb.NewArray()
+	lb.Release()
+	t.Cleanup(list.Release)
+	ib := array.NewInt64Builder(mem)
+	ib.Append(2)
+	two := ib.NewArray()
+	ib.Release()
+	t.Cleanup(two.Release)
+
+	document := `{"encoding":"vgi.filters.v2","semantics":"vgi.duckdb.standard.v1","kind":"snapshot","predicates":[{"id":"p","revision":0,"mode":"required","source":"query","expression":` + expression + `}]}`
+	encoded := filterV2Batch(t, document,
+		[]arrow.Field{
+			{Name: "value_0", Type: arrow.ListOf(arrow.BinaryTypes.String), Nullable: true},
+			{Name: "value_1", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		},
+		[]arrow.Array{list, two})
+	t.Cleanup(encoded.Release)
+	filters, err := DeserializeFiltersWithSchema(encoded, regionOutputSchema(), nil)
+	if err != nil {
+		t.Fatalf("deserialize %s: %v", expression, err)
+	}
+	return filters
+}
+
+func strp(s string) *string { return &s }
+
+func regionIn(negated bool) string {
+	neg := "false"
+	if negated {
+		neg = "true"
+	}
+	return `{"node":"in","expression":` + regionRef + `,"set":{"kind":"literal","value_ref":0},"negated":` + neg + `}`
+}
+
+func notOf(expression string) string { return `{"node":"not","expression":` + expression + `}` }
+
+// assertExactSQL checks ToSQLExact renders want/params, and that the
+// deprecated ToSQL agrees with it on every filter ToSQLExact accepts.
+func assertExactSQL(t *testing.T, label string, filters *PushdownFilters, want string, wantParams []any) {
+	t.Helper()
+	identity := func(s string) string { return s }
+	sql, params, err := filters.ToSQLExact(identity, "?")
+	if err != nil {
+		t.Fatalf("%s: ToSQLExact error: %v", label, err)
+	}
+	if sql != want || len(params) != len(wantParams) {
+		t.Fatalf("%s: ToSQLExact rendered %q with %v, want %q with %v", label, sql, params, want, wantParams)
+	}
+	for i := range params {
+		if params[i] != wantParams[i] {
+			t.Fatalf("%s: param %d = %#v, want %#v", label, i, params[i], wantParams[i])
+		}
+	}
+	legacy, legacyParams := filters.ToSQL(identity, "?")
+	if legacy != sql || len(legacyParams) != len(params) {
+		t.Fatalf("%s: ToSQL rendered %q with %v, ToSQLExact %q with %v", label, legacy, legacyParams, sql, params)
+	}
+}
+
+func TestFilterV2NotInRendersAsSQL(t *testing.T) {
+	input := regionInputBatch(t)
+	defer input.Release()
+	westEast := []*string{strp("west"), strp("east")}
+
+	// DuckDB's form: not(in(...)). Only north survives — NULL NOT IN (...) is
+	// NULL, which is not satisfied, in DuckDB and in standard SQL alike.
+	notIn := regionFilters(t, notOf(regionIn(false)), westEast)
+	if got := remainingInts(t, notIn, input); len(got) != 1 || got[0] != 3 {
+		t.Fatalf("NOT IN kept %v, want [3]", got)
+	}
+	assertExactSQL(t, "not(in)", notIn, "region NOT IN (?, ?)", []any{"west", "east"})
+
+	// The same predicate as a negated IN node.
+	negatedIn := regionFilters(t, regionIn(true), westEast)
+	if got := remainingInts(t, negatedIn, input); len(got) != 1 || got[0] != 3 {
+		t.Fatalf("negated IN kept %v, want [3]", got)
+	}
+	assertExactSQL(t, "in negated", negatedIn, "region NOT IN (?, ?)", []any{"west", "east"})
+
+	// A double negation is the positive IN.
+	assertExactSQL(t, "not(in negated)", regionFilters(t, notOf(regionIn(true)), westEast),
+		"region IN (?, ?)", []any{"west", "east"})
+
+	// Quoting goes through the caller's quoter.
+	sql, _, err := notIn.ToSQLExact(func(s string) string { return `"` + s + `"` }, "?")
+	if err != nil || sql != `"region" NOT IN (?, ?)` {
+		t.Fatalf("quoted NOT IN rendered %q, %v", sql, err)
+	}
+}
+
+func TestFilterV2NotInWithNullInSetKeepsNothing(t *testing.T) {
+	// x NOT IN ('west', NULL) is never TRUE: it is FALSE for west and NULL for
+	// everything else. The NULL travels as a nil parameter, which binds as SQL
+	// NULL, so the rendered clause has the same meaning.
+	input := regionInputBatch(t)
+	defer input.Release()
+	filters := regionFilters(t, notOf(regionIn(false)), []*string{strp("west"), nil})
+	if got := remainingInts(t, filters, input); len(got) != 0 {
+		t.Fatalf("NOT IN with a NULL element kept %v, want []", got)
+	}
+	assertExactSQL(t, "not(in) with NULL", filters, "region NOT IN (?, ?)", []any{"west", nil})
+}
+
+func TestFilterV2NotOverTranslatableChildRendersAsSQL(t *testing.T) {
+	gtTwo := `{"node":"comparison","op":"gt","left":` + regionNRef + `,"right":{"node":"literal","value_ref":1}}`
+	isNull := `{"node":"is_null","expression":` + regionRef + `,"negated":false}`
+	and := `{"node":"and","children":[` + gtTwo + `,` + isNull + `]}`
+	assertExactSQL(t, "not(and)", regionFilters(t, notOf(and), nil),
+		"NOT ((n > ? AND region IS NULL))", []any{int64(2)})
+}
+
+func TestFilterV2UntranslatableFilterIsAnErrorNotAWidening(t *testing.T) {
+	identity := func(s string) string { return s }
+	// A column-to-column comparison has no ergonomic projection.
+	selfCompare := `{"node":"comparison","op":"eq","left":` + regionRef + `,"right":` + regionRef + `}`
+	gtTwo := `{"node":"comparison","op":"gt","left":` + regionNRef + `,"right":{"node":"literal","value_ref":1}}`
+
+	for _, test := range []struct {
+		label, expression, legacy string
+	}{
+		{"bare", selfCompare, "1=1"},
+		{"not over untranslatable", notOf(selfCompare), "1=1"},
+		// Under NOT, widening the child would narrow the result; ToSQL widens
+		// the whole negation instead.
+		{"untranslatable inside not(and)", notOf(`{"node":"and","children":[` + gtTwo + `,` + selfCompare + `]}`), "1=1"},
+		{"untranslatable inside and", `{"node":"and","children":[` + gtTwo + `,` + notOf(selfCompare) + `]}`, "(n > ? AND 1=1)"},
+	} {
+		filters := regionFilters(t, test.expression, nil)
+		sql, params, err := filters.ToSQLExact(identity, "?")
+		if err == nil {
+			t.Fatalf("%s: ToSQLExact rendered %q with %v, want an error", test.label, sql, params)
+		}
+		if !errors.Is(err, ErrFilterNotTranslatable) || !strings.Contains(err.Error(), "comparison(eq, column_ref(region), column_ref(region))") {
+			t.Fatalf("%s: unexpected error: %v", test.label, err)
+		}
+		if sql != "" || params != nil {
+			t.Fatalf("%s: ToSQLExact returned %q / %v alongside its error", test.label, sql, params)
+		}
+		// The deprecated ToSQL keeps its widening behaviour.
+		if legacy, _ := filters.ToSQL(identity, "?"); legacy != test.legacy {
+			t.Fatalf("%s: ToSQL rendered %q, want %q", test.label, legacy, test.legacy)
+		}
+	}
+}
+
+func TestFilterV2ExistingShapesRenderUnchanged(t *testing.T) {
+	westEast := []*string{strp("west"), strp("east")}
+	gtTwo := `{"node":"comparison","op":"gt","left":` + regionNRef + `,"right":{"node":"literal","value_ref":1}}`
+	ltTwoFlipped := `{"node":"comparison","op":"gt","left":{"node":"literal","value_ref":1},"right":` + regionNRef + `}`
+	isNotNull := `{"node":"is_null","expression":` + regionRef + `,"negated":true}`
+
+	assertExactSQL(t, "comparison", regionFilters(t, gtTwo, nil), "n > ?", []any{int64(2)})
+	assertExactSQL(t, "flipped comparison", regionFilters(t, ltTwoFlipped, nil), "n < ?", []any{int64(2)})
+	assertExactSQL(t, "is not null", regionFilters(t, isNotNull, nil), "region IS NOT NULL", nil)
+	assertExactSQL(t, "in", regionFilters(t, regionIn(false), westEast), "region IN (?, ?)", []any{"west", "east"})
+	assertExactSQL(t, "or", regionFilters(t, `{"node":"or","children":[`+gtTwo+`,`+regionIn(false)+`]}`, westEast),
+		"(n > ? OR region IN (?, ?))", []any{int64(2), "west", "east"})
+	assertExactSQL(t, "empty", &PushdownFilters{}, "", nil)
+
+	// An empty set is a constant in DuckDB; `col IN ()` is not portable SQL.
+	assertExactSQL(t, "empty in", regionFilters(t, regionIn(false), nil), "1=0", nil)
+	assertExactSQL(t, "empty not in", regionFilters(t, notOf(regionIn(false)), nil), "1=1", nil)
 }

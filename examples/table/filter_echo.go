@@ -140,7 +140,11 @@ func formatOneFilter(f vgi.Filter) string {
 	}
 	// Fall back to single-filter SQL rendering with inlined params.
 	pf := &vgi.PushdownFilters{Filters: []vgi.Filter{f}}
-	sql, params := pf.ToSQL(func(s string) string { return s }, "?")
+	sql, params, err := pf.ToSQLExact(func(s string) string { return s }, "?")
+	if err != nil {
+		// Display only: name the shape rather than inventing a clause for it.
+		return "(untranslatable)"
+	}
 	return inlineParams(sql, params)
 }
 
