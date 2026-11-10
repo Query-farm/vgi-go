@@ -260,6 +260,24 @@
    "wkt": "GEOMETRYCOLLECTION(POINT(nan nan), POINT(3 3))",
    "wkb_le": "0107000000020000000101000000000000000000f87f000000000000f87f010100000000000000000008400000000000000840",
    "wkb_be": "00000000070000000200000000017ff80000000000007ff8000000000000000000000140080000000000004008000000000000"
+  },
+  {
+   "name": "pt_z_nan_xy",
+   "wkt": "POINT Z (nan nan 5)",
+   "wkb_le": "01e9030000000000000000f87f000000000000f87f0000000000001440",
+   "wkb_be": "00000003e97ff80000000000007ff80000000000004014000000000000"
+  },
+  {
+   "name": "pt_z_all_nan",
+   "wkt": "POINT Z (nan nan nan)",
+   "wkb_le": "01e9030000000000000000f87f000000000000f87f000000000000f87f",
+   "wkb_be": "00000003e97ff80000000000007ff80000000000007ff8000000000000"
+  },
+  {
+   "name": "mpt_z_nan_xy_member",
+   "wkt": "MULTIPOINT Z ((nan nan 5), (9 9 9))",
+   "wkb_le": "01ec0300000200000001e9030000000000000000f87f000000000000f87f000000000000144001e9030000000000000000224000000000000022400000000000002240",
+   "wkb_be": "00000003ec0000000200000003e97ff80000000000007ff8000000000000401400000000000000000003e9402200000000000040220000000000004022000000000000"
   }
  ],
  "cases": [
@@ -479,6 +497,21 @@
    "expected": false
   },
   {
+   "left": "pt_origin",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_origin",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_origin",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_one",
    "right": "pt_origin",
    "expected": false
@@ -694,6 +727,21 @@
    "expected": false
   },
   {
+   "left": "pt_one",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_one",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_one",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_half",
    "right": "pt_origin",
    "expected": false
@@ -909,6 +957,21 @@
    "expected": false
   },
   {
+   "left": "pt_half",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_half",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_half",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_far",
    "right": "pt_origin",
    "expected": false
@@ -1124,6 +1187,21 @@
    "expected": false
   },
   {
+   "left": "pt_far",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_far",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_far",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_neg",
    "right": "pt_origin",
    "expected": false
@@ -1339,6 +1417,21 @@
    "expected": false
   },
   {
+   "left": "pt_neg",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_neg",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_neg",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_just_outside",
    "right": "pt_origin",
    "expected": false
@@ -1554,6 +1647,21 @@
    "expected": false
   },
   {
+   "left": "pt_just_outside",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_just_outside",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_just_outside",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_huge",
    "right": "pt_origin",
    "expected": false
@@ -1769,6 +1877,21 @@
    "expected": false
   },
   {
+   "left": "pt_huge",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_huge",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_huge",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_nan_x",
    "right": "pt_origin",
    "expected": false
@@ -1984,6 +2107,21 @@
    "expected": false
   },
   {
+   "left": "pt_nan_x",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_nan_x",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_nan_x",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_nan_y",
    "right": "pt_origin",
    "expected": false
@@ -2199,6 +2337,21 @@
    "expected": false
   },
   {
+   "left": "pt_nan_y",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_nan_y",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_nan_y",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_nan_xy",
    "right": "pt_origin",
    "expected": false
@@ -2414,6 +2567,21 @@
    "expected": false
   },
   {
+   "left": "pt_nan_xy",
+   "right": "pt_z_nan_xy",
+   "expected": false
+  },
+  {
+   "left": "pt_nan_xy",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_nan_xy",
+   "right": "mpt_z_nan_xy_member",
+   "expected": false
+  },
+  {
    "left": "pt_inf_x",
    "right": "pt_origin",
    "expected": false
@@ -2629,6 +2797,21 @@
    "expected": false
   },
   {
+   "left": "pt_inf_x",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_inf_x",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_inf_x",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_neginf_x",
    "right": "pt_origin",
    "expected": false
@@ -2844,6 +3027,21 @@
    "expected": false
   },
   {
+   "left": "pt_neginf_x",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_neginf_x",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_neginf_x",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_empty",
    "right": "pt_origin",
    "expected": false
@@ -3059,6 +3257,21 @@
    "expected": false
   },
   {
+   "left": "pt_empty",
+   "right": "pt_z_nan_xy",
+   "expected": false
+  },
+  {
+   "left": "pt_empty",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_empty",
+   "right": "mpt_z_nan_xy_member",
+   "expected": false
+  },
+  {
    "left": "pt_z",
    "right": "pt_origin",
    "expected": false
@@ -3274,6 +3487,21 @@
    "expected": false
   },
   {
+   "left": "pt_z",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_z",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_z",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_m",
    "right": "pt_origin",
    "expected": false
@@ -3489,6 +3717,21 @@
    "expected": false
   },
   {
+   "left": "pt_m",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_m",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_m",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_zm",
    "right": "pt_origin",
    "expected": false
@@ -3704,6 +3947,21 @@
    "expected": false
   },
   {
+   "left": "pt_zm",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_zm",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_zm",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "pt_z_nan_z",
    "right": "pt_origin",
    "expected": false
@@ -3919,6 +4177,21 @@
    "expected": false
   },
   {
+   "left": "pt_z_nan_z",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_z",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_z_nan_z",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "ls_diag",
    "right": "pt_origin",
    "expected": true
@@ -4134,6 +4407,21 @@
    "expected": false
   },
   {
+   "left": "ls_diag",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "ls_diag",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "ls_diag",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "ls_edge",
    "right": "pt_origin",
    "expected": false
@@ -4349,6 +4637,21 @@
    "expected": false
   },
   {
+   "left": "ls_edge",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "ls_edge",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "ls_edge",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "ls_far",
    "right": "pt_origin",
    "expected": false
@@ -4564,6 +4867,21 @@
    "expected": true
   },
   {
+   "left": "ls_far",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "ls_far",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "ls_far",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "ls_empty",
    "right": "pt_origin",
    "expected": false
@@ -4779,6 +5097,21 @@
    "expected": false
   },
   {
+   "left": "ls_empty",
+   "right": "pt_z_nan_xy",
+   "expected": false
+  },
+  {
+   "left": "ls_empty",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "ls_empty",
+   "right": "mpt_z_nan_xy_member",
+   "expected": false
+  },
+  {
    "left": "ls_nan_vertex",
    "right": "pt_origin",
    "expected": true
@@ -4994,6 +5327,21 @@
    "expected": false
   },
   {
+   "left": "ls_nan_vertex",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "ls_nan_vertex",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "ls_nan_vertex",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "poly_unit",
    "right": "pt_origin",
    "expected": true
@@ -5209,6 +5557,21 @@
    "expected": false
   },
   {
+   "left": "poly_unit",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "poly_unit",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "poly_unit",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "poly_far",
    "right": "pt_origin",
    "expected": false
@@ -5424,6 +5787,21 @@
    "expected": true
   },
   {
+   "left": "poly_far",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "poly_far",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "poly_far",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "poly_hole",
    "right": "pt_origin",
    "expected": true
@@ -5639,6 +6017,21 @@
    "expected": true
   },
   {
+   "left": "poly_hole",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "poly_hole",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "poly_hole",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "poly_empty",
    "right": "pt_origin",
    "expected": false
@@ -5854,6 +6247,21 @@
    "expected": false
   },
   {
+   "left": "poly_empty",
+   "right": "pt_z_nan_xy",
+   "expected": false
+  },
+  {
+   "left": "poly_empty",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "poly_empty",
+   "right": "mpt_z_nan_xy_member",
+   "expected": false
+  },
+  {
    "left": "mpt",
    "right": "pt_origin",
    "expected": true
@@ -6069,6 +6477,21 @@
    "expected": false
   },
   {
+   "left": "mpt",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "mpt",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "mpt",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "mpt_with_empty",
    "right": "pt_origin",
    "expected": false
@@ -6284,6 +6707,21 @@
    "expected": true
   },
   {
+   "left": "mpt_with_empty",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "mpt_with_empty",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "mpt_with_empty",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "mpt_empty",
    "right": "pt_origin",
    "expected": false
@@ -6499,6 +6937,21 @@
    "expected": false
   },
   {
+   "left": "mpt_empty",
+   "right": "pt_z_nan_xy",
+   "expected": false
+  },
+  {
+   "left": "mpt_empty",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "mpt_empty",
+   "right": "mpt_z_nan_xy_member",
+   "expected": false
+  },
+  {
    "left": "mls",
    "right": "pt_origin",
    "expected": true
@@ -6714,6 +7167,21 @@
    "expected": true
   },
   {
+   "left": "mls",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "mls",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "mls",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "mpoly",
    "right": "pt_origin",
    "expected": false
@@ -6929,6 +7397,21 @@
    "expected": true
   },
   {
+   "left": "mpoly",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "mpoly",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "mpoly",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "mpoly_empty",
    "right": "pt_origin",
    "expected": false
@@ -7144,6 +7627,21 @@
    "expected": false
   },
   {
+   "left": "mpoly_empty",
+   "right": "pt_z_nan_xy",
+   "expected": false
+  },
+  {
+   "left": "mpoly_empty",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "mpoly_empty",
+   "right": "mpt_z_nan_xy_member",
+   "expected": false
+  },
+  {
    "left": "gc_empty",
    "right": "pt_origin",
    "expected": false
@@ -7359,6 +7857,21 @@
    "expected": false
   },
   {
+   "left": "gc_empty",
+   "right": "pt_z_nan_xy",
+   "expected": false
+  },
+  {
+   "left": "gc_empty",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "gc_empty",
+   "right": "mpt_z_nan_xy_member",
+   "expected": false
+  },
+  {
    "left": "gc_empty_parts",
    "right": "pt_origin",
    "expected": false
@@ -7574,6 +8087,21 @@
    "expected": false
   },
   {
+   "left": "gc_empty_parts",
+   "right": "pt_z_nan_xy",
+   "expected": false
+  },
+  {
+   "left": "gc_empty_parts",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "gc_empty_parts",
+   "right": "mpt_z_nan_xy_member",
+   "expected": false
+  },
+  {
    "left": "gc_mixed",
    "right": "pt_origin",
    "expected": false
@@ -7789,6 +8317,21 @@
    "expected": false
   },
   {
+   "left": "gc_mixed",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "gc_mixed",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "gc_mixed",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "gc_nested",
    "right": "pt_origin",
    "expected": false
@@ -8004,6 +8547,21 @@
    "expected": true
   },
   {
+   "left": "gc_nested",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "gc_nested",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "gc_nested",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "gc_nan_part",
    "right": "pt_origin",
    "expected": false
@@ -8219,6 +8777,21 @@
    "expected": true
   },
   {
+   "left": "gc_nan_part",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "gc_nan_part",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "gc_nan_part",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "ls_nan_nan_vertex",
    "right": "pt_origin",
    "expected": true
@@ -8434,6 +9007,21 @@
    "expected": true
   },
   {
+   "left": "ls_nan_nan_vertex",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "ls_nan_nan_vertex",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "ls_nan_nan_vertex",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "ls_all_nan",
    "right": "pt_origin",
    "expected": true
@@ -8649,6 +9237,21 @@
    "expected": true
   },
   {
+   "left": "ls_all_nan",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "ls_all_nan",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "ls_all_nan",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "ls_mixed_nan",
    "right": "pt_origin",
    "expected": true
@@ -8864,6 +9467,21 @@
    "expected": true
   },
   {
+   "left": "ls_mixed_nan",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "ls_mixed_nan",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "ls_mixed_nan",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "poly_nan_vertex",
    "right": "pt_origin",
    "expected": true
@@ -9079,6 +9697,21 @@
    "expected": true
   },
   {
+   "left": "poly_nan_vertex",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "poly_nan_vertex",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "poly_nan_vertex",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "mpt_nan_member",
    "right": "pt_origin",
    "expected": false
@@ -9294,6 +9927,21 @@
    "expected": false
   },
   {
+   "left": "mpt_nan_member",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "mpt_nan_member",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "mpt_nan_member",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
    "left": "gc_nan_nan_point",
    "right": "pt_origin",
    "expected": false
@@ -9506,6 +10154,711 @@
   {
    "left": "gc_nan_nan_point",
    "right": "gc_nan_nan_point",
+   "expected": true
+  },
+  {
+   "left": "gc_nan_nan_point",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "gc_nan_nan_point",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "gc_nan_nan_point",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_origin",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_one",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_half",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_far",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_neg",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_just_outside",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_huge",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_nan_x",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_nan_y",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_nan_xy",
+   "expected": false
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_inf_x",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_neginf_x",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_z",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_m",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_zm",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_z_nan_z",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "ls_diag",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "ls_edge",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "ls_far",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "ls_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "ls_nan_vertex",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "poly_unit",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "poly_far",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "poly_hole",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "poly_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "mpt",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "mpt_with_empty",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "mpt_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "mls",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "mpoly",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "mpoly_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "gc_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "gc_empty_parts",
+   "expected": false
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "gc_mixed",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "gc_nested",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "gc_nan_part",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "ls_nan_nan_vertex",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "ls_all_nan",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "ls_mixed_nan",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "poly_nan_vertex",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "mpt_nan_member",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "gc_nan_nan_point",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_z_nan_xy",
+   "right": "mpt_z_nan_xy_member",
+   "expected": true
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_origin",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_one",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_half",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_far",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_neg",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_just_outside",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_huge",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_nan_x",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_nan_y",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_nan_xy",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_inf_x",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_neginf_x",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_z",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_m",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_zm",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_z_nan_z",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "ls_diag",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "ls_edge",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "ls_far",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "ls_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "ls_nan_vertex",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "poly_unit",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "poly_far",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "poly_hole",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "poly_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "mpt",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "mpt_with_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "mpt_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "mls",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "mpoly",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "mpoly_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "gc_empty",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "gc_empty_parts",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "gc_mixed",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "gc_nested",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "gc_nan_part",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "ls_nan_nan_vertex",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "ls_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "ls_mixed_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "poly_nan_vertex",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "mpt_nan_member",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "gc_nan_nan_point",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_z_nan_xy",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "pt_z_all_nan",
+   "right": "mpt_z_nan_xy_member",
+   "expected": false
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_origin",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_one",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_half",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_far",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_neg",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_just_outside",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_huge",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_nan_x",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_nan_y",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_nan_xy",
+   "expected": false
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_inf_x",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_neginf_x",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_empty",
+   "expected": false
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_z",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_m",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_zm",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_z_nan_z",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "ls_diag",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "ls_edge",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "ls_far",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "ls_empty",
+   "expected": false
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "ls_nan_vertex",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "poly_unit",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "poly_far",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "poly_hole",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "poly_empty",
+   "expected": false
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "mpt",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "mpt_with_empty",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "mpt_empty",
+   "expected": false
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "mls",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "mpoly",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "mpoly_empty",
+   "expected": false
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "gc_empty",
+   "expected": false
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "gc_empty_parts",
+   "expected": false
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "gc_mixed",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "gc_nested",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "gc_nan_part",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "ls_nan_nan_vertex",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "ls_all_nan",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "ls_mixed_nan",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "poly_nan_vertex",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "mpt_nan_member",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "gc_nan_nan_point",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_z_nan_xy",
+   "expected": true
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "pt_z_all_nan",
+   "expected": false
+  },
+  {
+   "left": "mpt_z_nan_xy_member",
+   "right": "mpt_z_nan_xy_member",
    "expected": true
   }
  ]

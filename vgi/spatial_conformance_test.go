@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -173,13 +174,63 @@ func TestIntersectsExtentUnreadableWKB(t *testing.T) {
 	}
 }
 
-// ToSQLExact has no SQL rendering for intersects_extent and declines it rather
-// than widening it to 1=1.
-func TestIntersectsExtentIsNotTranslatedToSQL(t *testing.T) {
+// ToSQLExact has no SQL rendering for intersects_extent. A required one is an
+// error rather than a clause widened to 1=1; an advisory one, which DuckDB
+// derives from ST_Intersects and friends and keeps an exact residual for, is
+// omitted instead of failing the query. A translatable advisory predicate is
+// still pushed.
+func TestToSQLExactOmitsUntranslatableAdvisoryPredicates(t *testing.T) {
 	one, _ := hex.DecodeString("0101000000000000000000f03f000000000000f03f")
-	for _, mode := range []string{"required", "advisory"} {
-		if _, _, err := spatialFilters(t, mode, one).ToSQLExact(nil, "?"); !errors.Is(err, ErrFilterNotTranslatable) {
-			t.Fatalf("%s: ToSQLExact returned %v, want ErrFilterNotTranslatable", mode, err)
-		}
+	spatial := func(id, mode string) string {
+		return `{"id":"` + id + `","revision":0,"mode":"` + mode + `","source":"query","expression":{"node":"call","function":{"namespace":"duckdb.spatial","name":"intersects_extent","version":1},"arguments":[{"node":"column_ref","column_index":0,"column_name":"geom"},{"node":"literal","value_ref":0}]}}`
 	}
+	greater := func(id, mode string) string {
+		return `{"id":"` + id + `","revision":0,"mode":"` + mode + `","source":"query","expression":{"node":"comparison","op":"gt","left":{"node":"column_ref","column_index":1,"column_name":"n"},"right":{"node":"literal","value_ref":1}}}`
+	}
+	toSQL := func(t *testing.T, predicates ...string) (string, []any, error) {
+		t.Helper()
+		document := `{"encoding":"vgi.filters.v2","semantics":"vgi.duckdb.standard.v1","kind":"snapshot","predicates":[` + strings.Join(predicates, ",") + `]}`
+		geom := binaryArray(one)
+		t.Cleanup(geom.Release)
+		ints := array.NewInt64Builder(memory.NewGoAllocator())
+		ints.Append(2)
+		n := ints.NewArray()
+		ints.Release()
+		t.Cleanup(n.Release)
+		encoded := filterV2Batch(t, document,
+			[]arrow.Field{wkbField("value_0"), {Name: "value_1", Type: arrow.PrimitiveTypes.Int64, Nullable: true}},
+			[]arrow.Array{geom, n})
+		t.Cleanup(encoded.Release)
+		meta := FunctionMetadata{AdditionalFilterFunctions: []FilterFunctionCapability{{Namespace: "duckdb.spatial", Name: "intersects_extent", Version: 1}}}
+		schema := arrow.NewSchema([]arrow.Field{wkbField("geom"), {Name: "n", Type: arrow.PrimitiveTypes.Int64}}, nil)
+		filters, err := deserializeFiltersForMetadata(encoded, nil, nil, meta, schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return filters.ToSQLExact(nil, "?")
+	}
+
+	t.Run("advisory_omitted", func(t *testing.T) {
+		sql, params, err := toSQL(t, spatial("s", "advisory"))
+		if err != nil || sql != "" || len(params) != 0 {
+			t.Fatalf("got (%q, %v, %v), want an empty clause", sql, params, err)
+		}
+	})
+	t.Run("required_errors", func(t *testing.T) {
+		if _, _, err := toSQL(t, spatial("s", "required")); !errors.Is(err, ErrFilterNotTranslatable) {
+			t.Fatalf("got %v, want ErrFilterNotTranslatable", err)
+		}
+	})
+	t.Run("required_and_advisory", func(t *testing.T) {
+		sql, params, err := toSQL(t, greater("n", "required"), spatial("s", "advisory"))
+		if err != nil || sql != `"n" > ?` || len(params) != 1 || params[0] != int64(2) {
+			t.Fatalf("got (%q, %v, %v), want the required predicate only", sql, params, err)
+		}
+	})
+	t.Run("translatable_advisory_kept", func(t *testing.T) {
+		sql, params, err := toSQL(t, spatial("s", "advisory"), greater("n", "advisory"))
+		if err != nil || sql != `"n" > ?` || len(params) != 1 {
+			t.Fatalf("got (%q, %v, %v), want the translatable advisory predicate", sql, params, err)
+		}
+	})
 }
