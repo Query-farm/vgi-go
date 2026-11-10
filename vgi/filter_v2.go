@@ -971,7 +971,12 @@ func (expression *v2Expr) sql(batch arrow.RecordBatch) (string, error) {
 			parts[i] = value
 		}
 		if expression.Function == "duckdb.spatial/intersects_extent@1" {
-			return "st_intersects_extent(" + strings.Join(parts, ",") + ")", nil
+			// DuckDB core's GEOMETRY `&&`, which is what DuckDB itself
+			// evaluates, not the spatial extension's st_intersects_extent: the
+			// two disagree when a vertex has NaN on one axis (core leaves that
+			// axis unbounded, so it matches; spatial's extent does not), and a
+			// false where core says true silently drops rows.
+			return "(" + parts[0] + " && " + parts[1] + ")", nil
 		}
 		return expression.Function + "(" + strings.Join(parts, ",") + ")", nil
 	}
