@@ -16,6 +16,7 @@ package table
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync/atomic"
 
 	"github.com/Query-farm/vgi-go/vgi"
@@ -35,8 +36,21 @@ const cacheDefaultTTL = 300
 // the tests assert on.
 var cacheNonceCounter atomic.Int64
 
-// nextCacheNonce mints the next nonce, starting at 0 (mirrors itertools.count()).
-func nextCacheNonce() int64 { return cacheNonceCounter.Add(1) - 1 }
+// cacheNonceBase makes nonces unique ACROSS worker processes, not just within
+// one. The client's subprocess pool holds several worker processes and hands a
+// scan whichever it pops (most recently released first), so two MISSes can land
+// in two different processes. With a bare per-process counter both could mint
+// the same value and a MISS would read as a HIT: that is how
+// cache/transaction_scope.test:57 ("t2 nonce <> t1a nonce") failed on the stdio
+// lane once earlier tests had left more than one process in the pool. Folding
+// the pid into the high bits keeps the nonces of every live process disjoint,
+// while the low 32 bits stay a plain per-process count (pid = nonce >> 32, which
+// also makes a nonce self-describing when debugging the cache).
+var cacheNonceBase = int64(os.Getpid()) << 32
+
+// nextCacheNonce mints the next nonce: this process's base plus a counter that
+// starts at 0 (mirrors itertools.count()).
+func nextCacheNonce() int64 { return cacheNonceBase + cacheNonceCounter.Add(1) - 1 }
 
 // cacheTTL builds a plain TTL cache-control, or nil when this is not the
 // stream's first batch (the client reads cache-control off the first batch
