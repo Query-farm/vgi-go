@@ -394,6 +394,7 @@ EXPECTED_SKIP_REASONS=(
   'require-env VGI_DATABASE_RUST_WORKER'         # Rust package fixture belongs to its SDK lane
   'require-env VGI_MALFORMED_BATCH_WORKER'       # hostile malformed-Arrow fixture (vgi test/support only)
   'require-env VGI_ROWID_CONSTRAINT_WORKER'      # hostile rowid-constraint fixture (vgi test/support only)
+  'require-env VGI_VISIBILITY_WORKER'            # extension-only visibility fixture (vgi test/support only)
 )
 if [ "${RUNNER_LINKS_EXTENSIONS:-0}" = "1" ]; then
   # The development runner omits spatial, and no signed spatial binary is
