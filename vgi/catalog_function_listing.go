@@ -106,10 +106,9 @@ func (cat *DefaultReadOnlyCatalog) functionListing(schemaKey, requestedType, cat
 		}
 		// Every function has exactly one home catalog; a catalog only lists
 		// what it owns. (An unresolvable attach leaves catalogName empty --
-		// nothing to compare against, so list all.)
-		if fi.unlisted {
-			continue
-		}
+		// nothing to compare against, so list all.) Table-only functions are
+		// listed too, carrying visibility "table_only": the extension needs
+		// their capabilities to scan / write the tables that name them.
 		if catalogName != "" && catalogName != fi.catalogHome {
 			continue
 		}

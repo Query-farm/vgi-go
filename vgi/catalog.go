@@ -332,7 +332,9 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 		}
 		fi.SchemaPath = strings.Split(origin.schema, "\x00")
 		fi.catalogHome = origin.catalog
-		fi.unlisted = origin.unlisted
+		if w.originTableOnly(kind, name, origin) {
+			fi.Visibility = FunctionVisibilityTableOnly
+		}
 		si := schemaFor(origin.schema)
 		si.functions = append(si.functions, fi)
 	}
@@ -523,7 +525,7 @@ func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCa
 // serializedGlobalFunctions returns the IPC-serialized FunctionInfo of every
 // function named by WithGlobalFunctions, in declaration order, resolved
 // against the catalog's default schema. Names are carried unprefixed — the
-// client applies global_function_prefix itself. Unknown or unlisted names
+// client applies global_function_prefix itself. Unknown or table-only names
 // contribute nothing, so declaring a function that was never registered is
 // inert rather than fatal.
 func (w *Worker) serializedGlobalFunctions() (SerializedItems, error) {
@@ -538,7 +540,9 @@ func (w *Worker) serializedGlobalFunctions() (SerializedItems, error) {
 	for _, name := range w.globalFunctionNames {
 		for i := range si.functions {
 			fi := &si.functions[i]
-			if fi.Name != name || fi.unlisted {
+			// A global function is a callable alias: a table-only function
+			// is never one.
+			if fi.Name != name || fi.tableOnly() {
 				continue
 			}
 			data, err := w.catalog.functionCache.encode(fi)

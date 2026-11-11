@@ -197,6 +197,35 @@ are advertised at catalog level, not inside a schema. Such a bind resolves by
 name within the catalog, and errors naming the schemas involved if that name is
 declared in more than one.
 
+### Table functions and visibility (protocol 3.3)
+
+Every function a `CatalogTable` names -- its scan `Function` and its
+`InsertFunction` / `UpdateFunction` / `DeleteFunction` -- is always sent in the
+worker's function listing, so the extension knows its capabilities (projection
+and filter pushdown, required secrets, `has_finalize`, ...). Each listed
+`FunctionInfo` carries a `visibility` the SDK sets for you:
+
+- write functions are always `table_only`;
+- a table's scan `Function` is `table_only` unless the table sets
+  `ExposeScan: true`, or you also register the function with `RegisterTable`;
+- every other function is `public`.
+
+A `table_only` function backs its tables but is absent from
+`duckdb_functions()` and cannot be called from SQL, not even fully qualified:
+
+```go
+w.RegisterCatalogTable("main", vgi.CatalogTable{
+	Name:       "labels",
+	Columns:    labelsSchema,
+	Function:   vgi.AsTableFunction[scanState](labelsScan{}),
+	ExposeScan: true, // labels_scan() is also callable from SQL
+})
+```
+
+`RegisterTableUnlisted` registers a function as `table_only` directly; it is
+needed only for functions that tables name dynamically (from a
+`ScanFunctionGetHandler`, `TableGetHandler` or `SchemaContentsHandler`).
+
 ### Table constraints and nullability
 
 A table's constraints are facts its provider attests, as canonical records

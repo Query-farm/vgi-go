@@ -29,10 +29,15 @@ const (
 // resolves only functions homed in X, so a single shared registration would be
 // reachable from just one of the worker's writable catalogs.
 func (w *Worker) registerWritableFunctions(catalogName string) {
-	w.RegisterTableForCatalog(catalogName, AsTableFunction[writableScanState](&writableScanFn{w: w}))
-	w.RegisterTableInOutForCatalog(catalogName, &writableInsertFn{w: w})
-	w.RegisterTableInOutForCatalog(catalogName, &writableUpdateFn{w: w})
-	w.RegisterTableInOutForCatalog(catalogName, &writableDeleteFn{w: w})
+	// They back the catalog's tables only: listed table-only (protocol 3.3),
+	// never callable from SQL.
+	scan := AsTableFunction[writableScanState](&writableScanFn{w: w})
+	w.tables[scan.Name()] = append(w.tables[scan.Name()], scan)
+	w.recordOrigin(kindTable, scan.Name(), funcOrigin{catalog: catalogName, tableOnly: true})
+	for _, fn := range []TableInOutFunction{&writableInsertFn{w: w}, &writableUpdateFn{w: w}, &writableDeleteFn{w: w}} {
+		w.tableInOuts[fn.Name()] = append(w.tableInOuts[fn.Name()], fn)
+		w.recordOrigin(kindTableInOut, fn.Name(), funcOrigin{catalog: catalogName, tableOnly: true})
+	}
 }
 
 // findWritableTable looks up a (schema, table) across all writable catalogs.

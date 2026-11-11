@@ -269,7 +269,7 @@ func importRegistry[T any](parent, child *Worker, dst, src map[string][]T, kind 
 			}
 			o := child.originOf(kind, name, i)
 			dst[name] = append(dst[name], fn)
-			parent.recordOrigin(kind, name, funcOrigin{catalog: home, schema: o.schema, unlisted: o.unlisted})
+			parent.recordOrigin(kind, name, funcOrigin{catalog: home, schema: o.schema, tableOnly: child.originTableOnly(kind, name, o), backing: o.backing})
 		}
 	}
 }

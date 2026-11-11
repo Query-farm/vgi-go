@@ -90,14 +90,52 @@ type FunctionInfo struct {
 	// FunctionMetadata.RequiredSecrets and Secrets.Require.
 	RequiredSecrets []SecretRequirement
 
+	// Visibility is FunctionInfo.visibility (protocol 3.3): "" or
+	// FunctionVisibilityPublic for an ordinary callable function,
+	// FunctionVisibilityTableOnly for one that only backs catalog tables. The
+	// catalog sets it from the registration (see FunctionVisibility); a
+	// hand-built FunctionInfo may set it directly.
+	Visibility FunctionVisibility
+
 	// catalogHome is the single catalog that owns this registration. It lives
 	// on the entry rather than in a name-keyed map because two catalogs served
 	// by one worker may each declare their own implementation of one name.
 	catalogHome string
-	// unlisted hides the entry from every function listing without changing its
-	// home (it exists to back a catalog table).
-	unlisted bool
 }
+
+// FunctionVisibility is how a listed function surfaces in DuckDB, carried on
+// FunctionInfo.visibility (protocol 3.3.0).
+//
+// Every function a catalog table names -- its scan Function and its
+// Insert/Update/Delete functions -- is always sent in the worker's function
+// listing, so the extension has its capabilities (projection/filter pushdown,
+// required secrets, has_finalize, ...). Which of them are also callable from
+// SQL is decided by the SDK, not the author:
+//
+//   - write functions are always table-only;
+//   - a table's scan Function is table-only unless the table sets
+//     CatalogTable.ExposeScan, or the same function is also registered as an
+//     ordinary function (RegisterTable and friends);
+//   - every other function is public.
+//
+// A table-only function is absent from duckdb_functions() and autocomplete
+// and cannot be called from SQL, not even fully qualified; the extension uses
+// it only to resolve the tables that name it.
+type FunctionVisibility string
+
+const (
+	// FunctionVisibilityPublic is an ordinary catalog function: listed in
+	// duckdb_functions() and callable from SQL. A null/absent visibility on
+	// the wire means the same.
+	FunctionVisibilityPublic FunctionVisibility = "public"
+	// FunctionVisibilityTableOnly is a function that exists only to back
+	// catalog tables: the extension keeps its description to resolve those
+	// tables, but does not expose it as a callable function.
+	FunctionVisibilityTableOnly FunctionVisibility = "table_only"
+)
+
+// tableOnly reports whether fi is sent as visibility "table_only".
+func (fi *FunctionInfo) tableOnly() bool { return fi.Visibility == FunctionVisibilityTableOnly }
 
 var dictType = &arrow.DictionaryType{
 	IndexType: arrow.PrimitiveTypes.Int16,
@@ -152,6 +190,12 @@ func buildFunctionInfoRecord(info *FunctionInfo) (arrow.RecordBatch, error) {
 	}
 	if err := validateSecretRequirements(info.Name, info.RequiredSecrets); err != nil {
 		return nil, err
+	}
+	switch info.Visibility {
+	case "", FunctionVisibilityPublic, FunctionVisibilityTableOnly:
+	default:
+		return nil, fmt.Errorf("function %q has unknown visibility %q (want %q or %q)",
+			info.Name, info.Visibility, FunctionVisibilityPublic, FunctionVisibilityTableOnly)
 	}
 	if info.ArgumentMonotonicity != nil {
 		if functionType != FunctionTypeScalar {
@@ -562,6 +606,15 @@ func buildFunctionInfoRecord(info *FunctionInfo) (arrow.RecordBatch, error) {
 		}
 	}
 
+	// visibility (nullable utf8, protocol 3.3; null means public)
+	visibilityBuilder := array.NewStringBuilder(mem)
+	defer visibilityBuilder.Release()
+	if info.Visibility != "" {
+		visibilityBuilder.Append(string(info.Visibility))
+	} else {
+		visibilityBuilder.AppendNull()
+	}
+
 	cols := []arrow.Array{
 		commentBuilder.NewArray(),
 		tagsBuilder.NewArray(),
@@ -605,6 +658,7 @@ func buildFunctionInfoRecord(info *FunctionInfo) (arrow.RecordBatch, error) {
 		irpcBuilder.NewArray(),
 		reqSettingsBuilder.NewArray(),
 		rsListBuilder.NewArray(),
+		visibilityBuilder.NewArray(),
 	}
 	defer func() {
 		for _, c := range cols {

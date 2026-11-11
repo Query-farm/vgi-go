@@ -208,6 +208,7 @@ func wireRecordCases(t *testing.T) []wireRecordCase {
 					InputRowsPerCall:        i64Ptr(3),
 					RequiredSettings:        []string{"s3_region"},
 					RequiredSecrets:         []SecretRequirement{{SecretType: "s3", SecretName: "prod", Scope: "s3://bucket"}},
+					Visibility:              FunctionVisibilityTableOnly,
 				})
 			},
 		},

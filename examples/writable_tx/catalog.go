@@ -164,9 +164,11 @@ func Options() []vgi.WorkerOption {
 // Register declares the tables and functions on w.
 func Register(w *vgi.Worker) {
 	w.RegisterCatalogTable("main", vgi.CatalogTable{
-		Name:           "items",
-		Comment:        "Writable through items_update; transactional ATTACHes stage changes until COMMIT",
-		Columns:        itemsSchema,
+		Name:    "items",
+		Comment: "Writable through items_update; transactional ATTACHes stage changes until COMMIT",
+		Columns: itemsSchema,
+		// items_scan and items_update back the table only (table_only):
+		// neither is in duckdb_functions() nor callable from SQL.
 		Function:       vgi.AsTableFunction[scanState](itemsScan{}),
 		UpdateFunction: vgi.AsTableInOutFunction[writeState](itemsUpdate{}),
 		WriteResultModes: map[vgi.WriteOp]vgi.WriteResultMode{
@@ -175,10 +177,12 @@ func Register(w *vgi.Worker) {
 		Constraints: constraints("items", "id", "name"),
 	})
 	w.RegisterCatalogTable("main", vgi.CatalogTable{
-		Name:        "labels",
-		Comment:     "Read-only",
-		Columns:     labelsSchema,
-		Function:    vgi.AsTableFunction[scanState](labelsScan{}),
+		Name:     "labels",
+		Comment:  "Read-only",
+		Columns:  labelsSchema,
+		Function: vgi.AsTableFunction[scanState](labelsScan{}),
+		// labels_scan is also an ordinary, callable table function.
+		ExposeScan:  true,
 		Constraints: constraints("labels", "id"),
 	})
 	w.RegisterTable(vgi.AsTableFunction[scanState](resetFn{}))

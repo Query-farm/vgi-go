@@ -144,6 +144,7 @@ var FunctionInfoSchema = arrow.NewSchema([]arrow.Field{
 		arrow.Field{Name: "scope", Type: arrow.BinaryTypes.String, Nullable: true},
 		arrow.Field{Name: "secret_name", Type: arrow.BinaryTypes.String, Nullable: true},
 	))},
+	arrow.Field{Name: "visibility", Type: arrow.BinaryTypes.String, Nullable: true},
 }, nil)
 
 // Origin: MacroInfo

@@ -351,6 +351,10 @@ type Worker struct {
 	// origins — which is exactly what makes a name registered in two schemas
 	// (or two catalogs) resolvable.
 	funcOrigins map[funcKey][]funcOrigin
+	// tableWriteFunctions names every table in-out function a CatalogTable
+	// names as its Insert/Update/DeleteFunction. Write functions are always
+	// sent as visibility "table_only", however else they were registered.
+	tableWriteFunctions map[string]struct{}
 	// catalogAliasInfos carries per-alias discovery metadata (data version,
 	// etc.) for aliases that should advertise themselves distinctly in
 	// catalog_catalogs and mint a random per-ATTACH scope at attach (so two
@@ -1006,11 +1010,52 @@ type funcOrigin struct {
 	catalog string
 	// schema is the catalog schema declaring the function, lowercased.
 	schema string
-	// unlisted hides the function from every function listing without
-	// changing its home — it exists to back a catalog table, whose scan
-	// resolves it by name, so publishing it as a callable function too would
-	// be redundant surface area. Dispatch is unaffected.
-	unlisted bool
+	// tableOnly sends the function as visibility "table_only" (protocol
+	// 3.3): still listed, so the extension has its capabilities for the
+	// tables that name it, but not callable from SQL. Dispatch is unaffected.
+	tableOnly bool
+	// backing marks a registration RegisterCatalogTable made on a table's
+	// behalf (its scan Function, not registered by the author). A later
+	// ordinary registration of the same function in the same home turns it
+	// into that ordinary, public registration instead of adding a duplicate.
+	backing bool
+}
+
+// originTableOnly reports whether the registration with origin o of
+// (kind, name) is sent as visibility "table_only": one registered table-only
+// (RegisterTableUnlisted, or a table's scan without ExposeScan), or any table
+// in-out function that some CatalogTable names as a write function.
+func (w *Worker) originTableOnly(kind funcKind, name string, o funcOrigin) bool {
+	if o.tableOnly {
+		return true
+	}
+	if kind == kindTableInOut {
+		_, isWrite := w.tableWriteFunctions[name]
+		return isWrite
+	}
+	return false
+}
+
+// claimBacking turns a backing registration of (kind, name) homed at o into
+// an ordinary one, reporting whether it found one. The function registered by
+// a CatalogTable and the one the author now registers by the same name are
+// taken to be the same function (registration already dedupes by name).
+func (w *Worker) claimBacking(kind funcKind, name string, o funcOrigin) bool {
+	if o.catalog == "" {
+		o.catalog = w.catalogName
+	}
+	if o.schema == "" {
+		o.schema = defaultFunctionSchema
+	}
+	o.schema = strings.ToLower(o.schema)
+	origins := w.funcOrigins[funcKey{kind: kind, name: name}]
+	for i := range origins {
+		if origins[i].backing && origins[i].catalog == o.catalog && origins[i].schema == o.schema {
+			origins[i] = o
+			return true
+		}
+	}
+	return false
 }
 
 // defaultFunctionSchema is the schema a plain Register* call declares into —
@@ -1122,9 +1167,17 @@ func (w *Worker) RegisterTableInSchema(schemaPath string, f TableFunction) {
 }
 
 // RegisterTableInSchemaPath registers a table function in an arbitrarily nested schema.
+//
+// Registering a CatalogTable's scan Function this way (before or after
+// RegisterCatalogTable) makes it an ordinary public function as well as the
+// table's scan; see FunctionVisibility.
 func (w *Worker) RegisterTableInSchemaPath(schemaPath SchemaPath, f TableFunction) {
+	o := funcOrigin{schema: schemaPathKey(schemaPath)}
+	if w.claimBacking(kindTable, f.Name(), o) {
+		return
+	}
 	w.tables[f.Name()] = append(w.tables[f.Name()], f)
-	w.recordOrigin(kindTable, f.Name(), funcOrigin{schema: schemaPathKey(schemaPath)})
+	w.recordOrigin(kindTable, f.Name(), o)
 }
 
 // RegisterTableForCatalog registers a table function scoped to a single
@@ -1134,18 +1187,27 @@ func (w *Worker) RegisterTableInSchemaPath(schemaPath SchemaPath, f TableFunctio
 // be visible to their own reproducer catalog (e.g. proj_repro_* under
 // “projection_repro“).
 func (w *Worker) RegisterTableForCatalog(catalogName string, f TableFunction) {
+	o := funcOrigin{catalog: catalogName}
+	if w.claimBacking(kindTable, f.Name(), o) {
+		return
+	}
 	w.tables[f.Name()] = append(w.tables[f.Name()], f)
-	w.recordOrigin(kindTable, f.Name(), funcOrigin{catalog: catalogName})
+	w.recordOrigin(kindTable, f.Name(), o)
 }
 
-// RegisterTableUnlisted registers a table function that is invokable but never
-// appears in any catalog's function listing (duckdb_functions, describe.json).
-// Use it for a function that exists only to back a catalog table: the table's
-// scan resolves it by name, but exposing it as a callable table function too
-// would be redundant surface area.
+// RegisterTableUnlisted registers a table function that only backs catalog
+// tables: it is sent in the function listing with visibility "table_only"
+// (protocol 3.3), so the extension has its capabilities when it scans a table
+// that names it, but it is absent from duckdb_functions() and cannot be called
+// from SQL.
+//
+// A CatalogTable's own scan Function is already table-only by default (see
+// CatalogTable.ExposeScan), so this is needed only for a function that tables
+// name dynamically -- from a ScanFunctionGetHandler, a TableGetHandler or a
+// SchemaContentsHandler -- rather than through CatalogTable.Function.
 func (w *Worker) RegisterTableUnlisted(f TableFunction) {
 	w.tables[f.Name()] = append(w.tables[f.Name()], f)
-	w.recordOrigin(kindTable, f.Name(), funcOrigin{unlisted: true})
+	w.recordOrigin(kindTable, f.Name(), funcOrigin{tableOnly: true})
 }
 
 // RegisterTableInOut registers a table-in-out function in the catalog's
@@ -1234,6 +1296,12 @@ func (w *Worker) RegisterWritableCatalog(c *WritableCatalog) {
 // dispatch table (deduped by name) so the scan resolves without a separate
 // RegisterTable call — mirroring vgi-python's _build_registry, which auto-scans
 // each Table.function.
+//
+// Every function the table names is sent in the function listing (protocol
+// 3.3), so the extension has its capabilities. Its write functions are always
+// visibility "table_only"; its scan Function is "table_only" unless
+// table.ExposeScan is set or the author also registers the function with
+// RegisterTable (or a sibling). See FunctionVisibility.
 func (w *Worker) RegisterCatalogTable(schemaPath string, table CatalogTable) {
 	w.RegisterCatalogTablePath(singleSchemaPath(schemaPath), table)
 }
@@ -1251,23 +1319,40 @@ func (w *Worker) RegisterCatalogTablePath(schemaPath SchemaPath, table CatalogTa
 	key := schemaPathKey(schemaPath)
 	w.catalogTables[key] = append(w.catalogTables[key], table)
 	// Write functions are dispatched like any table in-out function, homed
-	// in the table's schema (where catalog_table_*_function_get names them).
+	// in the table's schema (where catalog_table_*_function_get names them),
+	// and are always sent as visibility "table_only" (originTableOnly).
 	for _, fn := range []TableInOutFunction{table.InsertFunction, table.UpdateFunction, table.DeleteFunction} {
 		if fn == nil {
 			continue
 		}
+		if w.tableWriteFunctions == nil {
+			w.tableWriteFunctions = make(map[string]struct{})
+		}
+		w.tableWriteFunctions[fn.Name()] = struct{}{}
 		if _, exists := w.tableInOuts[fn.Name()]; !exists {
 			w.RegisterTableInOutInSchemaPath(schemaPath, fn)
 		}
 	}
 	if table.Function != nil {
-		if _, exists := w.tables[table.Function.Name()]; !exists {
-			w.tables[table.Function.Name()] = append(w.tables[table.Function.Name()], table.Function)
+		name := table.Function.Name()
+		if _, exists := w.tables[name]; !exists {
+			w.tables[name] = append(w.tables[name], table.Function)
 			// Homed in the catalog's default schema, not the table's: that is
 			// where the extension resolves a function-backed table's scan
 			// function when the table's own schema does not declare it, and so
-			// the schema its bind will name.
-			w.recordOrigin(kindTable, table.Function.Name(), funcOrigin{})
+			// the schema its bind will name. Table-only unless the table
+			// exposes its scan.
+			w.recordOrigin(kindTable, name, funcOrigin{tableOnly: !table.ExposeScan, backing: true})
+		} else if table.ExposeScan {
+			// Another table already registered this scan on its behalf; this
+			// one exposes it, so it is public. (An author's own registration
+			// of the name is public already.)
+			origins := w.funcOrigins[funcKey{kind: kindTable, name: name}]
+			for i := range origins {
+				if origins[i].backing {
+					origins[i].tableOnly = false
+				}
+			}
 		}
 	}
 }
@@ -1388,8 +1473,11 @@ const ProtocolName = "vgi.v3"
 // 3.1.0 adds portable exact key grouping and exact range distribution plans;
 // 3.2.0 adds filtered scan planning (TableInfo.scan_planning, pushdown_filters
 // on catalog_table_scan_branches_get, ScanBranch row_count/column_statistics;
-// see scan_planning.go).
-const ProtocolVersion = "3.2.0"
+// see scan_planning.go); 3.3.0 adds FunctionInfo.visibility ("public" or
+// "table_only"): every function a catalog table names is listed, and the
+// table-only ones back their tables without being callable from SQL (see
+// FunctionVisibility).
+const ProtocolVersion = "3.3.0"
 
 // buildServer is the one place a worker's server is built, for every
 // transport; see hosting.go for what it hosts. An error means the worker must

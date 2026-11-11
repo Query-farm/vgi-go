@@ -197,7 +197,7 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTable(table.NewCacheBigFunction())
 	w.RegisterTable(table.NewCacheRevalidatableFunction())
 	// cache_multicol exists only to back the ex.data.cache_multicol table, so
-	// it stays out of the catalog's function listing (mirrors vgi-python).
+	// it is listed table-only: not callable, absent from duckdb_functions().
 	w.RegisterTableUnlisted(table.NewCacheMultiColFunction())
 	w.RegisterTable(table.NewCacheWhoamiFunction())
 	w.RegisterTable(table.NewCacheVersionedFunction())

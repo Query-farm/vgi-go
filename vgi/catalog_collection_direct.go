@@ -116,7 +116,7 @@ func (w *Worker) directCatalogContents(attach []byte, version int64, ifNoneMatch
 			}
 			for i := range si.functions {
 				function := &si.functions[i]
-				if function.unlisted || !listsFunction(kind.kind, function.FunctionType) || (catalogName != "" && catalogName != function.catalogHome) {
+				if !listsFunction(kind.kind, function.FunctionType) || (catalogName != "" && catalogName != function.catalogHome) {
 					continue
 				}
 				record, err := buildFunctionInfoRecord(function)

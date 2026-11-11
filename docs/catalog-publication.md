@@ -4,12 +4,17 @@ This preparation branch requires a client using VGI wire major/minor `3.0`,
 including the DuckDB extension and browser/WASM clients. Wire `2.x` peers are
 incompatible; upgrade both ends together. The protocol routing name is `vgi.v3`.
 
-Wire `vgi.v3` revision `3.2.0` carries six nullable Arrow streams in
+Wire `vgi.v3` revision `3.3.0` carries six nullable Arrow streams in
 `catalog_contents`: schemas, tables, views, functions, macros and indexes. Each
 stream spans every schema and may contain multiple record batches. Readers
 consume all rows and retain function/macro subtypes. Existing author callbacks
 returning grouped `CatalogContentsResult.Schemas` remain supported; the default
 writer uses the same metadata field builders as singleton RPCs directly.
+
+The functions stream includes `table_only` functions (`FunctionInfo.visibility`,
+protocol 3.3): the scans and write functions that back catalog tables. A reader
+must keep them to resolve those tables but must not expose them as callable
+functions. A null `visibility` means `public`.
 
 `FunctionInfo.arguments`, `output_schema` and `parameter_default_values` use
 `dictionary<int32, binary>` on the wire, including singleton RPCs. Equal bytes

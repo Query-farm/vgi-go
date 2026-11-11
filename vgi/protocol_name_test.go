@@ -9,8 +9,8 @@ import "testing"
 // all route on the same string. Changing it here silently would make this port
 // unreachable to every client, so pin the literal rather than the symbol.
 func TestProtocolIdentityIsVgiV3(t *testing.T) {
-	if ProtocolVersion != "3.2.0" {
-		t.Fatalf("ProtocolVersion = %q, want %q", ProtocolVersion, "3.2.0")
+	if ProtocolVersion != "3.3.0" {
+		t.Fatalf("ProtocolVersion = %q, want %q", ProtocolVersion, "3.3.0")
 	}
 	if ProtocolName != "vgi.v3" {
 		t.Fatalf("ProtocolName = %q, want %q", ProtocolName, "vgi.v3")

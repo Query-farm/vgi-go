@@ -153,14 +153,14 @@ func TestResolveFunctionDefaultHomeIsOwnCatalog(t *testing.T) {
 	}
 }
 
-// An unlisted function keeps its home; it is hidden from listings only.
+// An unlisted function keeps its home; it is listed table-only.
 func TestUnlistedFunctionKeepsItsHome(t *testing.T) {
 	w := NewWorker(WithCatalogName("own"))
 	w.RegisterTableUnlisted(AsTableFunction[struct{}](&unlistedTable{}))
 
 	origin := w.originOf(kindTable, "hidden_scan", 0)
-	if origin.catalog != "own" || origin.schema != "main" || !origin.unlisted {
-		t.Errorf("origin = %+v, want {catalog: own, schema: main, unlisted: true}", origin)
+	if origin.catalog != "own" || origin.schema != "main" || !origin.tableOnly {
+		t.Errorf("origin = %+v, want {catalog: own, schema: main, tableOnly: true}", origin)
 	}
 }
 
