@@ -329,7 +329,15 @@ func (pf *PushdownFilters) ToSQL(quoteIdentifier func(string) string, placeholde
 
 // ToSQLExact converts filters to a SQL WHERE clause (excluding the "WHERE"
 // keyword) with parameter values, exactly: the clause keeps precisely the rows
-// the pushed predicates keep, or ToSQLExact returns an error. It never widens.
+// the pushed predicates keep, or ToSQLExact returns an error. It never widens
+// a required predicate.
+//
+// An advisory predicate (Filter Encoding v2 mode "advisory", e.g. the
+// `geom && <constant>` DuckDB derives from ST_Intersects) is optional: DuckDB
+// keeps an exact residual for it, so a worker may ignore it. ToSQLExact
+// includes an advisory predicate only when it translates exactly and otherwise
+// omits it from the clause rather than failing; if every predicate is omitted
+// the clause is "". Only an untranslatable required predicate is an error.
 //
 // quoteIdentifier quotes column names (nil means Go-style double quotes) and
 // placeholder is the parameter marker repeated for each value ("?", "%s", ...).
@@ -342,7 +350,7 @@ func (pf *PushdownFilters) ToSQL(quoteIdentifier func(string) string, placeholde
 // field filters. Any other predicate — e.g. an opaque v2 expression such as a
 // function call, arithmetic, a cast, or a column-to-column comparison — makes
 // ToSQLExact return an error wrapping [ErrFilterNotTranslatable] that names the
-// predicate. The caller should then fall back to filtering the rows itself
+// predicate, if it is required. The caller should then fall back to filtering the rows itself
 // (FunctionMetadata.AutoApplyFilters, or [PushdownFilters.Apply]) and may still
 // push a weaker clause on its own responsibility.
 //
@@ -374,7 +382,20 @@ func (pf *PushdownFilters) toSQL(quoteIdentifier func(string) string, placeholde
 	var conditions []string
 	var params []any
 
-	for _, f := range pf.Filters {
+	// pf.Filters projects pf.v2Predicates one-to-one; a hand-built filter set
+	// has no predicate modes and every filter in it is treated as required.
+	modes := len(pf.v2Predicates) == len(pf.Filters)
+	for i, f := range pf.Filters {
+		if modes && pf.v2Predicates[i].Mode == "advisory" {
+			// Optional: keep it only if it translates exactly, in ToSQL too,
+			// so the two agree on every clause ToSQLExact returns.
+			sql, ps, err := filterToSQL(f, quoteIdentifier, placeholder, false)
+			if err == nil {
+				conditions = append(conditions, sql)
+				params = append(params, ps...)
+			}
+			continue
+		}
 		sql, ps, err := filterToSQL(f, quoteIdentifier, placeholder, lenient)
 		if err != nil {
 			return "", nil, err
