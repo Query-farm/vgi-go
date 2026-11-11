@@ -129,12 +129,6 @@ func (n *exprNode) toSQL(columnName string, schema *arrow.Schema, values []scala
 			parts[i] = s
 		}
 		fname := n.FunctionName
-		// DuckDB spatial's && operator binds only to arrays; rewrite to the
-		// equivalent st_intersects_extent for the geometry-on-geometry case
-		// (vgi-python docs treat the two as synonyms).
-		if fname == "&&" && len(parts) == 2 {
-			return "st_intersects_extent(" + parts[0] + ", " + parts[1] + ")", nil
-		}
 		if isOperatorName(fname) && len(parts) == 2 {
 			return "(" + parts[0] + " " + fname + " " + parts[1] + ")", nil
 		}
