@@ -97,21 +97,12 @@ func TestWriteResultSchemasAndBatches(t *testing.T) {
 	}
 }
 
-// writeOptionsArgs builds Arguments carrying a write_options blob as DuckDB
-// sends it.
-func writeOptionsArgs(t *testing.T, mode string, onConflict string, cols []string) *Arguments {
+// writeOptionsBlobArgs wraps a serialized write_options row as DuckDB sends
+// it (a const blob named argument).
+func writeOptionsBlobArgs(t *testing.T, schema *arrow.Schema, row map[string]any) *Arguments {
 	t.Helper()
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "result_mode", Type: arrow.BinaryTypes.String},
-		{Name: "on_conflict", Type: arrow.BinaryTypes.String, Nullable: true},
-		{Name: "on_conflict_columns", Type: arrow.ListOf(arrow.BinaryTypes.String), Nullable: true},
-	}, nil)
 	bb := NewBatchBuilder(schema)
-	anyCols := make([]any, len(cols))
-	for i, c := range cols {
-		anyCols[i] = c
-	}
-	if err := bb.AppendRow(map[string]any{"result_mode": mode, "on_conflict": onConflict, "on_conflict_columns": anyCols}); err != nil {
+	if err := bb.AppendRow(row); err != nil {
 		t.Fatal(err)
 	}
 	batch, err := bb.Build()
@@ -127,21 +118,45 @@ func writeOptionsArgs(t *testing.T, mode string, onConflict string, cols []strin
 	return &Arguments{Named: map[string]arrow.Array{WriteOptionsArgName: b.NewArray()}}
 }
 
+// writeOptionsArgs builds the protocol 3.3 write_options: result_mode only.
+func writeOptionsArgs(t *testing.T, mode string) *Arguments {
+	t.Helper()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "result_mode", Type: arrow.BinaryTypes.String}}, nil)
+	return writeOptionsBlobArgs(t, schema, map[string]any{"result_mode": mode})
+}
+
 func TestParseWriteOptions(t *testing.T) {
 	opts, err := ParseWriteOptions(nil)
-	if err != nil || opts.ResultMode != WriteResultCount || opts.OnConflict != "throw" {
+	if err != nil || opts.ResultMode != WriteResultCount || opts.OnConflict != "throw" || opts.OnConflictColumns != nil {
 		t.Fatalf("absent options: %+v %v", opts, err)
 	}
-	opts, err = ParseWriteOptions(writeOptionsArgs(t, "rows", "nothing", []string{"id"}))
-	if err != nil || opts.ResultMode != WriteResultRows || opts.OnConflict != "nothing" || len(opts.OnConflictColumns) != 1 || opts.OnConflictColumns[0] != "id" {
+	opts, err = ParseWriteOptions(writeOptionsArgs(t, "rows"))
+	if err != nil || opts.ResultMode != WriteResultRows || opts.OnConflict != "throw" || opts.OnConflictColumns != nil {
 		t.Fatalf("options: %+v %v", opts, err)
 	}
-	if _, err := ParseWriteOptions(writeOptionsArgs(t, "bogus", "throw", nil)); err == nil {
+	if _, err := ParseWriteOptions(writeOptionsArgs(t, "bogus")); err == nil {
 		t.Fatal("unknown result_mode accepted")
 	}
 	spec := WriteOptionsArgSpec()
 	if spec.Name != WriteOptionsArgName || spec.Position != -1 || !spec.IsConst {
 		t.Fatalf("WriteOptionsArgSpec %+v", spec)
+	}
+}
+
+// TestParseWriteOptionsIgnoresRemovedOnConflict: protocol 3.3 dropped
+// on_conflict and on_conflict_columns. A batch that still carries them (a
+// pre-3.3 peer) is read for result_mode only; the deprecated fields keep
+// their fixed "throw" / empty values.
+func TestParseWriteOptionsIgnoresRemovedOnConflict(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "result_mode", Type: arrow.BinaryTypes.String},
+		{Name: "on_conflict", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: "on_conflict_columns", Type: arrow.ListOf(arrow.BinaryTypes.String), Nullable: true},
+	}, nil)
+	args := writeOptionsBlobArgs(t, schema, map[string]any{"result_mode": "changes", "on_conflict": "nothing", "on_conflict_columns": []any{"id"}})
+	opts, err := ParseWriteOptions(args)
+	if err != nil || opts.ResultMode != WriteResultChanges || opts.OnConflict != "throw" || len(opts.OnConflictColumns) != 0 {
+		t.Fatalf("options: %+v %v", opts, err)
 	}
 }
 

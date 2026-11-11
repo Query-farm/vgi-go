@@ -145,10 +145,19 @@ func TestSubCatalogServesItsOwnCatalog(t *testing.T) {
 	}
 
 	// A function-backed table resolves through the sub-catalog.
-	rec = c.call("catalog_table_scan_function_get", generated.CatalogTableScanFunctionGetParamsSchema,
+	rec = c.call("catalog_table_scan_branches_get", generated.CatalogTableScanBranchesGetParamsSchema,
 		map[string]any{"attach_opaque_data": kid.AttachOpaqueData, "schema_path": []string{"extra"}, "name": "five"})
 	defer rec.Release()
-	if fn := column[*array.String](t, rec, "function_name").Value(0); fn != "sequence" {
+	branches := column[*array.List](t, rec, "branches")
+	if start, end := branches.ValueOffsets(0); end-start != 1 {
+		t.Fatalf("five has %d branches, want 1", end-start)
+	}
+	branch, err := vgi.DeserializeRecordBatch(branches.ListValues().(*array.Binary).Value(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer branch.Release()
+	if fn := column[*array.String](t, branch, "function_name").Value(0); fn != "sequence" {
 		t.Fatalf("five scans %q, want sequence", fn)
 	}
 }
@@ -272,9 +281,9 @@ func TestMemoryCatalogAttachesArePrivate(t *testing.T) {
 	}
 	// A method the catalog does not implement is refused, not misrouted to
 	// the parent.
-	err := c.exec("catalog_table_scan_function_get", generated.CatalogTableScanFunctionGetParamsSchema,
+	err := c.exec("catalog_table_scan_branches_get", generated.CatalogTableScanBranchesGetParamsSchema,
 		map[string]any{"attach_opaque_data": b.AttachOpaqueData, "schema_path": []string{"main"}, "name": "t"})
-	if err == nil || !strings.Contains(err.Error(), "does not support catalog_table_scan_function_get") {
+	if err == nil || !strings.Contains(err.Error(), "does not support catalog_table_scan_branches_get") {
 		t.Fatalf("unsupported method: %v", err)
 	}
 }

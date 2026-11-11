@@ -87,6 +87,7 @@ var wireStructCases = []wireStructCase{
 	{method: "catalog_schema_contents_views", value: ItemsResponseWire{}, schema: generated.CatalogSchemaContentsViewsResultSchema},
 	{method: "catalog_schema_get", value: ItemsResponseWire{}, schema: generated.CatalogSchemaGetResultSchema},
 	{method: "catalog_schemas", value: ItemsResponseWire{}, schema: generated.CatalogSchemasResultSchema},
+	{method: "catalog_table_create", value: TableCreateResponseWire{}, schema: generated.CatalogTableCreateResultSchema},
 	{method: "catalog_table_get", value: ItemsResponseWire{}, schema: generated.CatalogTableGetResultSchema},
 	{method: "catalog_transaction_begin", value: TransactionBeginResponseWire{}, schema: generated.CatalogTransactionBeginResultSchema},
 	{method: "catalog_version", value: CatalogVersionResponseWire{}, schema: generated.CatalogVersionResultSchema},

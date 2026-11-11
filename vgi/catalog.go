@@ -5,6 +5,7 @@ package vgi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -122,6 +123,15 @@ type CatalogVersionResponseWire struct {
 // ItemsResponseWire wraps a list of serialized items (schemas/tables/views/functions).
 type ItemsResponseWire struct {
 	Items SerializedItems `vgirpc:"items"`
+}
+
+// TableCreateResponseWire is catalog_table_create's result (protocol 3.3):
+// Created is true when this call created the table (including CREATE OR
+// REPLACE), false when on_conflict IGNORE (CREATE TABLE IF NOT EXISTS) found
+// an existing table and left it unchanged. The extension's CTAS inserts its
+// rows only when Created is true.
+type TableCreateResponseWire struct {
+	Created bool `vgirpc:"created"`
 }
 
 // TransactionBeginResponseWire wraps optional transaction ID.
@@ -1114,42 +1124,65 @@ func (w workerService) CatalogTableGet(ctx context.Context, callCtx *vgirpc.Call
 	return ItemsResponseWire{Items: [][]byte{}}, nil
 }
 
-// CatalogTableCreate serves vgi.v3 catalog_table_create.
-func (w workerService) CatalogTableCreate(ctx context.Context, callCtx *vgirpc.CallContext, req TableCreateRequestWire) error {
+// CatalogTableCreate serves vgi.v3 catalog_table_create and reports whether
+// this call created the table (TableCreateResponseWire.Created).
+func (w workerService) CatalogTableCreate(ctx context.Context, callCtx *vgirpc.CallContext, req TableCreateRequestWire) (TableCreateResponseWire, error) {
+	if w.attachTableCreateHandler != nil {
+		created, handled, err := w.attachTableCreateHandler(&req)
+		if err != nil {
+			return TableCreateResponseWire{}, ddlHandlerError(err)
+		}
+		if handled {
+			return TableCreateResponseWire{Created: created}, nil
+		}
+	}
 	if len(req.ConstraintDefinitions) > 0 {
-		return methodNotImplemented("catalog_table_create: canonical constraint enforcement")
+		return TableCreateResponseWire{}, methodNotImplemented("catalog_table_create: canonical constraint enforcement")
 	}
 	if req.Comment != nil || req.Tags != nil || req.Options != nil || req.Layout != nil {
-		return methodNotImplemented("catalog_table_create")
+		return TableCreateResponseWire{}, methodNotImplemented("catalog_table_create")
 	}
 	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
-		return w.writableTableCreate(wc, req)
+		created, err := w.writableTableCreate(wc, req)
+		return TableCreateResponseWire{Created: created}, err
 	}
-	return readOnlyErr("catalog_table_create")
+	return TableCreateResponseWire{}, readOnlyErr("catalog_table_create")
+}
+
+// ddlHandlerError passes an author handler's *vgirpc.RpcError through as is
+// (keeping its type and code) and wraps any other error as a ValueError.
+func ddlHandlerError(err error) error {
+	var rpcErr *vgirpc.RpcError
+	if errors.As(err, &rpcErr) {
+		return rpcErr
+	}
+	return rewrapError("ValueError", err)
 }
 
 // CatalogTableDrop serves vgi.v3 catalog_table_drop.
 func (w workerService) CatalogTableDrop(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableDropParams) error {
+	if w.attachTableDropHandler != nil {
+		handled, err := w.attachTableDropHandler(&req)
+		if err != nil {
+			return ddlHandlerError(err)
+		}
+		if handled {
+			return nil
+		}
+	}
 	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 		return w.writableTableDrop(wc, req.SchemaPath, req.Name, req.IgnoreNotFound, req.Cascade)
 	}
 	return readOnlyErr("catalog_table_drop")
 }
 
-// CatalogTableScanFunctionGet serves vgi.v3 catalog_table_scan_function_get.
-func (w workerService) CatalogTableScanFunctionGet(ctx context.Context, callCtx *vgirpc.CallContext, req CatalogTableScanFunctionGetParams) (TableScanFunctionGetResponseWire, error) {
-	result, err := w.resolveScanFunction(req)
-	if err != nil {
-		return TableScanFunctionGetResponseWire{}, err
-	}
-	return buildScanFunctionGetResponse(result)
-}
-
-// CatalogTableScanBranchesGet serves vgi.v3 catalog_table_scan_branches_get —
-// multi-branch (UNION-of-sources) tables. For non-branch tables it wraps the
-// single scan_function_get result as a one-branch list, mirroring vgi-python's
-// default implementation, so the method is always implemented (never triggers a
-// C++ legacy fallback).
+// CatalogTableScanBranchesGet serves vgi.v3 catalog_table_scan_branches_get,
+// the only scan-discovery method since protocol 3.3 (the single-function
+// catalog_table_scan_function_get was removed). Multi-branch (UNION-of-sources)
+// tables come from the branch handlers; every other table's scan function
+// (registered CatalogTable.Function, WithAttachScanFunctionGetHandler,
+// SetScanFunctionGetHandler) is answered as a one-branch list, mirroring
+// vgi-python's default implementation.
 //
 // Protocol 3.2: the AttachScanBranchesPlanHandler, when installed, sees every
 // call first with the decoded pushdown_filters; falling through from it reaches
@@ -1186,8 +1219,8 @@ func (w workerService) CatalogTableScanBranchesGet(ctx context.Context, callCtx 
 			return buildScanBranchesGetResponse(result)
 		}
 	}
-	// Default: wrap the single scan_function_get result as one branch.
-	sf, err := w.resolveScanFunction(CatalogTableScanFunctionGetParams{
+	// Default: the table's single scan function as one branch.
+	sf, err := w.resolveScanFunction(scanFunctionLookup{
 		AttachOpaqueData:      req.AttachOpaqueData,
 		SchemaPath:            req.SchemaPath,
 		Name:                  req.Name,
@@ -1203,7 +1236,7 @@ func (w workerService) CatalogTableScanBranchesGet(ctx context.Context, callCtx 
 			FunctionName:        sf.FunctionName,
 			PositionalArguments: sf.PositionalArguments,
 			NamedArguments:      sf.NamedArguments,
-			// Propagate whatever schema the scan_function_get path
+			// Propagate whatever schema the scan-function resolution
 			// already resolved; this wrapper has no independent way to
 			// know the function's own schema (which is NOT necessarily
 			// req.SchemaPath — see ScanBranch.SchemaPath's own doc).
@@ -1703,7 +1736,7 @@ func (w *Worker) catalogTableInfo(schemaPath SchemaPath, ct *CatalogTable) (*Tab
 	}
 
 	// Inline the scan function for function-backed tables so the C++ extension
-	// skips catalog_table_scan_function_get. Explicit-columns tables (Function
+	// skips catalog_table_scan_branches_get. Explicit-columns tables (Function
 	// == nil) keep ScanFunction nil and continue to use the per-bind RPC path.
 	if ct.Function != nil {
 		sfBytes, err := SerializeScanFunctionResult(w.buildScanResultFromTable(schemaPath, ct))
@@ -1822,11 +1855,23 @@ func (w *Worker) clearTransactionState(txID []byte) {
 	}
 }
 
-// resolveScanFunction resolves the scan function backing a catalog table,
-// following the same precedence as catalog_table_scan_function_get: writable
-// catalog, registered function-backed table, attach-aware handler, then plain
-// handler. Returns an RpcError when no scan function is available.
-func (w *Worker) resolveScanFunction(req CatalogTableScanFunctionGetParams) (*ScanFunctionResult, error) {
+// scanFunctionLookup names the table whose single scan function
+// resolveScanFunction resolves (catalog_table_scan_branches_get's request
+// without its pushdown filters).
+type scanFunctionLookup struct {
+	AttachOpaqueData      []byte
+	SchemaPath            []string
+	Name                  string
+	AtUnit                *string
+	AtValue               *string
+	TransactionOpaqueData *[]byte
+}
+
+// resolveScanFunction resolves the single scan function backing a catalog
+// table, which catalog_table_scan_branches_get answers as one branch:
+// writable catalog, registered function-backed table, attach-aware handler,
+// then plain handler. Returns an RpcError when no scan function is available.
+func (w *Worker) resolveScanFunction(req scanFunctionLookup) (*ScanFunctionResult, error) {
 	if wc := w.writableByAttachOpaqueData(req.AttachOpaqueData); wc != nil {
 		return &ScanFunctionResult{
 			FunctionName: writableScanFunctionName,
@@ -1873,7 +1918,7 @@ func (w *Worker) resolveScanFunction(req CatalogTableScanFunctionGetParams) (*Sc
 	return nil, &vgirpc.RpcError{
 		Type:    "NotImplementedError",
 		Code:    string(vgirpc.CodeUnimplemented),
-		Message: fmt.Sprintf("table_scan_function_get not implemented for %s.%s", req.SchemaPath, req.Name),
+		Message: fmt.Sprintf("no scan function for table %s.%s", req.SchemaPath, req.Name),
 	}
 }
 

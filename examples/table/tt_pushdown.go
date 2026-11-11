@@ -25,7 +25,7 @@ import (
 //     bind request embedded in init.
 //   - tt_pushdown_cols_scan  — columns-based: receives the resolved version as a
 //     scan-function argument (the native columns-based AT mechanism, resolved in
-//     catalog_table_scan_function_get).
+//     catalog_table_scan_branches_get).
 //
 // Both echo seen_version (the version they actually scanned) and pushed_filters
 // (the SQL-like predicate DuckDB pushed down), so one query asserts both signals.
@@ -185,7 +185,7 @@ func NewTimeTravelPushdownFunction() vgi.TableFunction {
 // ---------------------------------------------------------------------------
 
 // ttColsArgs is the typed argument schema: the resolved version injected by the
-// worker's catalog_table_scan_function_get from the AT clause.
+// worker (catalog_table_scan_branches_get) from the AT clause.
 type ttColsArgs struct {
 	Version int64 `vgi:"pos=0,doc=Resolved data version"`
 }

@@ -17,6 +17,9 @@
 //     always emits a (count) batch, exercising the extension's runtime
 //     RETURNING-schema validation (clean error, not a crash).
 //
+// CREATE TABLE (and CREATE TABLE ... AS SELECT) adds insert-only tables next
+// to them, per attach (see created.go).
+//
 // Tables are virtual (served by the handlers below, not RegisterCatalogTable);
 // rows live in per-attach AttachStore (see store.go). Wire it onto a Worker via
 // Options() + Register().
@@ -143,7 +146,8 @@ func serializeTableInfo(table string) ([]byte, error) {
 // Catalog handlers (wired via the vgi.WithAttach*Handler worker options)
 // ---------------------------------------------------------------------------
 
-// SchemaContentsHandler lists the four tables for the main schema.
+// SchemaContentsHandler lists the four fixed tables of the main schema, then
+// the attach's created tables.
 func SchemaContentsHandler(attachOpaqueData []byte, schemaPath vgi.SchemaPath) ([]vgi.SerializedSchemaItem, bool) {
 	if !isOurs(attachOpaqueData) || !isSchema(schemaPath) {
 		return nil, false
@@ -156,7 +160,34 @@ func SchemaContentsHandler(attachOpaqueData []byte, schemaPath vgi.SchemaPath) (
 		}
 		items = append(items, data)
 	}
+	if st, err := attachStore(attachOpaqueData); err == nil {
+		names, _ := createdTables(st)
+		for _, name := range names {
+			columns, err := createdSchema(st, name)
+			if err != nil || columns == nil {
+				continue
+			}
+			if data, err := createdTableInfo(name, columns); err == nil {
+				items = append(items, data)
+			}
+		}
+	}
 	return items, true
+}
+
+// createdLookup is the attach's created table name in schemaPath, or nil.
+func createdLookup(attachOpaqueData []byte, schemaPath vgi.SchemaPath, name string) (*arrow.Schema, error) {
+	if !isSchema(schemaPath) {
+		return nil, nil
+	}
+	if _, fixed := userSchemas[name]; fixed {
+		return nil, nil
+	}
+	st, err := attachStore(attachOpaqueData)
+	if err != nil {
+		return nil, err
+	}
+	return createdSchema(st, name)
 }
 
 // AttachTableGetHandler answers single-table catalog_table_get RPCs.
@@ -165,7 +196,12 @@ func AttachTableGetHandler(attachOpaqueData []byte, schemaPath vgi.SchemaPath, n
 		return nil, false, nil
 	}
 	if _, ok := userSchema(name); !ok {
-		return nil, false, nil
+		columns, err := createdLookup(attachOpaqueData, schemaPath, name)
+		if err != nil || columns == nil {
+			return nil, err != nil, err
+		}
+		data, err := createdTableInfo(name, columns)
+		return data, true, err
 	}
 	data, err := serializeTableInfo(name)
 	if err != nil {
@@ -180,7 +216,11 @@ func AttachScanFunctionGetHandler(attachOpaqueData []byte, schemaPath vgi.Schema
 		return nil, false, nil
 	}
 	if _, ok := userSchema(name); !ok {
-		return nil, false, nil
+		columns, err := createdLookup(attachOpaqueData, schemaPath, name)
+		if err != nil || columns == nil {
+			return nil, err != nil, err
+		}
+		return scanResult("simple_writable_created_scan", name), true, nil
 	}
 	return scanResult("simple_writable_scan", name), true, nil
 }
@@ -193,7 +233,11 @@ func AttachWriteFunctionGetHandler(op vgi.WriteOp, attachOpaqueData []byte, sche
 		return nil, false, nil
 	}
 	if _, ok := userSchema(name); !ok {
-		return nil, false, nil
+		columns, err := createdLookup(attachOpaqueData, schemaPath, name)
+		if err != nil || columns == nil || op != vgi.WriteOpInsert {
+			return nil, err != nil, err
+		}
+		return scanResult("simple_writable_created_insert", name), true, nil
 	}
 	switch op {
 	case vgi.WriteOpInsert:
@@ -229,12 +273,19 @@ func scanResult(fn, table string) *vgi.ScanFunctionResult {
 // Worker wiring
 // ---------------------------------------------------------------------------
 
-// Options returns the WorkerOptions that publish the simple_writable catalog.
+// Options returns the WorkerOptions that publish the simple_writable catalog,
+// with storage as the worker's FunctionStorage: the per-attach rows (and the
+// created tables' definitions, which the catalog handlers read) live in its
+// AttachStore.
 // The AttachValidator mints a random per-ATTACH scope ("simple_writable\x00<uuid>")
 // so each ATTACH gets isolated row storage (matching vgi-python's per-attach
 // SQLite file); the handlers serve the virtual tables.
-func Options() []vgi.WorkerOption {
+func Options(storage vgi.FunctionStorage) []vgi.WorkerOption {
+	backend.mu.Lock()
+	backend.fs = storage
+	backend.mu.Unlock()
 	return []vgi.WorkerOption{
+		vgi.WithFunctionStorage(storage),
 		vgi.WithCatalogName(CatalogName),
 		vgi.WithSupportsTransactions(false),
 		// Its tables change under DML, so -- like vgi-python's
@@ -257,14 +308,20 @@ func Options() []vgi.WorkerOption {
 		vgi.WithAttachTableGetHandler(AttachTableGetHandler),
 		vgi.WithAttachScanFunctionGetHandler(AttachScanFunctionGetHandler),
 		vgi.WithAttachWriteFunctionGetHandler(AttachWriteFunctionGetHandler),
+		vgi.WithAttachTableCreateHandler(TableCreateHandler),
+		vgi.WithAttachTableDropHandler(TableDropHandler),
 	}
 }
 
-// Register wires the five worker functions onto w, scoped to the catalog.
+// Register wires the worker functions onto w: the fixed tables' five, scoped
+// to the catalog, and the created tables' scan and insert, which back tables
+// only (table_only).
 func Register(w *vgi.Worker) {
 	w.RegisterTableForCatalog(CatalogName, vgi.AsTableFunction[scanState](scanFn{}))
 	w.RegisterTableInOutForCatalog(CatalogName, vgi.AsTableInOutFunction[noState](insertFn{}))
 	w.RegisterTableInOutForCatalog(CatalogName, vgi.AsTableInOutFunction[noState](updateFn{}))
 	w.RegisterTableInOutForCatalog(CatalogName, vgi.AsTableInOutFunction[noState](deleteFn{}))
 	w.RegisterTableInOutForCatalog(CatalogName, vgi.AsTableInOutFunction[noState](brokenInsertFn{}))
+	w.RegisterTableUnlisted(vgi.AsTableFunction[scanState](createdScanFn{}))
+	w.RegisterTableInOutUnlisted(vgi.AsTableInOutFunction[noState](createdInsertFn{}))
 }

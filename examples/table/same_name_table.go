@@ -6,9 +6,9 @@
 // examples/scalar/same_name.go, examples/table_in_out/same_name.go,
 // examples/aggregate/same_name.go for direct dispatch and
 // examples/table/same_name_cached.go for the result cache). Those probe a
-// function called directly; this one probes catalog_table_scan_function_get /
-// catalog_table_scan_branches_get — the RPC pair that tells a client which
-// function backs a *declarative catalog table*.
+// function called directly; this one probes catalog_table_scan_branches_get,
+// the RPC that tells a client which function backs a *declarative catalog
+// table*.
 //
 // test_same_name_table_scan is a one-row producer registered under one name in
 // BOTH the `main` and `data` schemas of the `example` catalog, each emitting a

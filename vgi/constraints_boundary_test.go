@@ -20,7 +20,7 @@ func TestUnsupportedConstraintsRejectBeforeReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := TableCreateRequestWire{AttachOpaqueData: attached.AttachOpaqueData, SchemaPath: []string{"main"}, Name: "t", Columns: columns, OnConflict: "ERROR"}
-	if err := catalog.tableCreate(&request); err != nil {
+	if _, err := catalog.tableCreate(nil, &request); err != nil {
 		t.Fatal(err)
 	}
 	before, err := catalog.getObject(attached.AttachOpaqueData, []string{"main"}, "t", false)
@@ -30,11 +30,11 @@ func TestUnsupportedConstraintsRejectBeforeReplacement(t *testing.T) {
 	for _, conflict := range []string{"ERROR", "IGNORE", "REPLACE"} {
 		request.OnConflict = conflict
 		request.ConstraintDefinitions = [][]byte{{1}}
-		if err := catalog.tableCreate(&request); err == nil {
+		if _, err := catalog.tableCreate(nil, &request); err == nil {
 			t.Fatalf("accepted constraints under %s", conflict)
 		}
 		// This rejection also precedes any writable-store access or replacement.
-		if err := (&Worker{}).writableTableCreate(nil, request); err == nil {
+		if _, err := (&Worker{}).writableTableCreate(nil, request); err == nil {
 			t.Fatal("writable store accepted constraints")
 		}
 	}
@@ -48,10 +48,10 @@ func TestUnsupportedConstraintsRejectBeforeReplacement(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := catalog.tableCreate(&request); err == nil {
+		if _, err := catalog.tableCreate(nil, &request); err == nil {
 			t.Fatal("accepted nonnullable columns without constraints")
 		}
-		if err := (&Worker{}).writableTableCreate(nil, request); err == nil {
+		if _, err := (&Worker{}).writableTableCreate(nil, request); err == nil {
 			t.Fatal("writable store accepted nonnullable columns")
 		}
 	}
@@ -79,5 +79,33 @@ func TestTableInfoRejectsLegacyConstraintClaims(t *testing.T) {
 		if _, err := SerializeTableInfo(info); err == nil {
 			t.Fatal("legacy constraint claim was silently omitted")
 		}
+	}
+}
+
+// The memory catalog reports catalog_table_create.created: false only when IF
+// NOT EXISTS (on_conflict IGNORE) kept an existing table.
+func TestMemoryCatalogTableCreateReportsCreated(t *testing.T) {
+	catalog := NewMemoryCatalog("mem")
+	attached, err := catalog.attach(nil, &CatalogAttachRequestWire{Name: "mem"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	columns, err := SerializeSchema(arrow.NewSchema([]arrow.Field{{Name: "a", Type: arrow.PrimitiveTypes.Int32, Nullable: true}}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		conflict string
+		created  bool
+	}{{"ERROR", true}, {"IGNORE", false}, {"REPLACE", true}} {
+		request := TableCreateRequestWire{AttachOpaqueData: attached.AttachOpaqueData, SchemaPath: []string{"main"}, Name: "t", Columns: columns, OnConflict: step.conflict}
+		got, err := catalog.tableCreate(nil, &request)
+		if err != nil || got.Created != step.created {
+			t.Fatalf("on_conflict %s: %+v %v, want created=%v", step.conflict, got, err, step.created)
+		}
+	}
+	request := TableCreateRequestWire{AttachOpaqueData: attached.AttachOpaqueData, SchemaPath: []string{"main"}, Name: "t", Columns: columns, OnConflict: "ERROR"}
+	if got, err := catalog.tableCreate(nil, &request); err == nil || got.Created {
+		t.Fatalf("duplicate create: %+v %v", got, err)
 	}
 }

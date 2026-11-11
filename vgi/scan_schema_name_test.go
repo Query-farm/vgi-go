@@ -196,12 +196,12 @@ func sameNameProbeWorker(t *testing.T) *Worker {
 	return w
 }
 
-// The lazy RPC path: catalog_table_scan_function_get must name the schema whose
+// The lazy RPC path: catalog_table_scan_branches_get must name the schema whose
 // implementation actually backs the table it was asked about.
 func TestResolveScanFunctionCarriesSchemaPath(t *testing.T) {
 	w := sameNameProbeWorker(t)
 	for _, schema := range []string{"main", "data"} {
-		result, err := w.resolveScanFunction(CatalogTableScanFunctionGetParams{
+		result, err := w.resolveScanFunction(scanFunctionLookup{
 			SchemaPath: SchemaPath{schema},
 			Name:       "test_same_name_table",
 		})

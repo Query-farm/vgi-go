@@ -63,7 +63,29 @@ func TestWorkerReflectionDiscovery(t *testing.T) {
 // Every SDK hosts the whole of vgi.v3 with exactly the reference's schemas, so
 // every SDK reports this hash. Update only after the combined protocol schema
 // change is confirmed against the reference reflection endpoint.
-const vgiV3ReferenceProtocolHash = "171ac8263bf22ffdd5dd4ac2c3d3c4e1dc186a7ceba45d386f324af8c9c6fced"
+const vgiV3ReferenceProtocolHash = "ad10c6b137db8cd0054c8c3d80b0f50946382d52bbd549beaad209e00c180f08"
+
+// vgiV3ReferenceCatalogContractHash is vgi-python's catalog_contract_hash()
+// for the same reference as vgiV3ReferenceProtocolHash. That hash covers the
+// vgi.v3 method hash plus the nested catalog schemas, so it must change
+// whenever the protocol hash does. generated.CatalogContractHash keys the
+// catalog publication cache (catalog_publication.go): when a protocol change
+// is hand-edited into generated/ instead of regenerated, the protocol hash
+// moves but CatalogContractHash does not, and the cache would keep serving
+// snapshots published under the old wire contract (protocol 3.3 round 1 did
+// exactly that). Regenerate from vgi-python (scripts/regen_generated.py
+// --only vgi-go) and update both constants together.
+const vgiV3ReferenceCatalogContractHash = "e0965c93219b6ef6574d82c007c600462594a08085db1242b127ed27e193da0f"
+
+// The generated catalog contract hash belongs to the same reference as the
+// vgi.v3 protocol hash this SDK serves (see vgiV3ReferenceCatalogContractHash).
+func TestCatalogContractHashMatchesReference(t *testing.T) {
+	if generated.CatalogContractHash != vgiV3ReferenceCatalogContractHash {
+		t.Fatalf("generated.CatalogContractHash = %s, want %s (the reference for vgi.v3 protocol hash %s): "+
+			"vgi/generated was not regenerated from vgi-python, so the catalog publication cache key is stale",
+			generated.CatalogContractHash, vgiV3ReferenceCatalogContractHash, vgiV3ReferenceProtocolHash)
+	}
+}
 
 // describeVgiV3 starts an HTTP worker and returns vgi.v3's Reflection.v1
 // description.

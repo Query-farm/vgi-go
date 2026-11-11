@@ -32,8 +32,7 @@ func main() {
 		log.Fatalf("resolve storage backend: %v", err)
 	}
 
-	opts := append(simple_writable.Options(), vgi.WithFunctionStorage(storage))
-	w := vgi.NewWorker(opts...)
+	w := vgi.NewWorker(simple_writable.Options(storage)...)
 	simple_writable.Register(w)
 
 	if err := cli.Serve(w); err != nil {

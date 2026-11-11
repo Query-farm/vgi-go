@@ -22,7 +22,35 @@
   table-only by default.
 - The writable catalog's generic `vgi_writable_scan` / `_insert` / `_update` /
   `_delete` functions are table-only.
+- **Protocol 3.3 write path** (wire changes, same protocol version 3.3.0):
+  - `catalog_table_scan_function_get` is removed; `catalog_table_scan_branches_get`
+    is the only scan-discovery method. Nothing changes for authors:
+    `CatalogTable.Function`, `WithAttachScanFunctionGetHandler` and
+    `SetScanFunctionGetHandler` keep working and are served as one branch.
+    The generated `CatalogTableScanFunctionGetParams` type is gone.
+  - `catalog_table_create` returns `created` (`TableCreateResponseWire`):
+    false when `IF NOT EXISTS` found an existing table, so `CREATE TABLE IF NOT
+    EXISTS ... AS SELECT` no longer appends into it. `WritableCatalog` and
+    `MemoryCatalog` report it.
+  - The write-options batch carries only `result_mode`.
+    `WriteOptions.OnConflict` / `OnConflictColumns` are deprecated and always
+    `"throw"` / empty (DuckDB turns every `INSERT ... ON CONFLICT` into a MERGE
+    before the catalog sees it).
+- Regenerated `vgi/generated` and `vgi/vgi_service_gen.go` from vgi-python.
+  This fixes `generated.CatalogContractHash`, which the protocol 3.3
+  visibility change had left at its 3.2 value: the catalog publication cache
+  (keyed on it) could have reused snapshots published under the 3.2 contract.
+- `examples/writable_tx` (txfix) follows the new fixture contract: `items`
+  gains `items_insert` and `items_delete`, all three write functions set
+  `HasFinalize`, `qty` is `BIGINT DEFAULT 0`, the transactional attach stages
+  inserts and deletes, and `writes()` lists every write call.
+- `examples/simple_writable` supports `CREATE TABLE` / CTAS / `DROP TABLE` of
+  insert-only tables.
 
 ### Added
 
 - `CatalogTable.ExposeScan`, `FunctionInfo.Visibility`, `vgi.FunctionVisibility`.
+- `WithAttachTableCreateHandler` / `WithAttachTableDropHandler`: `CREATE TABLE`
+  and `DROP TABLE` for catalogs served by handlers.
+- `Worker.RegisterTableInOutUnlisted`, the table in-out counterpart of
+  `RegisterTableUnlisted` (for write functions a handler names).

@@ -15,6 +15,7 @@ package writable_tx
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 
 	"github.com/Query-farm/vgi-go/vgi"
@@ -98,11 +99,12 @@ func transactionHooks() vgi.TransactionHooks {
 				key := txHex(tx.TransactionOpaqueData)
 				staged := s.Pending[key]
 				delete(s.Pending, key)
-				if bad := stagedViolation(staged); bad != nil {
+				// A refused commit discards the staged changes.
+				if why := s.commitViolation(staged); why != "" {
 					s.record("commit", tx.TransactionOpaqueData, false)
-					return fmt.Errorf("txfix: commit refused: qty %d for id %d", *bad.Qty, bad.ID)
+					return errors.New(why)
 				}
-				s.applyItems(staged)
+				s.applyStaged(staged)
 				s.record("commit", tx.TransactionOpaqueData, true)
 				return nil
 			})
@@ -165,14 +167,20 @@ func Options() []vgi.WorkerOption {
 func Register(w *vgi.Worker) {
 	w.RegisterCatalogTable("main", vgi.CatalogTable{
 		Name:    "items",
-		Comment: "Writable through items_update; transactional ATTACHes stage changes until COMMIT",
+		Comment: "Writable through items_insert/items_update/items_delete; transactional ATTACHes stage changes until COMMIT",
 		Columns: itemsSchema,
-		// items_scan and items_update back the table only (table_only):
-		// neither is in duckdb_functions() nor callable from SQL.
+		// qty BIGINT DEFAULT 0: DuckDB fills it in before items_insert.
+		Defaults: map[string]any{"qty": int64(0)},
+		// items_scan and the write functions back the table only
+		// (table_only): none is in duckdb_functions() or callable from SQL.
 		Function:       vgi.AsTableFunction[scanState](itemsScan{}),
+		InsertFunction: vgi.AsTableInOutFunction[writeState](itemsInsert{}),
 		UpdateFunction: vgi.AsTableInOutFunction[writeState](itemsUpdate{}),
+		DeleteFunction: vgi.AsTableInOutFunction[writeState](itemsDelete{}),
 		WriteResultModes: map[vgi.WriteOp]vgi.WriteResultMode{
+			vgi.WriteOpInsert: vgi.WriteResultChanges,
 			vgi.WriteOpUpdate: vgi.WriteResultChanges,
+			vgi.WriteOpDelete: vgi.WriteResultChanges,
 		},
 		Constraints: constraints("items", "id", "name"),
 	})
@@ -189,5 +197,6 @@ func Register(w *vgi.Worker) {
 	w.RegisterTable(vgi.AsTableFunction[scanState](whoamiFn{}))
 	w.RegisterTable(vgi.AsTableFunction[scanState](currentTxFn{}))
 	w.RegisterTable(vgi.AsTableFunction[scanState](eventsFn{}))
+	w.RegisterTable(vgi.AsTableFunction[scanState](writesFn{}))
 	w.RegisterTableInOut(vgi.AsTableInOutFunction[writeState](tagTx{}))
 }

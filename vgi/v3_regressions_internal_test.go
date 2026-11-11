@@ -4,10 +4,13 @@ package vgi
 
 import (
 	"bytes"
+	"context"
 	"encoding/gob"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -58,7 +61,7 @@ func TestWritableCreateNotNullEnforced(t *testing.T) {
 		arrow.Field{Name: "note", Type: arrow.BinaryTypes.String, Nullable: true})
 	req := TableCreateRequestWire{SchemaPath: []string{"main"}, Name: "Things", Columns: columns, OnConflict: "ERROR",
 		ConstraintDefinitions: [][]byte{definitionFor(t, "NOT_NULL", []string{"id"})}}
-	if err := w.writableTableCreate(c, req); err != nil {
+	if _, err := w.writableTableCreate(c, req); err != nil {
 		t.Fatal(err)
 	}
 	table, err := c.store.tableLoad(c.Name, "main", "things")
@@ -104,12 +107,12 @@ func TestWritableCreateRefusesUnenforcedConstraints(t *testing.T) {
 	c := NewWritableCatalog("nn")
 	columns := createSchema(t, arrow.Field{Name: "id", Type: arrow.PrimitiveTypes.Int64})
 	for kind, want := range map[string]string{"PRIMARY_KEY": "PRIMARY KEY constraints are not enforced", "UNIQUE": "UNIQUE constraints are not enforced"} {
-		err := w.writableTableCreate(c, TableCreateRequestWire{SchemaPath: []string{"main"}, Name: "t", Columns: columns, OnConflict: "ERROR",
+		_, err := w.writableTableCreate(c, TableCreateRequestWire{SchemaPath: []string{"main"}, Name: "t", Columns: columns, OnConflict: "ERROR",
 			ConstraintDefinitions: [][]byte{definitionFor(t, kind, []string{"id"})}})
 		wantError(t, err, want, "only NOT NULL")
 	}
 	// A non-nullable column without a NOT NULL definition is refused too.
-	err := w.writableTableCreate(c, TableCreateRequestWire{SchemaPath: []string{"main"}, Name: "t", Columns: columns, OnConflict: "ERROR"})
+	_, err := w.writableTableCreate(c, TableCreateRequestWire{SchemaPath: []string{"main"}, Name: "t", Columns: columns, OnConflict: "ERROR"})
 	wantError(t, err, `column "id" is non-nullable without a NOT NULL constraint definition`)
 }
 
@@ -276,5 +279,77 @@ func TestProtocolBuilders(t *testing.T) {
 	}
 	if _, err := SerializeTableInfo(&TableInfo{Name: "t", SchemaPath: []string{"main"}, DefinitionRevision: []byte{}}); err == nil {
 		t.Fatal("empty non-nil revision served")
+	}
+}
+
+// Protocol 3.3 catalog_table_create.created: true when the call created the
+// table (including OR REPLACE), false when IF NOT EXISTS found it and left it
+// unchanged. CTAS relies on it not to append into an existing table.
+func TestWritableCreateReportsCreated(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	w := NewWorker()
+	c := NewWritableCatalog("created")
+	columns := createSchema(t, arrow.Field{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true})
+	for _, step := range []struct {
+		conflict string
+		created  bool
+	}{{"ERROR", true}, {"IGNORE", false}, {"REPLACE", true}, {"IGNORE", false}} {
+		created, err := w.writableTableCreate(c, TableCreateRequestWire{SchemaPath: []string{"main"}, Name: "t", Columns: columns, OnConflict: step.conflict})
+		if err != nil || created != step.created {
+			t.Fatalf("on_conflict %s: created=%v err=%v, want created=%v", step.conflict, created, err, step.created)
+		}
+	}
+	if created, err := w.writableTableCreate(c, TableCreateRequestWire{SchemaPath: []string{"main"}, Name: "t", Columns: columns, OnConflict: "ERROR"}); err == nil || created {
+		t.Fatalf("duplicate create: created=%v err=%v", created, err)
+	}
+}
+
+// WithAttachTableCreateHandler / WithAttachTableDropHandler answer
+// catalog_table_create / catalog_table_drop for handler-served catalogs: the
+// handler sees the whole request first, its created flag is the reply, its
+// *vgirpc.RpcError passes through with its type, and handled=false falls
+// through to the built-in read-only refusal.
+func TestAttachTableCreateDropHandlers(t *testing.T) {
+	var seen []string
+	w := NewWorker(
+		WithAttachTableCreateHandler(func(req *TableCreateRequestWire) (bool, bool, error) {
+			seen = append(seen, "create:"+req.Name+":"+req.OnConflict)
+			switch req.Name {
+			case "mine":
+				return req.OnConflict != "IGNORE", true, nil
+			case "typed":
+				return false, true, &vgirpc.RpcError{Type: "NotImplementedError", Message: "nope"}
+			}
+			return false, false, nil
+		}),
+		WithAttachTableDropHandler(func(req *CatalogTableDropParams) (bool, error) {
+			seen = append(seen, "drop:"+req.Name)
+			return req.Name == "mine", nil
+		}),
+	)
+	svc := workerService{Worker: w}
+	ctx := context.Background()
+	for conflict, want := range map[string]bool{"ERROR": true, "IGNORE": false} {
+		res, err := svc.CatalogTableCreate(ctx, nil, TableCreateRequestWire{Name: "mine", OnConflict: conflict, ConstraintDefinitions: [][]byte{{1}}})
+		if err != nil || res.Created != want {
+			t.Fatalf("%s: %+v %v, want created=%v", conflict, res, err, want)
+		}
+	}
+	_, err := svc.CatalogTableCreate(ctx, nil, TableCreateRequestWire{Name: "typed"})
+	var rpcErr *vgirpc.RpcError
+	if !errors.As(err, &rpcErr) || rpcErr.Type != "NotImplementedError" {
+		t.Fatalf("typed handler error: %v", err)
+	}
+	if res, err := svc.CatalogTableCreate(ctx, nil, TableCreateRequestWire{Name: "other"}); err == nil || res.Created {
+		t.Fatalf("unhandled create on a read-only worker: %+v %v", res, err)
+	}
+	if err := svc.CatalogTableDrop(ctx, nil, CatalogTableDropParams{Name: "mine"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CatalogTableDrop(ctx, nil, CatalogTableDropParams{Name: "other"}); err == nil {
+		t.Fatal("unhandled drop on a read-only worker succeeded")
+	}
+	if len(seen) != 6 {
+		t.Fatalf("handler calls %v", seen)
 	}
 }

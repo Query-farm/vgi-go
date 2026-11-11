@@ -221,10 +221,17 @@ type WriteOptions struct {
 	// ResultMode is the result the statement needs (count, or rows for
 	// RETURNING).
 	ResultMode WriteResultMode
-	// OnConflict is "throw" (default) or the INSERT ... ON CONFLICT action
-	// DuckDB requested ("nothing").
+	// OnConflict is always "throw".
+	//
+	// Deprecated: protocol 3.3 removed on_conflict from write_options.
+	// DuckDB rewrites every INSERT ... ON CONFLICT and INSERT OR REPLACE
+	// into a MERGE before the catalog sees it, so a write function never
+	// received anything but "throw". Kept so existing code compiles.
 	OnConflict string
-	// OnConflictColumns are the ON CONFLICT (...) target columns, if any.
+	// OnConflictColumns is always empty.
+	//
+	// Deprecated: protocol 3.3 removed on_conflict_columns from
+	// write_options (see OnConflict).
 	OnConflictColumns []string
 }
 
@@ -244,12 +251,13 @@ const WriteOptionsArgName = "write_options"
 func WriteOptionsArgSpec() ArgSpec {
 	return ArgSpec{Name: WriteOptionsArgName, Position: -1, IsConst: true, HasDefault: true,
 		ArrowType: "blob", ArrowDataType: arrow.BinaryTypes.Binary,
-		Doc: "Serialized write options (result_mode, on_conflict, on_conflict_columns)"}
+		Doc: "Serialized write options (result_mode)"}
 }
 
 // ParseWriteOptions decodes the write_options named argument of a write
 // function's bind (BindParams.Args / InitParams.Args / ProcessParams.Args).
-// Missing options mean a plain count write with on_conflict "throw".
+// Missing options mean a plain count write. Only result_mode is read:
+// protocol 3.3 write_options carries nothing else.
 func ParseWriteOptions(args *Arguments) (WriteOptions, error) {
 	out := WriteOptions{ResultMode: WriteResultCount, OnConflict: "throw"}
 	if args == nil || args.IsNull(WriteOptionsArgName) {
@@ -284,21 +292,6 @@ func ParseWriteOptions(args *Arguments) (WriteOptions, error) {
 			return out, fmt.Errorf("vgi: write_options: unknown result_mode %q", v)
 		}
 		out.ResultMode = m
-	}
-	if v, ok := row["on_conflict"].(string); ok && v != "" {
-		out.OnConflict = v
-	}
-	if idx := b.Schema().FieldIndices("on_conflict_columns"); len(idx) > 0 {
-		if l, ok := b.Column(idx[0]).(*array.List); ok && !l.IsNull(0) {
-			start, end := l.ValueOffsets(0)
-			if vals, ok := l.ListValues().(*array.String); ok {
-				for i := start; i < end; i++ {
-					if !vals.IsNull(int(i)) {
-						out.OnConflictColumns = append(out.OnConflictColumns, vals.Value(int(i)))
-					}
-				}
-			}
-		}
 	}
 	return out, nil
 }

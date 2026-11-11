@@ -382,6 +382,8 @@ type Worker struct {
 	attachScanBranchesGetHandler  AttachScanBranchesGetHandler
 	attachScanBranchesPlanHandler AttachScanBranchesPlanHandler
 	attachWriteFunctionGetHandler AttachWriteFunctionGetHandler
+	attachTableCreateHandler      AttachTableCreateHandler
+	attachTableDropHandler        AttachTableDropHandler
 	catalogVersionHook            CatalogVersionHook
 	// hostedProtocols supplies the protocols hosted beside vgi.v3
 	// (WithHostedProtocols); identity opts into vgi_rpc.Identity.v2 over HTTP
@@ -663,11 +665,13 @@ func WithAttachTableGetHandler(h AttachTableGetHandler) WorkerOption {
 
 // AttachScanFunctionGetHandler is the attach-opaque-data-aware version of
 // ScanFunctionGetHandler. Return (result, true) to override; (nil, false) to
-// fall through.
+// fall through. The result is served as the table's single branch of
+// catalog_table_scan_branches_get (protocol 3.3 removed the separate
+// catalog_table_scan_function_get method; this API is unchanged).
 type AttachScanFunctionGetHandler func(attachOpaqueData []byte, schemaPath SchemaPath, name string, atUnit, atValue *string) (result *ScanFunctionResult, handled bool, err error)
 
 // WithAttachScanFunctionGetHandler installs an attach-opaque-data-aware
-// scan_function_get handler.
+// scan-function handler (answered through catalog_table_scan_branches_get).
 func WithAttachScanFunctionGetHandler(h AttachScanFunctionGetHandler) WorkerOption {
 	return func(w *Worker) {
 		w.attachScanFunctionGetHandler = h
@@ -676,8 +680,9 @@ func WithAttachScanFunctionGetHandler(h AttachScanFunctionGetHandler) WorkerOpti
 
 // AttachScanBranchesGetHandler is the attach-opaque-data-aware handler for
 // catalog_table_scan_branches_get. Return (result, true) to serve a
-// multi-branch table; (nil, false) to fall through (the C++ extension then
-// falls back to catalog_table_scan_function_get).
+// multi-branch table; (nil, false) to fall through to the table's single scan
+// function (CatalogTable.Function or a scan-function handler), served as one
+// branch.
 type AttachScanBranchesGetHandler func(attachOpaqueData []byte, schemaPath SchemaPath, name string, atUnit, atValue *string) (result *ScanBranchesResult, handled bool, err error)
 
 // WithAttachScanBranchesGetHandler installs an attach-opaque-data-aware
@@ -711,6 +716,41 @@ type AttachScanBranchesPlanHandler func(attachOpaqueData []byte, schemaPath Sche
 func WithAttachScanBranchesPlanHandler(h AttachScanBranchesPlanHandler) WorkerOption {
 	return func(w *Worker) {
 		w.attachScanBranchesPlanHandler = h
+	}
+}
+
+// AttachTableCreateHandler answers catalog_table_create for a catalog served
+// by handlers (SchemaContentsHandler, AttachTableGetHandler, ...) rather than
+// the built-in WritableCatalog. req.AttachOpaqueData is the attach's opened
+// (plaintext) attach_opaque_data, the same bytes the other Attach* handlers and
+// ProcessParams.AttachScope see. Return handled=false to fall through to the
+// built-in path (WritableCatalog, else the read-only refusal).
+//
+// created is protocol 3.3's catalog_table_create.created: true when this call
+// created the table (including on_conflict REPLACE, which replaces an existing
+// one), false when on_conflict IGNORE (CREATE TABLE IF NOT EXISTS) found an
+// existing table and left it unchanged. The extension's CREATE TABLE ... AS
+// SELECT inserts its rows only when created is true. The handler sees the
+// whole request (constraint definitions, comment, tags, options, layout) and
+// must refuse what it cannot honour.
+type AttachTableCreateHandler func(req *TableCreateRequestWire) (created, handled bool, err error)
+
+// WithAttachTableCreateHandler installs an AttachTableCreateHandler.
+func WithAttachTableCreateHandler(h AttachTableCreateHandler) WorkerOption {
+	return func(w *Worker) {
+		w.attachTableCreateHandler = h
+	}
+}
+
+// AttachTableDropHandler answers catalog_table_drop for a handler-served
+// catalog (see AttachTableCreateHandler). It must honour req.IgnoreNotFound.
+// Return handled=false to fall through to the built-in path.
+type AttachTableDropHandler func(req *CatalogTableDropParams) (handled bool, err error)
+
+// WithAttachTableDropHandler installs an AttachTableDropHandler.
+func WithAttachTableDropHandler(h AttachTableDropHandler) WorkerOption {
+	return func(w *Worker) {
+		w.attachTableDropHandler = h
 	}
 }
 
@@ -1237,6 +1277,17 @@ func (w *Worker) RegisterTableInOutInSchemaPath(schemaPath SchemaPath, f TableIn
 func (w *Worker) RegisterTableInOutForCatalog(catalogName string, f TableInOutFunction) {
 	w.tableInOuts[f.Name()] = append(w.tableInOuts[f.Name()], f)
 	w.recordOrigin(kindTableInOut, f.Name(), funcOrigin{catalog: catalogName})
+}
+
+// RegisterTableInOutUnlisted registers a table in-out function that only backs
+// catalog tables, typically a write function that an
+// AttachWriteFunctionGetHandler names: it is sent in the function listing with
+// visibility "table_only" (so the extension has its capabilities, e.g.
+// has_finalize) but is absent from duckdb_functions() and not callable from
+// SQL. The table in-out counterpart of RegisterTableUnlisted.
+func (w *Worker) RegisterTableInOutUnlisted(f TableInOutFunction) {
+	w.tableInOuts[f.Name()] = append(w.tableInOuts[f.Name()], f)
+	w.recordOrigin(kindTableInOut, f.Name(), funcOrigin{tableOnly: true})
 }
 
 // RegisterAggregate registers an aggregate function in the catalog's default

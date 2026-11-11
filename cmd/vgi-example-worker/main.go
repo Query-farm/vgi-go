@@ -314,8 +314,8 @@ func main() {
 	// declared in BOTH schemas, each backed by that schema's own
 	// test_same_name_table_scan implementation (registered in examples/all).
 	// The only catalog table declared in `main` — the point is that the pair
-	// straddles two schemas, so catalog_table_scan_function_get /
-	// catalog_table_scan_branches_get must name the right one. Drives
+	// straddles two schemas, so catalog_table_scan_branches_get must name
+	// the right one. Drives
 	// ../vgi/test/sql/integration/table/same_name_schemas.test.
 	w.RegisterCatalogTable("main", vgi.CatalogTable{
 		Name:     table.SameNameTableName,
@@ -1180,7 +1180,7 @@ func branchPath(name string) string {
 // multiBranchScanBranchesGet resolves the physical sources for the
 // multi_branch_* fixture tables. It mirrors vgi-python's
 // ExampleCatalog.table_scan_branches_get. Returns (nil, false) for any other
-// table so the C++ extension falls back to catalog_table_scan_function_get.
+// table, which is then served as one branch of its own scan function.
 func multiBranchScanBranchesGet(_ []byte, schemaPath vgi.SchemaPath, name string, _, _ *string) (*vgi.ScanBranchesResult, bool, error) {
 	if len(schemaPath) != 1 || !strings.EqualFold(schemaPath[0], "data") {
 		return nil, false, nil

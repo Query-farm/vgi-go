@@ -126,7 +126,7 @@ func NewMemoryCatalog(name string, opts ...MemoryCatalogOption) *MemoryCatalog {
 		"catalog_schema_contents_macros":    memoryMethod(m.contentsMacros),
 		"catalog_copy_from_formats":         memoryMethod(m.copyFromFormats),
 		"catalog_table_get":                 memoryMethod(m.tableGet),
-		"catalog_table_create":              memoryVoid(m.tableCreate),
+		"catalog_table_create":              memoryMethod(m.tableCreate),
 		"catalog_table_drop":                memoryVoid(m.tableDrop),
 		"catalog_view_get":                  memoryMethod(m.viewGet),
 		"catalog_view_create":               memoryVoid(m.viewCreate),
@@ -518,16 +518,17 @@ func (m *MemoryCatalog) viewGet(_ *vgirpc.CallContext, req *CatalogViewGetParams
 }
 
 // putObject stores a created table or view, honouring on_conflict, and bumps
-// the version.
-func (m *MemoryCatalog) putObject(attach []byte, path SchemaPath, name, kind, onConflict string, views bool, item []byte) error {
+// the version. It reports whether it stored the object: false when
+// on_conflict IGNORE kept an existing one.
+func (m *MemoryCatalog) putObject(attach []byte, path SchemaPath, name, kind, onConflict string, views bool, item []byte) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, st, err := m.schema(attach, path)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if s == nil {
-		return memoryErr("Schema %s does not exist", schemaPathDisplay(path))
+		return false, memoryErr("Schema %s does not exist", schemaPathDisplay(path))
 	}
 	objs := s.tables
 	if views {
@@ -536,12 +537,12 @@ func (m *MemoryCatalog) putObject(attach []byte, path SchemaPath, name, kind, on
 	key := strings.ToLower(name)
 	if _, exists := objs[key]; exists {
 		if replace, err := onConflictReplaces(kind, name, onConflict); !replace {
-			return err
+			return false, err
 		}
 	}
 	objs[key] = memoryObject{name: name, item: item}
 	st.version++
-	return nil
+	return true, nil
 }
 
 func (m *MemoryCatalog) dropObject(attach []byte, path SchemaPath, name, kind string, ignoreNotFound, views bool) error {
@@ -569,26 +570,28 @@ func (m *MemoryCatalog) dropObject(attach []byte, path SchemaPath, name, kind st
 	return memoryErr("%s with name %s does not exist", kind, name)
 }
 
-func (m *MemoryCatalog) tableCreate(req *TableCreateRequestWire) error {
+// tableCreate stores a table definition and reports whether it did (false
+// when IF NOT EXISTS kept an existing table).
+func (m *MemoryCatalog) tableCreate(_ *vgirpc.CallContext, req *TableCreateRequestWire) (TableCreateResponseWire, error) {
 	if req.Comment != nil || req.Tags != nil || req.Options != nil || req.Layout != nil {
-		return methodNotImplemented("catalog_table_create")
+		return TableCreateResponseWire{}, methodNotImplemented("catalog_table_create")
 	}
 	if len(req.Columns) == 0 {
-		return memoryErr("catalog_table_create: missing columns schema")
+		return TableCreateResponseWire{}, memoryErr("catalog_table_create: missing columns schema")
 	}
 	columns, err := DeserializeSchema(req.Columns)
 	if err != nil {
-		return fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
+		return TableCreateResponseWire{}, fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
 	}
 	// Tables hold definitions only and have no write path, so a NOT NULL
 	// holds for every row they can ever return. Other kinds are refused:
 	// this catalog claims no PRIMARY KEY/UNIQUE/CHECK/FOREIGN KEY enforcement.
 	records, required, err := notNullRecords(req.SchemaPath, req.Name, columns, req.ConstraintDefinitions)
 	if err != nil {
-		return err
+		return TableCreateResponseWire{}, err
 	}
 	if err := requireUnconstrainedCreateSchema(columns, required); err != nil {
-		return err
+		return TableCreateResponseWire{}, err
 	}
 	item, err := SerializeTableInfo(&TableInfo{
 		Name:        req.Name,
@@ -597,9 +600,10 @@ func (m *MemoryCatalog) tableCreate(req *TableCreateRequestWire) error {
 		Constraints: records,
 	})
 	if err != nil {
-		return err
+		return TableCreateResponseWire{}, err
 	}
-	return m.putObject(req.AttachOpaqueData, req.SchemaPath, req.Name, "Table", req.OnConflict, false, item)
+	created, err := m.putObject(req.AttachOpaqueData, req.SchemaPath, req.Name, "Table", req.OnConflict, false, item)
+	return TableCreateResponseWire{Created: created}, err
 }
 
 func (m *MemoryCatalog) tableDrop(req *CatalogTableDropParams) error {
@@ -625,7 +629,8 @@ func (m *MemoryCatalog) viewCreate(req *CatalogViewCreateParams) error {
 	if err != nil {
 		return err
 	}
-	return m.putObject(req.AttachOpaqueData, req.SchemaPath, req.Name, "View", req.OnConflict, true, item)
+	_, err = m.putObject(req.AttachOpaqueData, req.SchemaPath, req.Name, "View", req.OnConflict, true, item)
+	return err
 }
 
 func (m *MemoryCatalog) viewDrop(req *CatalogViewDropParams) error {

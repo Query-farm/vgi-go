@@ -400,6 +400,36 @@ refuse NULLs in NOT NULL columns and changes to primary-key columns. Tables
 served by handlers opt in with `vgi.WithConstraintEnforceProfile()`.
 `examples/writable_tx` is a complete worker.
 
+What a write function sees (protocol 3.3):
+
+- **One call per statement.** An INSERT, UPDATE or DELETE opens one call of
+  its write function and streams every batch into it (a large INSERT ...
+  SELECT is several batches of one call); with `FunctionMetadata.HasFinalize`
+  the call's `Finalize` runs once, after the last batch, and never after a
+  failed statement. Validate a batch before applying any of it: on a
+  non-transactional attach, batches already applied stay applied when a later
+  one fails.
+- **write_options carries only `result_mode`.** The former `on_conflict` /
+  `on_conflict_columns` are gone (`WriteOptions.OnConflict` is always
+  `"throw"`, now deprecated): DuckDB rewrites every `INSERT ... ON CONFLICT`
+  and `INSERT OR REPLACE` into a MERGE before the catalog sees it.
+- **MERGE is emulated** with the table's ordinary write functions: one call
+  per INSERT/UPDATE/DELETE action, each receiving exactly what the plain
+  statement would (UPDATE: evaluated SET values plus `rowid`). It needs a row
+  id, and its calls are atomic together only on a transactional attach.
+- **DELETE** may repeat a row id across matches (`DELETE ... USING`); count
+  each row once.
+- **Scans should read a snapshot** when they start, so `INSERT INTO t SELECT
+  ... FROM t` does not see its own rows.
+
+Catalogs served by handlers rather than `WritableCatalog` answer
+`CREATE TABLE` / `DROP TABLE` with `vgi.WithAttachTableCreateHandler` /
+`vgi.WithAttachTableDropHandler`. The create handler reports `created`: false
+when `IF NOT EXISTS` found an existing table (CTAS then inserts nothing). Their
+dynamically named scan and write functions register with
+`RegisterTableUnlisted` / `RegisterTableInOutUnlisted` (sent `table_only`).
+`examples/simple_writable` is a complete example.
+
 ### Transactions
 
 `vgi.WithSupportsTransactions(true)` reports `supports_transactions` on every

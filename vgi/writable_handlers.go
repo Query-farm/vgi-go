@@ -121,52 +121,56 @@ func (w *Worker) writableSchemaDrop(c *WritableCatalog, path SchemaPath, ignoreN
 	return c.store.schemaDrop(c.Name, name, cascade)
 }
 
-func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestWire) error {
+// writableTableCreate creates req's table and reports whether this call
+// created it: false when on_conflict IGNORE (CREATE TABLE IF NOT EXISTS)
+// found an existing table and left it unchanged (protocol 3.3
+// catalog_table_create.created).
+func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestWire) (bool, error) {
 	if len(req.Columns) == 0 {
-		return fmt.Errorf("catalog_table_create: missing columns schema")
+		return false, fmt.Errorf("catalog_table_create: missing columns schema")
 	}
 	schema, err := DeserializeSchema(req.Columns)
 	if err != nil {
-		return fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
+		return false, fmt.Errorf("catalog_table_create: deserialize columns: %w", err)
 	}
 	if err := ValidateColumnExpressions(schema, req.SchemaPath, false); err != nil {
-		return err
+		return false, err
 	}
 	if err := ValidateColumnMetadata(schema); err != nil {
-		return err
+		return false, err
 	}
 	// NOT NULL is the one constraint this catalog enforces (see
 	// writable_constraints.go); anything else is refused.
 	records, required, err := notNullRecords(req.SchemaPath, req.Name, schema, req.ConstraintDefinitions)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := requireUnconstrainedCreateSchema(schema, required); err != nil {
-		return err
+		return false, err
 	}
 
 	schemaKey := schemaPathKey(req.SchemaPath)
 	exists, err := c.store.schemaExists(c.Name, schemaKey)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !exists {
-		return fmt.Errorf("schema %q does not exist", schemaPathDisplay(req.SchemaPath))
+		return false, fmt.Errorf("schema %q does not exist", schemaPathDisplay(req.SchemaPath))
 	}
 	existing, err := c.store.tableLoad(c.Name, schemaKey, req.Name)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if existing != nil {
 		switch parseOnConflict(req.OnConflict) {
 		case onConflictReplace:
 			if err := c.store.tableDrop(c.Name, schemaKey, req.Name); err != nil {
-				return err
+				return false, err
 			}
 		case onConflictIgnore:
-			return nil
+			return false, nil
 		default:
-			return fmt.Errorf("table %q.%q already exists", schemaPathDisplay(req.SchemaPath), req.Name)
+			return false, fmt.Errorf("table %q.%q already exists", schemaPathDisplay(req.SchemaPath), req.Name)
 		}
 	}
 
@@ -177,7 +181,10 @@ func (w *Worker) writableTableCreate(c *WritableCatalog, req TableCreateRequestW
 		defaults:      defaultsFromSchemaMetadata(schema),
 		columnComment: map[string]string{},
 	}
-	return c.store.tableUpsert(c.Name, schemaKey, t)
+	if err := c.store.tableUpsert(c.Name, schemaKey, t); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (w *Worker) writableTableDrop(c *WritableCatalog, schemaPath SchemaPath, name string, ignoreNotFound, cascade bool) error {
