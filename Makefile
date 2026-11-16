@@ -238,6 +238,9 @@ COVERAGE_GATE := --min-executed $(GO_MIN_EXECUTED) \
 	--allow-skip 'require spatial' \
 	--allow-skip 'require-env VGI_DOCKER_IMAGE' \
 	--allow-skip 'require-env VGI_DOCKER_TCP_IMAGE' \
+	--allow-skip 'require-env VGI_DOCKER_TX_IMAGE' \
+	--allow-skip 'require-env VGI_VISIBILITY_WORKER' \
+	--allow-skip 'require-env VGI_WRITE_CONTRACT_WORKER' \
 	--allow-skip 'require-env VGI_GITHUB_NETWORK_TESTS' \
 	--allow-skip 'require-env VGI_TEST_ICEBERG' \
 	--allow-skip 'require-env VGI_TEST_COMPANION_TARGET' \
