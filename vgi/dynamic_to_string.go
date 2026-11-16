@@ -5,6 +5,7 @@ package vgi
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
@@ -56,11 +57,11 @@ type TableFunctionDynamicToStringResponseWire struct {
 }
 
 func (w *Worker) handleTableFunctionDynamicToString(ctx context.Context, callCtx *vgirpc.CallContext, req TableFunctionDynamicToStringRequestWire) (TableFunctionDynamicToStringResponseWire, error) {
-	// bind_call arrives as a nested struct — we only need the function name to
-	// dispatch to the right TableFunction.
+	// bind_call arrives as a nested struct — its function name and schema
+	// pick the TableFunction.
 	bindReq := &req.BindCall
 
-	fn, err := w.lookupTable(bindReq.FunctionName)
+	fn, err := w.lookupTable(bindReq.FunctionName, bindReq.SchemaPath)
 	if err != nil {
 		return TableFunctionDynamicToStringResponseWire{}, err
 	}
@@ -99,12 +100,22 @@ func (w *Worker) handleTableFunctionDynamicToString(ctx context.Context, callCtx
 	return TableFunctionDynamicToStringResponseWire{Keys: keys, Values: values}, nil
 }
 
-// lookupTable resolves a registered table function by name (single-overload
-// lookup; the dynamic_to_string call always knows the resolved name).
-func (w *Worker) lookupTable(name string) (TableFunction, error) {
+// lookupTable resolves a registered table function by name, preferring the
+// registration homed in schemaPath (the schema the bind named): one name may
+// be registered in several schemas, e.g. same-named scans of catalog tables
+// in different schemas. Otherwise the first registration of the name.
+func (w *Worker) lookupTable(name string, schemaPath *[]string) (TableFunction, error) {
 	fns, ok := w.tables[name]
 	if !ok || len(fns) == 0 {
 		return nil, &UnknownFunctionError{Name: name, FunctionType: "table"}
+	}
+	if schemaPath != nil {
+		want := strings.ToLower(schemaPathKey(*schemaPath))
+		for i, fn := range fns {
+			if w.originOf(kindTable, name, i).schema == want {
+				return fn, nil
+			}
+		}
 	}
 	return fns[0], nil
 }
