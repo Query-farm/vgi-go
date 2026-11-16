@@ -214,11 +214,10 @@ func registerTables(w *vgi.Worker) {
 	w.RegisterTableInSchema("data", table.NewSameNameCachedFunction("data"))
 	// test_same_name_table_scan — the same trick one layer down: one producer
 	// name homed in BOTH main and data, each backing that schema's declarative
-	// test_same_name_table (declared in the worker binary). Registered here
-	// rather than left to RegisterCatalogTable's auto-registration, which homes
-	// a backing function in the catalog's default schema only and would collapse
-	// the pair into one. The table-dispatch member of the schema-disambiguation
-	// family (table/same_name_schemas.test).
+	// test_same_name_table (declared in the worker binary). RegisterCatalogTable
+	// would home each in its table's schema by itself; registering them here
+	// also makes them public, callable functions. The table-dispatch member of
+	// the schema-disambiguation family (table/same_name_schemas.test).
 	w.RegisterTable(table.NewSameNameTableScanFunction("main"))
 	w.RegisterTableInSchema("data", table.NewSameNameTableScanFunction("data"))
 	w.RegisterTable(table.NewCacheExternalFailFunction())

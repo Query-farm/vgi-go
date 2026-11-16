@@ -33,9 +33,10 @@ type CatalogTable struct {
 	// columns are derived from the function's OnBind response.
 	Columns *arrow.Schema
 	// Function is the backing table function (nil for handler-only tables).
-	// It is registered automatically and, by default, sent with visibility
-	// "table_only": it backs this table but is not callable from SQL or
-	// listed in duckdb_functions(). See ExposeScan.
+	// It is registered automatically, homed in the table's own schema, where
+	// its name must denote one function (see RegisterCatalogTable), and, by
+	// default, sent with visibility "table_only": it backs this table but is
+	// not callable from SQL or listed in duckdb_functions(). See ExposeScan.
 	Function TableFunction
 	// ExposeScan also makes Function an ordinary public table function,
 	// callable from SQL and listed in duckdb_functions(). Default false:

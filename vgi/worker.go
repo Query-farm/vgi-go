@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -1076,11 +1077,35 @@ func (w *Worker) originTableOnly(kind funcKind, name string, o funcOrigin) bool 
 	return false
 }
 
-// claimBacking turns a backing registration of (kind, name) homed at o into
-// an ordinary one, reporting whether it found one. The function registered by
-// a CatalogTable and the one the author now registers by the same name are
-// taken to be the same function (registration already dedupes by name).
-func (w *Worker) claimBacking(kind funcKind, name string, o funcOrigin) bool {
+// claimTableBacking turns the registration RegisterCatalogTable made of f's
+// name on a table's behalf, homed at o, into the author's ordinary one,
+// reporting whether it found one. The author must be registering the same
+// function (see sameFunction): a different function reusing a table's scan
+// name in that schema panics, as it does in the other order (registerTableScan).
+func (w *Worker) claimTableBacking(f TableFunction, o funcOrigin) bool {
+	name := f.Name()
+	o = w.normalizeOrigin(o)
+	origins := w.funcOrigins[funcKey{kind: kindTable, name: name}]
+	fns := w.tables[name]
+	for i := range origins {
+		if !origins[i].backing || origins[i].catalog != o.catalog || origins[i].schema != o.schema {
+			continue
+		}
+		if i < len(fns) && !sameFunction(fns[i], f) {
+			panic(fmt.Errorf("vgi: table function %q registered in schema %q is a different function "+
+				"from the scan function a catalog table already registered under that name there; "+
+				"register the same function value, or give it its own name",
+				name, strings.ReplaceAll(o.schema, "\x00", ".")))
+		}
+		origins[i] = o
+		return true
+	}
+	return false
+}
+
+// normalizeOrigin fills an origin's defaults: the worker's own catalog, the
+// default schema, and a lowercased schema key.
+func (w *Worker) normalizeOrigin(o funcOrigin) funcOrigin {
 	if o.catalog == "" {
 		o.catalog = w.catalogName
 	}
@@ -1088,14 +1113,7 @@ func (w *Worker) claimBacking(kind funcKind, name string, o funcOrigin) bool {
 		o.schema = defaultFunctionSchema
 	}
 	o.schema = strings.ToLower(o.schema)
-	origins := w.funcOrigins[funcKey{kind: kind, name: name}]
-	for i := range origins {
-		if origins[i].backing && origins[i].catalog == o.catalog && origins[i].schema == o.schema {
-			origins[i] = o
-			return true
-		}
-	}
-	return false
+	return o
 }
 
 // defaultFunctionSchema is the schema a plain Register* call declares into —
@@ -1110,13 +1128,7 @@ func (w *Worker) recordOrigin(kind funcKind, name string, o funcOrigin) {
 	if w.funcOrigins == nil {
 		w.funcOrigins = make(map[funcKey][]funcOrigin)
 	}
-	if o.catalog == "" {
-		o.catalog = w.catalogName
-	}
-	if o.schema == "" {
-		o.schema = defaultFunctionSchema
-	}
-	o.schema = strings.ToLower(o.schema)
+	o = w.normalizeOrigin(o)
 	key := funcKey{kind: kind, name: name}
 	w.funcOrigins[key] = append(w.funcOrigins[key], o)
 }
@@ -1136,12 +1148,14 @@ func (w *Worker) originOf(kind funcKind, name string, idx int) funcOrigin {
 // (kind, functionName) actually lives in, for ScanFunctionResult.SchemaPath /
 // ScanBranch.SchemaPath (protocol 1.5.0). It answers from the registration
 // registry rather than assuming the function shares the schema of the table it
-// backs: RegisterCatalogTable homes an auto-registered backing function in the
-// catalog's default schema regardless of which schema declares the table, so
-// "tables in data are scanned by functions in main" is a real, existing shape.
+// backs. A CatalogTable's own Function is homed in the table's schema, but a
+// table named dynamically (a ScanFunctionGetHandler, TableGetHandler, ...)
+// may be scanned by a function the author registered elsewhere, so "tables in
+// data are scanned by functions in main" is a real, existing shape.
 //
 // tableSchema is the schema of the table being resolved, and only breaks ties:
-// it wins when the function IS registered there (the common case), otherwise
+// it wins when the function IS registered there (the common case, and what
+// keeps same-named scans of tables in different schemas apart), otherwise
 // the function's single real home is used. Returns nil — leaving schema_path
 // unset, which sends the client back to its own pre-1.5.0 heuristic — when the
 // registry has no unambiguous answer, including the case that matters most:
@@ -1152,8 +1166,9 @@ func (w *Worker) resolveFunctionSchema(kind funcKind, functionName string, table
 	if len(origins) == 0 {
 		return nil
 	}
+	want := strings.ToLower(schemaPathKey(tableSchema))
 	for _, o := range origins {
-		if o.schema == schemaPathKey(tableSchema) {
+		if o.schema == want {
 			schema := strings.Split(o.schema, "\x00")
 			return &schema
 		}
@@ -1213,7 +1228,7 @@ func (w *Worker) RegisterTableInSchema(schemaPath string, f TableFunction) {
 // table's scan; see FunctionVisibility.
 func (w *Worker) RegisterTableInSchemaPath(schemaPath SchemaPath, f TableFunction) {
 	o := funcOrigin{schema: schemaPathKey(schemaPath)}
-	if w.claimBacking(kindTable, f.Name(), o) {
+	if w.claimTableBacking(f, o) {
 		return
 	}
 	w.tables[f.Name()] = append(w.tables[f.Name()], f)
@@ -1228,7 +1243,7 @@ func (w *Worker) RegisterTableInSchemaPath(schemaPath SchemaPath, f TableFunctio
 // “projection_repro“).
 func (w *Worker) RegisterTableForCatalog(catalogName string, f TableFunction) {
 	o := funcOrigin{catalog: catalogName}
-	if w.claimBacking(kindTable, f.Name(), o) {
+	if w.claimTableBacking(f, o) {
 		return
 	}
 	w.tables[f.Name()] = append(w.tables[f.Name()], f)
@@ -1344,9 +1359,13 @@ func (w *Worker) RegisterWritableCatalog(c *WritableCatalog) {
 // RegisterCatalogTable registers a table in the given schema of the catalog.
 //
 // If table.Function is set, the function is also auto-registered into the
-// dispatch table (deduped by name) so the scan resolves without a separate
-// RegisterTable call — mirroring vgi-python's _build_registry, which auto-scans
-// each Table.function.
+// dispatch table, homed in the table's own schema, so the scan resolves
+// without a separate RegisterTable call — mirroring vgi-python's
+// _build_registry, which auto-scans each Table.function. A scan function name
+// must denote one function per schema: several tables may share one function,
+// and tables in different schemas may use different functions of the same
+// name, but a different function reusing a name already registered in the
+// table's schema panics (see registerTableScan).
 //
 // Every function the table names is sent in the function listing (protocol
 // 3.3), so the extension has its capabilities. Its write functions are always
@@ -1385,27 +1404,96 @@ func (w *Worker) RegisterCatalogTablePath(schemaPath SchemaPath, table CatalogTa
 		}
 	}
 	if table.Function != nil {
-		name := table.Function.Name()
-		if _, exists := w.tables[name]; !exists {
-			w.tables[name] = append(w.tables[name], table.Function)
-			// Homed in the catalog's default schema, not the table's: that is
-			// where the extension resolves a function-backed table's scan
-			// function when the table's own schema does not declare it, and so
-			// the schema its bind will name. Table-only unless the table
-			// exposes its scan.
-			w.recordOrigin(kindTable, name, funcOrigin{tableOnly: !table.ExposeScan, backing: true})
-		} else if table.ExposeScan {
-			// Another table already registered this scan on its behalf; this
-			// one exposes it, so it is public. (An author's own registration
-			// of the name is public already.)
-			origins := w.funcOrigins[funcKey{kind: kindTable, name: name}]
-			for i := range origins {
-				if origins[i].backing {
-					origins[i].tableOnly = false
-				}
-			}
-		}
+		w.registerTableScan(schemaPath, table.Function, table.ExposeScan)
 	}
+}
+
+// registerTableScan registers a CatalogTable's scan Function on the table's
+// behalf, homed in the table's own schema -- like its write functions, and
+// like vgi-python and vgi-rust. Homing it in the catalog's default schema
+// instead listed it in `main`, where a `main` macro's bare call of a
+// same-named host function (e.g. `range`) resolved to the worker.
+//
+// The extension finds the scan through catalog_table_scan_branches_get, whose
+// branch names the function's schema (resolveFunctionSchema prefers the
+// table's), looks it up in that schema (hidden table_only sets included) and
+// names that schema in the bind. Dispatch resolves (catalog, schema, name), so
+// a scan name need only be unique within its schema: tables in different
+// schemas may each have their own function of the same name.
+//
+// Within one schema, the name must denote one function. A table whose scan is
+// already registered there (by another table, or by the author) reuses that
+// registration; a different function reusing the name panics -- a developer
+// error that should fail at startup rather than scan with the wrong function.
+// Sameness is decided by sameFunction (identity or deep equality of the
+// implementation), never by name alone.
+func (w *Worker) registerTableScan(schemaPath SchemaPath, fn TableFunction, expose bool) {
+	name := fn.Name()
+	home := w.normalizeOrigin(funcOrigin{schema: schemaPathKey(schemaPath)})
+	origins := w.funcOrigins[funcKey{kind: kindTable, name: name}]
+	conflict := false
+	for i, existing := range w.tables[name] {
+		o := w.originOf(kindTable, name, i)
+		if o.catalog != home.catalog || o.schema != home.schema {
+			continue
+		}
+		if !sameFunction(existing, fn) {
+			conflict = true
+			continue
+		}
+		// Already registered here. Exposing it makes a registration made on
+		// a table's behalf public (an author's own one is public already).
+		if expose && i < len(origins) && origins[i].backing {
+			origins[i].tableOnly = false
+		}
+		return
+	}
+	if conflict {
+		panic(fmt.Errorf("vgi.RegisterCatalogTable: scan function %q in schema %q is a different "+
+			"function from the one already registered under that name in that schema; a scan "+
+			"function name must denote one function per schema (use the same function value "+
+			"for every table it backs, or give each function its own name)",
+			name, strings.ReplaceAll(home.schema, "\x00", ".")))
+	}
+	w.tables[name] = append(w.tables[name], fn)
+	home.tableOnly = !expose
+	home.backing = true
+	w.recordOrigin(kindTable, name, home)
+}
+
+// sameFunction reports whether two registered function values are the same
+// function: after looking through framework adapters (AsTableFunction, ...),
+// the same value -- one pointer, or one comparable value -- or two values of
+// one type that are deeply equal (reflect.DeepEqual), such as two fresh
+// instances of a constructor called with the same arguments. Values of
+// different types, or of one type with different contents (a different
+// schema tag, a different closure), are different functions.
+func sameFunction(a, b any) bool {
+	a, b = unwrapFunction(a), unwrapFunction(b)
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	if va.Type() != vb.Type() {
+		return false
+	}
+	if va.Comparable() && va.Equal(vb) {
+		return true
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+// unwrapFunction strips framework adapters (see splitPlannerFor) to reach the
+// author's own implementation.
+func unwrapFunction(fn any) any {
+	for fn != nil {
+		u, ok := fn.(interface{ InnerFunc() any })
+		if !ok {
+			break
+		}
+		fn = u.InnerFunc()
+	}
+	return fn
 }
 
 // RegisterCatalogView registers a view in the given schema of the catalog.

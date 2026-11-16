@@ -47,6 +47,23 @@
 - `examples/simple_writable` supports `CREATE TABLE` / CTAS / `DROP TABLE` of
   insert-only tables.
 
+### Fixed
+
+- A `CatalogTable`'s scan `Function` is homed in the table's own schema, like
+  its write functions (and as in vgi-python and vgi-rust 0.51.1), instead of
+  the catalog's default schema `main`. Listed in `main`, a table-only scan
+  named like a host function (e.g. `range`) captured a `main` macro's bare
+  call of it. With `ExposeScan`, the scan is callable in the table's schema.
+- Tables in different schemas may now use different scan functions of the
+  same name; each table scans with its own. The registry used to keep only the
+  first function registered under a name, worker-wide, and silently scanned
+  every later table with it. Within one schema a name must denote one
+  function: a different function reusing a scan name there panics at
+  registration. Sharing one function across tables still works; sameness is
+  identity or deep equality of the implementation, never the name alone.
+- `table_function_dynamic_to_string` resolves the function in the schema the
+  bind names, rather than the first registration of the name.
+
 ### Added
 
 - `CatalogTable.ExposeScan`, `FunctionInfo.Visibility`, `vgi.FunctionVisibility`.
