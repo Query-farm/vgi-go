@@ -80,6 +80,9 @@ func main() {
 		vgi.WithSchemaComments(map[string]string{
 			"main": "Example functions for testing VGI",
 			"data": "Example tables backed by functions",
+			// No comment: database_tags.test pins exactly the commented
+			// schemas (an unlisted schema would get "contract schema").
+			"contract": "",
 		}),
 		// Schema-level description tags (duckdb_schemas().tags). Satisfies the
 		// metadata linter's VGI116/VGI118 rules.
@@ -224,6 +227,10 @@ func main() {
 	// protocol is hosted when VGI_SIGNING_KEY and VGI_RPC_GRANT_KEYS are both
 	// set.
 	ticket_probe.Register(w)
+
+	// example.contract: cross-SDK table_only scan and write-contract fixtures
+	// (see contract_fixtures.go).
+	registerContractFixtures(w)
 
 	// Writable catalog (in-memory, per-process state). Gated off by default so
 	// the example worker's function inventory matches the reference vgi-python
