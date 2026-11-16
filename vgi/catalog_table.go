@@ -48,7 +48,9 @@ type CatalogTable struct {
 	// InsertFunction is the table in-out function backing INSERT INTO this
 	// table. It receives the new rows (the table's user columns) and returns
 	// a WriteResultSchema batch for the mode ParseWriteOptions reports. Nil
-	// means the table does not accept INSERT. Registered automatically.
+	// means the table does not accept INSERT. Registered automatically, like
+	// UpdateFunction and DeleteFunction, in the table's own schema, where a
+	// write function name must denote one function (see RegisterCatalogTable).
 	InsertFunction TableInOutFunction
 	// UpdateFunction is the table in-out function backing UPDATE. It
 	// receives the row-id column (RowIDField, which the scan Function must

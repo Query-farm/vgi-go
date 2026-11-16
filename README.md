@@ -222,11 +222,12 @@ w.RegisterCatalogTable("main", vgi.CatalogTable{
 })
 ```
 
-A table's scan `Function` is homed in the table's own schema (so is each write
-function). A scan function name must denote one function per schema: several
-tables may share one function, and tables in different schemas may each use
-their own function of the same name, but registering a different function
-under a name already used in that schema panics at startup.
+A table's scan `Function` and write functions are homed in the table's own
+schema. Each such name must denote one function per schema: several tables may
+share one function, and tables in different schemas may each use their own
+function of the same name, but registering a different function under a name
+already used in that schema (by a table, or as your own table function) panics
+at startup.
 
 `RegisterTableUnlisted` registers a function as `table_only` directly; it is
 needed only for functions that tables name dynamically (from a

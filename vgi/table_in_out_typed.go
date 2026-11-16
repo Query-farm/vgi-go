@@ -72,6 +72,10 @@ type typedTableInOutAdapter[S any] struct {
 	onInit func(*InitParams) (*GlobalInitResponse, error)
 }
 
+// wrappedFunction exposes the wrapped implementation to sameFunction, so
+// wrapping one implementation twice is still the same function.
+func (a *typedTableInOutAdapter[S]) wrappedFunction() any { return a.inner }
+
 // Name forwards to the wrapped typed function's Name.
 func (a *typedTableInOutAdapter[S]) Name() string { return a.inner.Name() }
 

@@ -61,6 +61,16 @@
   function: a different function reusing a scan name there panics at
   registration. Sharing one function across tables still works; sameness is
   identity or deep equality of the implementation, never the name alone.
+- The same holds for a `CatalogTable`'s `InsertFunction` / `UpdateFunction` /
+  `DeleteFunction`: they were deduplicated worker-wide by name, so two tables
+  whose different write functions shared a name both wrote with the first.
+  They are now per schema: same-named writers in different schemas each reach
+  their own function, one function may back several tables, and a different
+  function reusing a write function's name in one schema -- another table's
+  writer or the author's own table in-out function, in either order -- panics
+  at registration. A write function is `table_only` only in the schema a
+  table registered it in; an unrelated same-named table in-out function in
+  another schema stays public.
 - `table_function_dynamic_to_string` resolves the function in the schema the
   bind names, rather than the first registration of the name.
 

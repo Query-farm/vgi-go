@@ -352,10 +352,11 @@ type Worker struct {
 	// origins — which is exactly what makes a name registered in two schemas
 	// (or two catalogs) resolvable.
 	funcOrigins map[funcKey][]funcOrigin
-	// tableWriteFunctions names every table in-out function a CatalogTable
-	// names as its Insert/Update/DeleteFunction. Write functions are always
-	// sent as visibility "table_only", however else they were registered.
-	tableWriteFunctions map[string]struct{}
+	// tableWriteFunctions records every home (catalog, schema, name) where a
+	// CatalogTable registered its Insert/Update/DeleteFunction. The table
+	// in-out registrations of that name in that home are always sent as
+	// visibility "table_only", however else they were registered.
+	tableWriteFunctions map[writeHome]struct{}
 	// catalogAliasInfos carries per-alias discovery metadata (data version,
 	// etc.) for aliases that should advertise themselves distinctly in
 	// catalog_catalogs and mint a random per-ATTACH scope at attach (so two
@@ -1071,7 +1072,7 @@ func (w *Worker) originTableOnly(kind funcKind, name string, o funcOrigin) bool 
 		return true
 	}
 	if kind == kindTableInOut {
-		_, isWrite := w.tableWriteFunctions[name]
+		_, isWrite := w.tableWriteFunctions[writeHome{name: name, catalog: o.catalog, schema: o.schema}]
 		return isWrite
 	}
 	return false
@@ -1279,9 +1280,18 @@ func (w *Worker) RegisterTableInOutInSchema(schemaPath string, f TableInOutFunct
 }
 
 // RegisterTableInOutInSchemaPath registers a table-in-out function in an arbitrarily nested schema.
+//
+// A CatalogTable's write function in that schema may be registered this way
+// too (before or after RegisterCatalogTable): it stays one table_only
+// registration. A different function reusing a write function's name in its
+// schema panics; see RegisterCatalogTable.
 func (w *Worker) RegisterTableInOutInSchemaPath(schemaPath SchemaPath, f TableInOutFunction) {
+	o := funcOrigin{schema: schemaPathKey(schemaPath)}
+	if w.claimTableWrite(f, o) {
+		return
+	}
 	w.tableInOuts[f.Name()] = append(w.tableInOuts[f.Name()], f)
-	w.recordOrigin(kindTableInOut, f.Name(), funcOrigin{schema: schemaPathKey(schemaPath)})
+	w.recordOrigin(kindTableInOut, f.Name(), o)
 }
 
 // RegisterTableInOutForCatalog is the catalog-scoped sibling of
@@ -1290,8 +1300,12 @@ func (w *Worker) RegisterTableInOutInSchemaPath(schemaPath SchemaPath, f TableIn
 // RegisterTableForCatalog for the rationale (per-catalog function
 // inventories that fixture tests assert on).
 func (w *Worker) RegisterTableInOutForCatalog(catalogName string, f TableInOutFunction) {
+	o := funcOrigin{catalog: catalogName}
+	if w.claimTableWrite(f, o) {
+		return
+	}
 	w.tableInOuts[f.Name()] = append(w.tableInOuts[f.Name()], f)
-	w.recordOrigin(kindTableInOut, f.Name(), funcOrigin{catalog: catalogName})
+	w.recordOrigin(kindTableInOut, f.Name(), o)
 }
 
 // RegisterTableInOutUnlisted registers a table in-out function that only backs
@@ -1379,33 +1393,96 @@ func (w *Worker) RegisterCatalogTable(schemaPath string, table CatalogTable) {
 // RegisterCatalogTablePath registers a table in an arbitrarily nested schema.
 //
 // Its InsertFunction / UpdateFunction / DeleteFunction, if set, are registered
-// as table in-out functions in the table's schema (deduped by name). Panics on
-// an invalid write declaration (see CatalogTable.WriteResultModes), a
-// developer error that should fail at startup.
+// as table in-out functions in the table's schema, where each name must denote
+// one function, like the scan's (see registerTableWrite). Panics on an invalid
+// write declaration (see CatalogTable.WriteResultModes) or a different function
+// reusing a scan or write function name in the table's schema, developer
+// errors that should fail at startup.
 func (w *Worker) RegisterCatalogTablePath(schemaPath SchemaPath, table CatalogTable) {
 	if err := table.validateWrites(); err != nil {
 		panic(fmt.Errorf("vgi.RegisterCatalogTable: %w", err))
 	}
 	key := schemaPathKey(schemaPath)
 	w.catalogTables[key] = append(w.catalogTables[key], table)
-	// Write functions are dispatched like any table in-out function, homed
-	// in the table's schema (where catalog_table_*_function_get names them),
-	// and are always sent as visibility "table_only" (originTableOnly).
 	for _, fn := range []TableInOutFunction{table.InsertFunction, table.UpdateFunction, table.DeleteFunction} {
-		if fn == nil {
-			continue
-		}
-		if w.tableWriteFunctions == nil {
-			w.tableWriteFunctions = make(map[string]struct{})
-		}
-		w.tableWriteFunctions[fn.Name()] = struct{}{}
-		if _, exists := w.tableInOuts[fn.Name()]; !exists {
-			w.RegisterTableInOutInSchemaPath(schemaPath, fn)
+		if fn != nil {
+			w.registerTableWrite(schemaPath, fn)
 		}
 	}
 	if table.Function != nil {
 		w.registerTableScan(schemaPath, table.Function, table.ExposeScan)
 	}
+}
+
+// writeHome is a (catalog, schema, name) home of a CatalogTable's write
+// function; schema is the lowercased schema key.
+type writeHome struct{ name, catalog, schema string }
+
+// registerTableWrite registers a CatalogTable's Insert/Update/DeleteFunction
+// on the table's behalf, homed in the table's own schema and always sent as
+// visibility "table_only" (originTableOnly).
+//
+// The extension resolves a write the way it resolves a scan:
+// catalog_table_{insert,update,delete}_function_get names the function and its
+// schema (resolveFunctionSchema prefers the table's), the extension looks it
+// up there (then the table's schema, then the default) and its bind names the
+// schema it resolved in; dispatch resolves (catalog, schema, name). So a write
+// function name need only be unique within its schema. Within one schema it
+// must denote one function: the same function (sameFunction) -- shared by
+// several tables, or also registered by the author as a table in-out function
+// -- keeps one registration; a different function reusing the name panics,
+// in whichever order the two are registered (see claimTableWrite).
+func (w *Worker) registerTableWrite(schemaPath SchemaPath, fn TableInOutFunction) {
+	name := fn.Name()
+	home := w.normalizeOrigin(funcOrigin{schema: schemaPathKey(schemaPath)})
+	if w.tableWriteFunctions == nil {
+		w.tableWriteFunctions = make(map[writeHome]struct{})
+	}
+	conflict := false
+	for i, existing := range w.tableInOuts[name] {
+		o := w.originOf(kindTableInOut, name, i)
+		if o.catalog != home.catalog || o.schema != home.schema {
+			continue
+		}
+		if sameFunction(existing, fn) {
+			w.tableWriteFunctions[writeHome{name: name, catalog: home.catalog, schema: home.schema}] = struct{}{}
+			return
+		}
+		conflict = true
+	}
+	if conflict {
+		panic(fmt.Errorf("vgi.RegisterCatalogTable: write function %q in schema %q is a different "+
+			"function from the table in-out function already registered under that name in that "+
+			"schema; a write function name must denote one function per schema (use the same "+
+			"function value for every table it backs, or give each function its own name)",
+			name, strings.ReplaceAll(home.schema, "\x00", ".")))
+	}
+	w.tableWriteFunctions[writeHome{name: name, catalog: home.catalog, schema: home.schema}] = struct{}{}
+	home.backing = true
+	w.tableInOuts[name] = append(w.tableInOuts[name], fn)
+	w.recordOrigin(kindTableInOut, name, home)
+}
+
+// claimTableWrite reports whether f is already registered at home o as a
+// CatalogTable's write function, so an author's own registration of it adds
+// nothing (it stays table_only). A different function of that name at that
+// home panics, as registerTableWrite does in the other order.
+func (w *Worker) claimTableWrite(f TableInOutFunction, o funcOrigin) bool {
+	name := f.Name()
+	o = w.normalizeOrigin(o)
+	if _, ok := w.tableWriteFunctions[writeHome{name: name, catalog: o.catalog, schema: o.schema}]; !ok {
+		return false
+	}
+	for i, existing := range w.tableInOuts[name] {
+		eo := w.originOf(kindTableInOut, name, i)
+		if eo.catalog == o.catalog && eo.schema == o.schema && sameFunction(existing, f) {
+			return true
+		}
+	}
+	panic(fmt.Errorf("vgi: table in-out function %q registered in schema %q is a different function "+
+		"from the write function a catalog table already registered under that name there; "+
+		"register the same function value, or give it its own name",
+		name, strings.ReplaceAll(o.schema, "\x00", ".")))
 }
 
 // registerTableScan registers a CatalogTable's scan Function on the table's
@@ -1487,11 +1564,14 @@ func sameFunction(a, b any) bool {
 // author's own implementation.
 func unwrapFunction(fn any) any {
 	for fn != nil {
-		u, ok := fn.(interface{ InnerFunc() any })
-		if !ok {
-			break
+		switch u := fn.(type) {
+		case interface{ InnerFunc() any }:
+			fn = u.InnerFunc()
+		case interface{ wrappedFunction() any }:
+			fn = u.wrappedFunction()
+		default:
+			return fn
 		}
-		fn = u.InnerFunc()
 	}
 	return fn
 }
