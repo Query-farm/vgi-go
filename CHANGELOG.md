@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.43.0 (2026-11-19)
+
+### Security
+
+- **Sealed framework payloads (v1).** Framework state the SDK writes to
+  storage is sealed with the cross-SDK format: HKDF-SHA256 over the signing
+  key (`VGI_SIGNING_KEY` / `WithHttpSigningKey`, used as its raw configured
+  bytes; a host-local key without one; info `vgi.storage.payload.v1`),
+  AES-256-GCM, with the shard key, execution, namespace and key bound as AAD.
+  Wire form `0x01 || nonce || ciphertext || tag`, byte-identical to
+  vgi-python's test vector. An unknown version or a short or unauthenticated
+  envelope is a `*StoragePayloadError`, never read as plaintext.
+- **No plaintext secrets in storage.** The buffered-function init recipe
+  (resolved secrets, opened transaction scope) and aggregate const args are
+  stored sealed; the opened attach scope and options are no longer stored.
+- Buffering process/combine take the shard key, function name, schema path,
+  attach scope/options and caller from the authenticated request, never from
+  stored state; a function-name mismatch is refused.
+- A wrong-type aggregate state is a clean error (`*AggregateStateTypeError`)
+  and aggregate handlers recover panics instead of crashing the worker.
+- Per-execution caches are keyed by `(shard_key, execution_id)`, so another
+  attach can never read or re-pin an execution's view; they are bounded
+  (LRU + TTL) and evicted by the destructors.
+
+### Performance
+
+- Aggregate const args are cached per execution and function (functions
+  without const params never read them): update 3 -> 2, combine 3 -> 2,
+  finalize 2 -> 1 storage calls.
+- Decoded window partitions are cached between evaluate blocks (2 -> 0
+  storage calls per block).
+- The buffered finalize flush packs batches into ~1 MiB log rows (one append
+  per row instead of per batch).
+- `storage/cfdo`: retries use jittered exponential backoff
+  (`RetryBaseDelay` / `RetryMaxDelay`, defaults 50 ms / 1 s) with a stable
+  `attempt_id`, and `StateLogScan` pages 1000 rows per request.
+
+### Compatibility
+
+- Storage written by 0.42.x is not readable by 0.43.0 (it is unsealed);
+  storage is per execution, so let in-flight queries finish before upgrading
+  workers that share a storage backend.
+
 ## 0.42.2 (2026-11-16)
 
 ### Fixed
