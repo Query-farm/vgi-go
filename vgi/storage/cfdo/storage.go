@@ -94,7 +94,20 @@ type Options struct {
 	// Transient transport errors and 5xx responses are retried; 4xx
 	// responses are not (the request itself is wrong).
 	PostAttempts int
+
+	// RetryBaseDelay is the base of the exponential backoff between attempts:
+	// before retry n (1-based) the client sleeps a uniformly random duration
+	// in [0, min(RetryMaxDelay, RetryBaseDelay * 2^(n-1))) ("full jitter"), so
+	// workers that hit one overloaded Durable Object together do not retry in
+	// lockstep. Default 50ms.
+	RetryBaseDelay time.Duration
+	// RetryMaxDelay caps one backoff sleep. Default 1s.
+	RetryMaxDelay time.Duration
 }
+
+// logScanPageSize is the most rows one state_log_scan request asks for; a
+// longer scan pages by after_id.
+const logScanPageSize = 1000
 
 // Storage implements vgi.FunctionStorage against a Cloudflare Worker DO. Every
 // legacy FunctionStorage family (worker/scan-worker/aggregate/window/txn state,
@@ -107,6 +120,10 @@ type Storage struct {
 	token        string
 	client       *http.Client
 	postAttempts int
+	retryBase    time.Duration
+	retryMax     time.Duration
+	// sleep waits between attempts (time.Sleep; replaced in tests).
+	sleep func(time.Duration)
 	// shardKey routes to the Durable Object for one logical ATTACH
 	// (att-<hex uuid>); set per-execution by the framework via ForShard.
 	shardKey string
@@ -142,11 +159,21 @@ func NewStorage(opts Options) (*Storage, error) {
 	if attempts <= 0 {
 		attempts = 3
 	}
+	base, maxDelay := opts.RetryBaseDelay, opts.RetryMaxDelay
+	if base <= 0 {
+		base = 50 * time.Millisecond
+	}
+	if maxDelay <= 0 {
+		maxDelay = time.Second
+	}
 	return &Storage{
 		baseURL:      strings.TrimRight(opts.URL, "/"),
 		token:        opts.Token,
 		client:       c,
 		postAttempts: attempts,
+		retryBase:    base,
+		retryMax:     maxDelay,
+		sleep:        time.Sleep,
 	}, nil
 }
 
@@ -198,6 +225,9 @@ func (s *Storage) post(endpoint string, body map[string]any, out any) error {
 	url := s.baseURL + "/" + endpoint
 	var lastErr error
 	for attempt := 0; attempt < s.postAttempts; attempt++ {
+		if attempt > 0 {
+			s.backoff(attempt)
+		}
 		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 		if err != nil {
 			return fmt.Errorf("cfdo: building %s request: %w", endpoint, err)
@@ -275,6 +305,25 @@ func (s *Storage) post(endpoint string, body map[string]any, out any) error {
 		lastErr = fmt.Errorf("cfdo: %s exhausted %d attempts", endpoint, s.postAttempts)
 	}
 	return lastErr
+}
+
+// backoffDelay is the full-jitter sleep before retry n (1-based).
+func (s *Storage) backoffDelay(n int) time.Duration {
+	ceiling := s.retryBase << uint(n-1)
+	if ceiling <= 0 || ceiling > s.retryMax {
+		ceiling = s.retryMax
+	}
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return time.Duration(binary.BigEndian.Uint64(b[:]) % uint64(ceiling))
+}
+
+func (s *Storage) backoff(n int) {
+	sleep := s.sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	sleep(s.backoffDelay(n))
 }
 
 func truncBody(b []byte) string {
@@ -752,35 +801,46 @@ func (s *Storage) StateAppend(executionID, key, value []byte) (int64, error) {
 }
 
 // StateLogScan returns log entries for (executionID, key) with id > afterID,
-// ordered by id. limit <= 0 means no limit.
+// ordered by id. limit <= 0 means no limit. Pages of logScanPageSize rows,
+// continuing from the last id, so a long log never comes back as one response.
 func (s *Storage) StateLogScan(executionID, key []byte, afterID int64, limit int) ([]vgi.StateLogEntry, error) {
-	body := map[string]any{
-		"scope_id": b64(executionID),
-		"ns":       b64(nsLog),
-		"key":      b64(key),
-		"after_id": afterID,
-	}
-	if limit > 0 {
-		body["limit"] = limit
-	}
-	var resp struct {
-		Rows []struct {
-			ID    int64  `json:"id"`
-			Value string `json:"value"`
-		} `json:"rows"`
-	}
-	if err := s.post("state_log_scan", body, &resp); err != nil {
-		return nil, err
-	}
-	out := make([]vgi.StateLogEntry, 0, len(resp.Rows))
-	for _, r := range resp.Rows {
-		v, err := unb64(r.Value)
-		if err != nil {
-			return nil, fmt.Errorf("cfdo: state_log_scan decode value: %w", err)
+	var out []vgi.StateLogEntry
+	for {
+		page := logScanPageSize
+		if limit > 0 && limit-len(out) < page {
+			page = limit - len(out)
 		}
-		out = append(out, vgi.StateLogEntry{ID: r.ID, Value: v})
+		body := map[string]any{
+			"scope_id": b64(executionID),
+			"ns":       b64(nsLog),
+			"key":      b64(key),
+			"after_id": afterID,
+			"limit":    page,
+		}
+		var resp struct {
+			Rows []struct {
+				ID    int64  `json:"id"`
+				Value string `json:"value"`
+			} `json:"rows"`
+		}
+		if err := s.post("state_log_scan", body, &resp); err != nil {
+			return nil, err
+		}
+		if out == nil {
+			out = make([]vgi.StateLogEntry, 0, len(resp.Rows))
+		}
+		for _, r := range resp.Rows {
+			v, err := unb64(r.Value)
+			if err != nil {
+				return nil, fmt.Errorf("cfdo: state_log_scan decode value: %w", err)
+			}
+			out = append(out, vgi.StateLogEntry{ID: r.ID, Value: v})
+		}
+		if len(resp.Rows) < page || (limit > 0 && len(out) >= limit) {
+			return out, nil
+		}
+		afterID = resp.Rows[len(resp.Rows)-1].ID
 	}
-	return out, nil
 }
 
 // StateLogClear removes all state-log rows for the execution.
