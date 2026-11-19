@@ -43,7 +43,7 @@ var (
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if fakeVendorCmd != nil && fakeVendorCmd.Process != nil {
-		_ = fakeVendorCmd.Process.Kill()
+		stopGroup(fakeVendorCmd)
 		_ = fakeVendorCmd.Wait()
 	}
 	os.Exit(code)
@@ -67,7 +67,11 @@ func startFakeVendor() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cmd.Stderr = os.Stderr
+	// Not the test binary's stderr: under uvx the vendor is a grandchild that
+	// outlives the kill in TestMain, and a held stderr makes go test wait on
+	// it ("Test I/O incomplete").
+	cmd.Stderr = nil
+	startInGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
@@ -95,7 +99,7 @@ func startFakeVendor() (string, error) {
 				return rest, nil
 			}
 		case <-deadline:
-			_ = cmd.Process.Kill()
+			stopGroup(cmd)
 			return "", errors.New("timed out waiting for the fake vendor")
 		}
 	}
