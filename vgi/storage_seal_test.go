@@ -490,3 +490,52 @@ func TestWindowPartitionCacheEvictedByDestructor(t *testing.T) {
 		t.Fatal("window destructor left the partition cached")
 	}
 }
+
+// The ikm is the UTF-8 bytes of VGI_SIGNING_KEY exactly as configured -- a
+// 64-hex key is 64 ASCII bytes, never hex-decoded or stretched -- and a key
+// passed to WithHttpSigningKey is used as-is. The expected bytes come from
+// vgi-python 0.53.3 vgi._storage_seal.seal_with for the same inputs.
+func TestStoragePayloadIKMIsRawSigningKey(t *testing.T) {
+	const hexKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const (
+		wantKey  = "bcc6b0475564abef4aacbbd08c02a68829f72b91dd31733801a81ed3a8de0006"
+		wantWire = "01000102030405060708090a0b5d6f11248e7973c77e84efe92d3c76262db7105024a2a8ea27204ff36493b16d8af68f7f7823631a3dce98259f4c79"
+	)
+	scope := make([]byte, 16)
+	for i := range scope {
+		scope[i] = byte(i)
+	}
+	nonce := make([]byte, 12)
+	for i := range nonce {
+		nonce[i] = byte(i)
+	}
+	slot := storageSlot{ShardKey: "att-00112233445566778899aabbccddeeff", ScopeID: scope, NS: []byte("_vgi/buffering_init"), Key: int64Key(-1)}
+
+	t.Setenv(SigningKeyEnv, hexKey)
+	fromEnv := NewWorker()
+	if _, err := fromEnv.newHttpServer(); err != nil {
+		t.Fatal(err)
+	}
+	explicit := NewWorker(WithHttpSigningKey([]byte(hexKey)))
+	explicit.sealOpaqueData = true
+	for name, w := range map[string]*Worker{"VGI_SIGNING_KEY": fromEnv, "WithHttpSigningKey": explicit} {
+		ikm, err := w.storagePayloadIKM()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(ikm) != hexKey || len(ikm) != 64 {
+			t.Fatalf("%s: ikm = %x, want the 64 ASCII bytes of the key", name, ikm)
+		}
+		k, _ := deriveStoragePayloadKey(ikm)
+		if hex.EncodeToString(k) != wantKey {
+			t.Fatalf("%s: derived key %x, want %s", name, k, wantKey)
+		}
+		wire, err := sealStoragePayloadWith([]byte("vgi sealed framework payload v1"), ikm, slot, nonce)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hex.EncodeToString(wire) != wantWire {
+			t.Fatalf("%s: wire %x does not match vgi-python", name, wire)
+		}
+	}
+}
