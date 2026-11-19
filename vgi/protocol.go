@@ -739,6 +739,12 @@ func (s *FinalizeProducerState) nextLogBatch() ([]byte, bool, error) {
 // larger than this still goes in a row of its own.
 const finalizePackMaxBytes = 1<<20 - 16<<10
 
+// finalizeInlineMaxBytes is the largest single remaining batch a continuation
+// token carries inline instead of offloading it to the state log. The token
+// rides every continuation request, and clients send those inline, so it has
+// to stay well under any max_request_bytes a server advertises.
+const finalizeInlineMaxBytes = 4 << 10
+
 // packFinalizeBatches groups consecutive batches into rows of at most
 // finalizePackMaxBytes. Row format: u32be(count) || (u32be(len) || ipc)*.
 func packFinalizeBatches(batches [][]byte) [][]byte {
@@ -848,8 +854,11 @@ func (s *FinalizeProducerState) offloadFlush() bool {
 		start = len(s.BatchIPC)
 	}
 	remaining := s.BatchIPC[start:]
-	// One remaining batch needs no log: it fits in the turn that follows.
-	if len(remaining) < 2 {
+	// One small remaining batch needs no log: it fits in the turn that
+	// follows. A large one does: it would ride the continuation request,
+	// which the client sends inline and may not externalize, so a token over
+	// the server's advertised max_request_bytes is refused (413).
+	if len(remaining) == 0 || (len(remaining) == 1 && len(remaining[0]) <= finalizeInlineMaxBytes) {
 		return false
 	}
 	key := newFinalizeLogKey()

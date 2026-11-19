@@ -2027,6 +2027,16 @@ func (w *Worker) newHttpServer() (*vgirpc.HttpServer, error) {
 	if cors := os.Getenv("VGI_HTTP_CORS_ORIGINS"); cors != "" {
 		hs.SetCorsOrigins(cors)
 	}
+	// The blob vendor (VGI_BLOB_VENDOR_URL + VGI_BLOB_VENDOR_TOKEN): results
+	// over VGI_RPC_EXTERNALIZE_THRESHOLD_BYTES become vendor pointers, clients
+	// get upload URLs for requests over VGI_RPC_MAX_REQUEST_BYTES (advertised
+	// and enforced whenever set), and VGI_RPC_MAX_UPLOAD_BYTES is advertised.
+	// Applied after SetPrefix: vending upload URLs adds a route.
+	if config, err := vgirpc.ConfigureHTTPServerFromEnv(hs, nil); err != nil {
+		return nil, fmt.Errorf("blob vendor: %w", err)
+	} else if config != nil {
+		fmt.Fprintf(os.Stderr, "Blob vendor enabled: threshold=%d bytes\n", config.ExternalizeThresholdBytes)
+	}
 	if w.authenticateFunc != nil {
 		hs.SetAuthenticate(w.authenticateFunc)
 	}
@@ -2133,7 +2143,8 @@ func (w *Worker) functionStorage() (FunctionStorage, error) {
 			w.fsErr = err
 			return
 		}
-		w.fs = s
+		// VGI_STORAGE_EXTERNALIZE=1 keeps large values in the blob vendor.
+		w.fs, w.fsErr = WrapStorageFromEnv(s, 0)
 	})
 	return w.fs, w.fsErr
 }

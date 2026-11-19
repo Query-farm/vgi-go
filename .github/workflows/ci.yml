@@ -47,7 +47,14 @@ jobs:
           CGO_ENABLED=0 go build ./vgi/ ./vgi/vgitest/
           if go list -deps ./vgi/ | grep -q haybarn; then echo "vgi imports haybarn" >&2; exit 1; fi
 
+      # The externalizing-storage tests (vgi/storage_blobs_test.go) run against
+      # vgi-rpc-python's fake blob vendor, the same build the extension's
+      # test/start_fake_blob_vendor.sh pins.
+      - uses: astral-sh/setup-uv@v6
+
       - name: Unit tests with coverage
+        env:
+          VGI_RPC_FAKE_VENDOR_CMD: uvx --from git+https://github.com/Query-farm/vgi-rpc-python@af57e6bb395e5198b2a5336def976d73bfc87d8f vgi-rpc-fake-vendor
         run: make test-unit
 
       - name: Verify consumer FlatBuffers replacement

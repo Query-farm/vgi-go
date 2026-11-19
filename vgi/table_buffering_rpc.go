@@ -320,8 +320,12 @@ func (w *Worker) initTableBuffering(ctx context.Context, fn TableBufferingFuncti
 		}
 		return &vgirpc.StreamResult{
 			OutputSchema: outputSchema,
-			State:        &FinalizeProducerState{Recipe: *recipe, BatchIPC: batchIPC, batches: batches, CacheMeta: cacheMeta},
-			Header:       header,
+			// storage lets the first continuation token offload the flush to
+			// the state log (FinalizeProducerState.offloadFlush) instead of
+			// carrying every remaining batch in the token, which rides each
+			// continuation request and outgrows max_request_bytes.
+			State:  &FinalizeProducerState{Recipe: *recipe, BatchIPC: batchIPC, batches: batches, CacheMeta: cacheMeta, storage: storage},
+			Header: header,
 		}, nil
 	}
 

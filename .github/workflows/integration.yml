@@ -24,6 +24,10 @@ concurrency:
 env:
   # Test sources and statically linked binaries come from this exact native commit.
   VGI_REF: 9dae8d55c9692cbd8b69d021c28b20a09aeee438
+  # The vendor lane's suite: the first commit with test/sql/external_storage's
+  # SDK-neutral blob_test contract and test/start_fake_blob_vendor.sh.
+  # TODO: fold into VGI_REF when the other lanes move past it.
+  VGI_VENDOR_REF: f9e5df356dcc8fd18f545a3a348ca364ae58fe0e
   VGI_NATIVE_RUNNER_BRANCH: v2.0
 
 jobs:
@@ -76,10 +80,14 @@ jobs:
           #         fork-per-connection path and spends most of its wall-clock
           #         doing it, so re-paying that cost to test shm is waste.
           # http:   the whole suite over the stateless HTTP transport.
+          # vendor: http + vgi-rpc's fake blob vendor (externalized results,
+          #         upload-URL requests, vendor-backed storage), plus
+          #         test/sql/external_storage/ (the blob_test catalog).
           - { lane: stdio }
           - { lane: launch }
           - { lane: shm, shm_bytes: '67108864' }
           - { lane: http }
+          - { lane: vendor }
     name: integration (${{ matrix.lane }})
     steps:
       - name: Checkout vgi-go
@@ -89,7 +97,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Query-farm/vgi
-          ref: ${{ env.VGI_REF }}
+          ref: ${{ matrix.lane == 'vendor' && env.VGI_VENDOR_REF || env.VGI_REF }}
           path: vgi-upstream
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -105,6 +113,11 @@ jobs:
 
       - name: Extract workers
         run: tar -xzf vgi-go-workers.tar.gz
+
+      # The vendor lane starts the fake blob vendor with uvx
+      # (test/start_fake_blob_vendor.sh).
+      - if: matrix.lane == 'vendor'
+        uses: astral-sh/setup-uv@v6
 
       - name: Download native runner matching the test suite
         run: |

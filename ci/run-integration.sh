@@ -22,7 +22,8 @@
 #   HAYBARN_UNITTEST  path to the haybarn-unittest binary
 # Optional:
 #   BIN_DIR           dir holding the built worker binaries (default: repo root)
-#   TRANSPORT         stdio | shm | launch | http   (default: stdio)
+#   TRANSPORT         stdio | shm | launch | http | vendor   (default: stdio)
+#                     vendor = the http lane with the blob vendor: see below
 #   VGI_RPC_SHM_SIZE_BYTES  shm side-channel segment size (the shm lane)
 #   RUNNER_LINKS_EXTENSIONS  1 uses the native runner's linked extensions and disables installs
 #   STAGE             scratch dir for the preprocessed test tree (default: mktemp)
@@ -81,7 +82,7 @@ EXTRA_SKIP=()
 #     its own comment), and it passes over launch: against the Go fixture worker
 #     (verified: 36 assertions). Keeping it preserves coverage of exactly what
 #     the launcher changes — connection multiplexing.
-if [ "$TRANSPORT" = "http" ]; then
+if [ "$TRANSPORT" = "http" ] || [ "$TRANSPORT" = "vendor" ]; then
   AWK_HTTP=1
   # Dropped on http only:
   #   * projection_pushdown_repro.test — one POST round-trip per two rows; fully
@@ -111,6 +112,19 @@ mkdir -p "$STAGE/test/sql/integration"
     mkdir -p "$STAGE/test/sql/integration/$(dirname "$f")"
     awk -v http="$AWK_HTTP" -v install="$PREPROCESS" -f "$HERE/preprocess-require.awk" "$f" > "$STAGE/test/sql/integration/$f"
   done )
+
+# The vendor lane also runs test/sql/external_storage/ (blob-vendor
+# externalization, the extension's docs/testing/blob-test-catalog.md contract),
+# staged the same way.
+if [ "$TRANSPORT" = "vendor" ]; then
+  EXTERNAL_STORAGE="$VGI_SRC/test/sql/external_storage"
+  [ -d "$EXTERNAL_STORAGE" ] || { echo "::error::no test/sql/external_storage under VGI_SRC=$VGI_SRC"; exit 1; }
+  mkdir -p "$STAGE/test/sql/external_storage"
+  for f in "$EXTERNAL_STORAGE"/*.test; do
+    awk -v http="$AWK_HTTP" -v install="$PREPROCESS" -f "$HERE/preprocess-require.awk" "$f" \
+      > "$STAGE/test/sql/external_storage/$(basename "$f")"
+  done
+fi
 
 # The database-worker tests package this executable through a path relative to
 # the staged unittest working directory. Staging only .test files leaves that
@@ -332,7 +346,23 @@ case "$TRANSPORT" in
     fi
     SUITE_GLOB="test/sql/integration/*"
     ;;
-  http)
+  http|vendor)
+    # vendor: this http lane with vgi-rpc's fake blob vendor. The extension's
+    # test/start_fake_blob_vendor.sh starts it (uvx, pinned commit) and exports
+    # VGI_BLOB_VENDOR_URL / _TOKEN, VGI_RPC_EXTERNALIZE_THRESHOLD_BYTES,
+    # VGI_RPC_MAX_REQUEST_BYTES, VGI_RPC_MAX_UPLOAD_BYTES,
+    # VGI_STORAGE_EXTERNALIZE(_BYTES) and VGI_TEST_ALLOW_LOOPBACK_EXTERNAL_LOCATIONS
+    # before the workers boot, so the whole suite runs with results over 4 KiB
+    # as vendor pointers, requests over 32 KiB uploaded through vendor URLs and
+    # storage values over 4 KiB kept in the vendor; external_storage/ then
+    # checks those paths directly (blob_test catalog, examples/blobtest).
+    if [ "$TRANSPORT" = "vendor" ]; then
+      # shellcheck source=/dev/null
+      source "$VGI_SRC/test/start_fake_blob_vendor.sh"
+      # A file, not a trap: the EXIT trap is cleanup(), which kills the
+      # workers; the vendor is one more background process to stop there.
+      printf '%s\t0\tfake-blob-vendor\t\n' "$VGI_FAKE_BLOB_VENDOR_PID" >> "$BG_PIDS_FILE"
+    fi
     # Whole-suite-over-HTTP (mirrors make test-http). Every ATTACH goes over
     # http://, so staging injected `LOAD httpfs` (AWK_HTTP=1) and dropped the
     # http-incompatible files. VGI_REQUIRE_LAUNCHER_TRANSPORT is NOT set (the
@@ -354,7 +384,7 @@ case "$TRANSPORT" in
     SUITE_GLOB="test/sql/integration/*"
     ;;
   *)
-    echo "::error::unknown TRANSPORT=$TRANSPORT (expected stdio|shm|launch|http)"; exit 1 ;;
+    echo "::error::unknown TRANSPORT=$TRANSPORT (expected stdio|shm|launch|http|vendor)"; exit 1 ;;
 esac
 
 # ---------------------------------------------------------------------------
@@ -388,6 +418,7 @@ EXPECTED_SKIP_REASONS=(
   'require-env VGI_TEST_COMPANION_TARGET'        # companion-catalog fixture (Python-side)
   'require-env VGI_DOCKER_IMAGE'                 # containerised worker lane
   'require-env VGI_DOCKER_TCP_IMAGE'             # containerised worker over TCP
+  'require-env VGI_DOCKER_TX_IMAGE'              # containerised writable-tx worker lane
   'require-env VGI_GITHUB_NETWORK_TESTS'         # hits github.com; opt-in only
   'require-env VGI_DATABASE_BUN_WORKER'          # Bun package fixture belongs to its SDK lane
   'require-env VGI_DATABASE_PYTHON_WORKER'       # Python package fixture belongs to its SDK lane
@@ -429,7 +460,7 @@ case "$TRANSPORT" in
       'require-env VGI_VERSIONED_TABLES_HTTP_WORKER'
     )
     ;;
-  http)
+  http|vendor)
     # Over http: launcher tests gate off, and the subprocess-path worker vars
     # are unset (only their _HTTP_ variants would apply, and only the main
     # worker is booted).
@@ -442,6 +473,11 @@ case "$TRANSPORT" in
       'require-env VGI_ATTACH_OPTIONS_WORKER'
       'require-env VGI_ATTACH_OPTIONS_REQUIRED_WORKER' # rides the attach-options worker, unset here
     )
+    if [ "$TRANSPORT" = "vendor" ]; then
+      # external_storage/fetch_*.test check the extension's own download client
+      # against vgi's test/support probe worker, not this SDK's worker.
+      EXPECTED_SKIP_REASONS+=('require-env VGI_EXTERNAL_PROBE_WORKER')
+    fi
     ;;
 esac
 
@@ -455,6 +491,8 @@ case "$TRANSPORT" in
   stdio)      MIN_EXECUTED="${MIN_EXECUTED:-253}" ;;
   shm|launch) MIN_EXECUTED="${MIN_EXECUTED:-250}" ;;
   http)       MIN_EXECUTED="${MIN_EXECUTED:-240}" ;;
+  # The http floor plus external_storage/ (7 files run, 3 fetch_* skip).
+  vendor)     MIN_EXECUTED="${MIN_EXECUTED:-247}" ;;
 esac
 
 cd "$STAGE"
@@ -562,6 +600,13 @@ run_unittest() {
 echo "Running suite ($SUITE_GLOB, transport=$TRANSPORT) ..."
 suite_rc=0
 run_unittest "$SUITE_GLOB" || suite_rc=$?
+if [ "$TRANSPORT" = "vendor" ]; then
+  # Its own invocation, after the suite: the files compare the vendor's
+  # lane-wide counters around each query and arm download faults, so nothing
+  # else may share the vendor while they run (the runner is serial).
+  echo "Running test/sql/external_storage/* (transport=$TRANSPORT) ..."
+  run_unittest "test/sql/external_storage/*" || suite_rc=$?
+fi
 assert_bg_workers_alive || suite_rc=1
 
 # The executed-case floor — see MIN_EXECUTED above.

@@ -69,6 +69,11 @@ func newAttemptID() string {
 
 // int64Key encodes an int64 map/group/partition id as an 8-byte big-endian
 // state key (opaque to the server).
+// MaxValueBytes is the storage service's per-value cap (MAX_VALUE_BYTES in its
+// src/index.ts). resolve.FromEnv wraps this backend in
+// vgi.ExternalizingStorage so larger values go to the blob vendor.
+const MaxValueBytes = 1 << 20
+
 func int64Key(v int64) []byte {
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(v))
