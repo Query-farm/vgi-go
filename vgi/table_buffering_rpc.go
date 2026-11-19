@@ -8,6 +8,7 @@ import (
 	"encoding/gob"
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -81,28 +82,79 @@ var bufferingRecipeKey = []byte("\x00vgi.buffering.recipe")
 // bufferingParamsEntry caches the decoded (function, ProcessParams template)
 // for one buffering execution. The InitRecipe is written once at sink init and
 // never changes, so the decode + rebuild is invariant across the execution's
-// process/combine RPCs. Each call gets a shallow copy of params so the per-call
-// fields (Auth/AttachScope/clientLog/BatchIndex) never race; the shared maps and
-// Storage are read-only during Process.
+// process/combine RPCs. Each call gets a shallow copy of params with the
+// per-call fields (Auth, AttachScope, attach options, clientLog, BatchIndex)
+// taken from the live request; the shared maps and Storage are read-only
+// during Process.
 type bufferingParamsEntry struct {
-	fn     TableBufferingFunction
-	params ProcessParams // template — copied per call
+	fn           TableBufferingFunction
+	functionName string
+	params       ProcessParams // template -- copied per call
+}
+
+// bufferingCacheKey scopes a cached buffering init to the attach shard as well
+// as the execution: a request presenting another attach's credentials misses,
+// and never reuses this execution's shard-pinned storage, secrets or
+// transaction scope.
+type bufferingCacheKey struct {
+	shardKey    string
+	executionID string
+}
+
+const (
+	bufferingCacheMaxEntries = 256
+	// bufferingCacheTTL bounds how long resolved secrets of an execution whose
+	// destructor never arrived stay in memory. A longer-running execution just
+	// cold-loads its (sealed) recipe again.
+	bufferingCacheTTL = 15 * time.Minute
+)
+
+func newBufferingCache() *boundedCache[bufferingCacheKey, *bufferingParamsEntry] {
+	return newBoundedCache[bufferingCacheKey, *bufferingParamsEntry](bufferingCacheMaxEntries, bufferingCacheTTL)
+}
+
+// bufferingSlot is where the sink init stores the sealed recipe.
+func bufferingSlot(shardKey string, executionID []byte) storageSlot {
+	return storageSlot{ShardKey: shardKey, ScopeID: executionID, NS: storageNSBufferingInit, Key: bufferingRecipeKey}
+}
+
+// bufferingRequest is the authenticated per-call context of a buffering
+// process/combine RPC. Routing (shard key), identity (function name, schema
+// path) and the attach scope always come from here, never from storage.
+type bufferingRequest struct {
+	functionName string
+	executionID  []byte
+	schemaPath   *[]string
+	attach       *[]byte
+	cc           *vgirpc.CallContext
 }
 
 // loadBufferingParams returns the (function, ProcessParams) pair for a
-// process/combine RPC. It caches the decoded template per execution_id so only
-// the first call pays the storage scan + gob decode + schema/arg re-parse; every
-// later batch of the same execution gets a cheap shallow copy. The cache is
-// evicted by the destructor RPC (end-of-query cleanup).
-func (w *Worker) loadBufferingParams(executionID []byte, shardKey string) (TableBufferingFunction, *ProcessParams, error) {
-	key := hex.EncodeToString(executionID)
-	if v, ok := w.bufferingParams.Load(key); ok {
-		e := v.(*bufferingParamsEntry)
+// process/combine RPC. It caches the decoded template per (shard key,
+// execution id) so only the first call pays the storage scan, the open of the
+// sealed recipe and the schema/arg re-parse; every later batch of the same
+// execution gets a cheap shallow copy. The cache is bounded (LRU + TTL) and
+// evicted by the destructor RPC.
+func (w *Worker) loadBufferingParams(r bufferingRequest) (TableBufferingFunction, *ProcessParams, error) {
+	shardKey, err := w.shardKeyForAttachPtr(r.attach, r.cc)
+	if err != nil {
+		return nil, nil, err
+	}
+	live, err := w.liveScopeFor(r, shardKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	key := bufferingCacheKey{shardKey: shardKey, executionID: hex.EncodeToString(r.executionID)}
+	if e, ok := w.bufferingParams.Get(key); ok {
+		if e.functionName != r.functionName {
+			return nil, nil, fmt.Errorf("table-buffering: execution belongs to %q, not %q", e.functionName, r.functionName)
+		}
 		p := e.params // shallow copy; caller mutates only its own scalar fields
+		live.apply(&p)
 		return e.fn, &p, nil
 	}
 
-	storage, err := w.getOrCreateStorage(context.Background(), executionID, shardKey)
+	storage, err := w.getOrCreateStorage(context.Background(), r.executionID, shardKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -113,11 +165,18 @@ func (w *Worker) loadBufferingParams(executionID []byte, shardKey string) (Table
 	if len(entries) == 0 {
 		return nil, nil, fmt.Errorf("table-buffering: no init recipe for execution (sink init missing)")
 	}
-	recipe, err := decodeInitRecipe(entries[0].Value)
+	plain, err := w.openStoragePayload(entries[0].Value, bufferingSlot(shardKey, r.executionID))
 	if err != nil {
 		return nil, nil, err
 	}
-	fn, params, err := w.rebuildProcessParams(recipe)
+	recipe, err := decodeInitRecipe(plain)
+	if err != nil {
+		return nil, nil, err
+	}
+	if recipe.FunctionName != r.functionName {
+		return nil, nil, fmt.Errorf("table-buffering: execution belongs to %q, not %q", recipe.FunctionName, r.functionName)
+	}
+	fn, params, err := w.rebuildProcessParamsLive(recipe, live)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -125,23 +184,20 @@ func (w *Worker) loadBufferingParams(executionID []byte, shardKey string) (Table
 	if !ok {
 		return nil, nil, fmt.Errorf("table-buffering: function %q is not a TableBufferingFunction", recipe.FunctionName)
 	}
-	w.bufferingParams.Store(key, &bufferingParamsEntry{fn: bf, params: *params})
+	w.bufferingParams.Put(key, &bufferingParamsEntry{fn: bf, functionName: r.functionName, params: *params})
 	p := *params // return a copy distinct from the cached template
+	live.apply(&p)
 	return bf, &p, nil
 }
 
 func (w *Worker) handleTableBufferingProcess(ctx context.Context, cc *vgirpc.CallContext, req TableBufferingProcessRequestWire) (TableBufferingProcessResponseWire, error) {
-	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, cc)
+	fn, params, err := w.loadBufferingParams(bufferingRequest{
+		functionName: req.FunctionName, executionID: req.ExecutionID,
+		schemaPath: req.SchemaPath, attach: req.AttachOpaqueData, cc: cc,
+	})
 	if err != nil {
 		return TableBufferingProcessResponseWire{}, err
 	}
-	fn, params, err := w.loadBufferingParams(req.ExecutionID, shardKey)
-	if err != nil {
-		return TableBufferingProcessResponseWire{}, err
-	}
-	params.Auth = cc.Auth
-	params.AttachScope = w.attachScopeForPtr(req.AttachOpaqueData, cc, params.AttachScope)
-	params.clientLog = func(level vgirpc.LogLevel, msg string) { cc.ClientLog(level, msg) }
 	if req.BatchIndex != nil {
 		params.BatchIndex = req.BatchIndex
 	}
@@ -158,17 +214,13 @@ func (w *Worker) handleTableBufferingProcess(ctx context.Context, cc *vgirpc.Cal
 }
 
 func (w *Worker) handleTableBufferingCombine(ctx context.Context, cc *vgirpc.CallContext, req TableBufferingCombineRequestWire) (TableBufferingCombineResponseWire, error) {
-	shardKey, err := w.shardKeyForAttachPtr(req.AttachOpaqueData, cc)
+	fn, params, err := w.loadBufferingParams(bufferingRequest{
+		functionName: req.FunctionName, executionID: req.ExecutionID,
+		schemaPath: req.SchemaPath, attach: req.AttachOpaqueData, cc: cc,
+	})
 	if err != nil {
 		return TableBufferingCombineResponseWire{}, err
 	}
-	fn, params, err := w.loadBufferingParams(req.ExecutionID, shardKey)
-	if err != nil {
-		return TableBufferingCombineResponseWire{}, err
-	}
-	params.Auth = cc.Auth
-	params.AttachScope = w.attachScopeForPtr(req.AttachOpaqueData, cc, params.AttachScope)
-	params.clientLog = func(level vgirpc.LogLevel, msg string) { cc.ClientLog(level, msg) }
 	finalizeIDs, err := fn.Combine(ctx, params, req.StateIDs)
 	if err != nil {
 		return TableBufferingCombineResponseWire{}, err
@@ -184,7 +236,7 @@ func (w *Worker) handleTableBufferingDestructor(ctx context.Context, cc *vgirpc.
 	if err != nil {
 		return TableBufferingDestructorResponseWire{}, err
 	}
-	w.bufferingParams.Delete(hex.EncodeToString(req.ExecutionID))
+	w.bufferingParams.Delete(bufferingCacheKey{shardKey: shardKey, executionID: hex.EncodeToString(req.ExecutionID)})
 	storage, err := w.getOrCreateStorage(ctx, req.ExecutionID, shardKey)
 	if err == nil {
 		_ = storage.StateLogClear()
@@ -275,13 +327,27 @@ func (w *Worker) initTableBuffering(ctx context.Context, fn TableBufferingFuncti
 
 	// Sink init (PhaseTableBuffering or unset): persist the recipe for the
 	// process/combine RPCs and return an empty stream.
-	recipeBytes, err := encodeInitRecipe(recipe)
+	// Sealed (storage_seal.go): the recipe carries the resolved bind-time
+	// secrets and the opened transaction scope. The attach scope is left out:
+	// every process/combine RPC re-derives it from its own attach value.
+	stored := *recipe
+	stored.AttachScope = nil
+	stored.AttachOptionsScope = nil
+	recipeBytes, err := encodeInitRecipe(&stored)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := storage.StateAppend(bufferingRecipeKey, recipeBytes); err != nil {
+	sealed, err := w.sealStoragePayload(recipeBytes, bufferingSlot(recipe.ShardKey, recipe.ExecutionID))
+	if err != nil {
 		return nil, err
 	}
+	if _, err := storage.StateAppend(bufferingRecipeKey, sealed); err != nil {
+		return nil, err
+	}
+	// The process/combine RPCs usually land in this process: hand them the
+	// template now instead of having the first one read the recipe back.
+	w.bufferingParams.Put(bufferingCacheKey{shardKey: recipe.ShardKey, executionID: hex.EncodeToString(execID)},
+		&bufferingParamsEntry{fn: fn, functionName: recipe.FunctionName, params: *processParams})
 	return &vgirpc.StreamResult{
 		OutputSchema: outputSchema,
 		State:        &FinalizeProducerState{Recipe: *recipe},

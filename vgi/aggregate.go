@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"runtime"
+	"runtime/debug"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -121,13 +123,55 @@ func (s *Int64Slice) At(i int) int64 { return s.Data[i] }
 // should call this only when the row genuinely contributes (e.g. non-null
 // with NullHandlingDefault) — groups never inserted stay absent from
 // storage so finalize() returns NULL.
+//
+// A stored state of another type (state written by a different version of the
+// function, or bytes that are not this function's) is not a crash: EnsureState
+// panics with an *AggregateStateTypeError, which the aggregate RPC handlers
+// recover into a clean error for that call.
 func EnsureState[T any](states map[int64]interface{}, gid int64, newFn func() *T) *T {
 	if s, ok := states[gid]; ok {
-		return s.(*T)
+		if t, ok := s.(*T); ok {
+			return t
+		}
+		panic(&AggregateStateTypeError{GroupID: gid, Got: fmt.Sprintf("%T", s), Want: fmt.Sprintf("%T", (*T)(nil))})
 	}
 	s := newFn()
 	states[gid] = s
 	return s
+}
+
+// AggregateStateTypeError reports an aggregate state of an unexpected type --
+// what a stored state decodes to is whatever type it was written as.
+type AggregateStateTypeError struct {
+	GroupID int64
+	Got     string
+	Want    string
+}
+
+// Error describes the mismatch.
+func (e *AggregateStateTypeError) Error() string {
+	return fmt.Sprintf("vgi: aggregate state for group %d is %s, want %s", e.GroupID, e.Got, e.Want)
+}
+
+// recoverAggregate is RecoverPanic for the aggregate RPC handlers: a wrong-type
+// state (*AggregateStateTypeError) comes back as itself, any other panic as a
+// *WorkerPanicError.
+func recoverAggregate(phase, fnName string, errOut *error) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	if te, ok := r.(*AggregateStateTypeError); ok {
+		*errOut = te
+		return
+	}
+	if te, ok := r.(*runtime.TypeAssertionError); ok {
+		*errOut = fmt.Errorf("vgi: %s(%s): aggregate state of an unexpected type: %w", phase, fnName, te)
+		return
+	}
+	pcs := make([]uintptr, 64)
+	pcs = pcs[:runtime.Callers(2, pcs)]
+	*errOut = &WorkerPanicError{FunctionName: fnName, Phase: phase, Recovered: r, Stack: debug.Stack(), pcs: pcs}
 }
 
 // gobEncodeState serializes a state value (passed by interface, typically a

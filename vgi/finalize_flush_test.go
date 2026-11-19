@@ -140,18 +140,89 @@ func TestFinalizeFlushOffloadsOnlyUndrainedBatches(t *testing.T) {
 	if _, err := s.GobEncode(); err != nil {
 		t.Fatalf("encoding token: %v", err)
 	}
-	entries, err := s.storage.StateLogScan(s.LogKey, -1, 0)
-	if err != nil {
-		t.Fatalf("scanning offloaded flush: %v", err)
+	drained := drainFinalizeLog(t, s)
+	if len(drained) != total-emitted {
+		t.Fatalf("offloaded %d batches, want the %d not yet emitted", len(drained), total-emitted)
 	}
-	if len(entries) != total-emitted {
-		t.Fatalf("offloaded %d batches, want the %d not yet emitted", len(entries), total-emitted)
-	}
-	for i, e := range entries {
-		if !bytes.Equal(e.Value, ipc[emitted+i]) {
+	for i, e := range drained {
+		if !bytes.Equal(e, ipc[emitted+i]) {
 			t.Fatalf("offloaded batch %d is not input batch %d: the drain would emit "+
 				"the flush out of order or replay an already-emitted batch", i, emitted+i)
 		}
+	}
+}
+
+// drainFinalizeLog drains an offloaded flush the way produceFromLog does, from
+// storage (the in-process row cache is dropped first, as on a cold worker).
+func drainFinalizeLog(t *testing.T, s *FinalizeProducerState) [][]byte {
+	t.Helper()
+	finalizePackCache.DeleteFunc(func(finalizePackKey) bool { return true })
+	var out [][]byte
+	for {
+		data, ok, err := s.nextLogBatch()
+		if err != nil {
+			t.Fatalf("draining offloaded flush: %v", err)
+		}
+		if !ok {
+			return out
+		}
+		out = append(out, data)
+	}
+}
+
+// TestFinalizeFlushOffloadIsBatched pins the round-trip count: offloading a
+// flush of many small batches is one append per packed row, not one per batch.
+func TestFinalizeFlushOffloadIsBatched(t *testing.T) {
+	const n = 400
+	batches, ipc := finalizeFlushIPC(t, n)
+	s := &FinalizeProducerState{BatchIPC: ipc, batches: batches, storage: finalizeFlushStorage(t)}
+	counter := &countingStorage{FunctionStorage: s.storage.back}
+	s.storage.SetBackend(counter)
+	if _, err := s.GobEncode(); err != nil {
+		t.Fatalf("encoding token: %v", err)
+	}
+	if got := counter.count("StateAppend"); got != 1 {
+		t.Fatalf("offloading %d small batches made %d appends, want 1", n, got)
+	}
+	drained := drainFinalizeLog(t, s)
+	if len(drained) != n {
+		t.Fatalf("drained %d of %d batches", len(drained), n)
+	}
+	for i := range drained {
+		if !bytes.Equal(drained[i], ipc[i]) {
+			t.Fatalf("batch %d out of order", i)
+		}
+	}
+	// One read for the one row, however many turns drain it.
+	if got := counter.count("StateLogScan"); got != 2 {
+		t.Fatalf("drain made %d log scans, want 2 (the row, then end-of-log)", got)
+	}
+}
+
+// TestFinalizeFlushPackSplitsLargeFlushes keeps packed rows under the remote
+// backend's value cap.
+func TestFinalizeFlushPackSplitsLargeFlushes(t *testing.T) {
+	big := bytes.Repeat([]byte{7}, 300<<10)
+	rows := packFinalizeBatches([][]byte{big, big, big, big, big})
+	if len(rows) != 2 {
+		t.Fatalf("5 x 300 KiB packed into %d rows, want 2 (3 + 2)", len(rows))
+	}
+	var n int
+	for _, r := range rows {
+		if len(r) > finalizePackMaxBytes {
+			t.Fatalf("row of %d bytes exceeds the %d cap", len(r), finalizePackMaxBytes)
+		}
+		b, err := unpackFinalizeBatches(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n += len(b)
+	}
+	if n != 5 {
+		t.Fatalf("rows hold %d batches, want 5", n)
+	}
+	if _, err := unpackFinalizeBatches([]byte{0, 0, 0, 9, 1}); err == nil {
+		t.Fatal("malformed row accepted")
 	}
 }
 
@@ -173,12 +244,8 @@ func TestFinalizeFlushKeysAreStreamUnique(t *testing.T) {
 			t.Fatal("two finalize streams sharing one execution_id got the same log key")
 		}
 		keys[string(s.LogKey)] = true
-		entries, err := storage.StateLogScan(s.LogKey, -1, 0)
-		if err != nil {
-			t.Fatalf("scanning offloaded flush: %v", err)
-		}
-		if len(entries) != 3 {
-			t.Fatalf("stream drained %d batches, want its own 3", len(entries))
+		if got := len(drainFinalizeLog(t, s)); got != 3 {
+			t.Fatalf("stream drained %d batches, want its own 3", got)
 		}
 	}
 }
@@ -230,22 +297,14 @@ func TestFinalizeFlushResumesOnAColdWorker(t *testing.T) {
 	}
 	resumed.storage = storageB
 
-	// Drain it the way produceFromLog does: one row per turn, cursor only.
-	var drained int
-	for {
-		entries, err := resumed.storage.StateLogScan(resumed.LogKey, resumed.LogCursor, 1)
-		if err != nil {
-			t.Fatalf("scanning on the cold worker: %v", err)
+	// Drain it the way produceFromLog does, cursor only.
+	got := drainFinalizeLog(t, &resumed)
+	for i := range got {
+		if !bytes.Equal(got[i], ipc[i]) {
+			t.Fatalf("cold worker drained batch %d out of order", i)
 		}
-		if len(entries) == 0 {
-			break
-		}
-		if !bytes.Equal(entries[0].Value, ipc[drained]) {
-			t.Fatalf("cold worker drained batch %d out of order", drained)
-		}
-		resumed.LogCursor = entries[0].ID
-		drained++
 	}
+	drained := len(got)
 	if drained != flush {
 		t.Fatalf("cold worker drained %d of %d batches: a continuation arriving at a "+
 			"worker that never saw the stream must still serve the whole flush", drained, flush)

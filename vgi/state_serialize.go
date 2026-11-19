@@ -163,6 +163,8 @@ type finalizeProducerWire struct {
 	LogKey    []byte
 	LogCursor int64
 	CacheMeta map[string]string
+	LogPacked bool
+	LogSub    int
 }
 
 // GobEncode offloads the remaining flush to the execution-scoped state log the
@@ -180,6 +182,8 @@ func (s *FinalizeProducerState) GobEncode() ([]byte, error) {
 		LogKey:    s.LogKey,
 		LogCursor: s.LogCursor,
 		CacheMeta: s.CacheMeta,
+		LogPacked: s.LogPacked,
+		LogSub:    s.LogSub,
 	}); err != nil {
 		return nil, err
 	}
@@ -199,6 +203,8 @@ func (s *FinalizeProducerState) GobDecode(data []byte) error {
 	s.LogKey = w.LogKey
 	s.LogCursor = w.LogCursor
 	s.CacheMeta = w.CacheMeta
+	s.LogPacked = w.LogPacked
+	s.LogSub = w.LogSub
 	return nil
 }
 

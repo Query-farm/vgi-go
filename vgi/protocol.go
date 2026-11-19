@@ -5,7 +5,9 @@ package vgi
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
+	"time"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -628,6 +630,12 @@ type FinalizeProducerState struct {
 	// LogCursor is the state-log id of the last batch emitted; -1 is
 	// before-first. Meaningful only when LogKey is set.
 	LogCursor int64
+	// LogPacked is true when each log row holds several consecutive batches
+	// (packFinalizeBatches) rather than one; LogSub is then how many batches
+	// of the row after LogCursor were already emitted. A token from an older
+	// release has LogPacked false and drains one batch per row.
+	LogPacked bool
+	LogSub    int
 	// storage is the transient handle used to append to and scan the log. Set
 	// at init and re-derived by rehydrateFinalize on every resumed turn.
 	storage *ExecutionStorage
@@ -658,30 +666,165 @@ func (s *FinalizeProducerState) Produce(ctx context.Context, out *vgirpc.OutputC
 	return out.Emit(batch)
 }
 
-// produceFromLog emits the next offloaded flush batch, reading exactly one row
-// past LogCursor. One row per turn is what keeps an N-batch flush linear: a
-// turn touches its own batch and nothing else.
+// produceFromLog emits the next offloaded flush batch.
 func (s *FinalizeProducerState) produceFromLog(out *vgirpc.OutputCollector) error {
-	if s.storage == nil {
-		return fmt.Errorf("resuming an offloaded FINALIZE flush requires storage, which is unavailable")
-	}
-	entries, err := s.storage.StateLogScan(s.LogKey, s.LogCursor, 1)
+	data, ok, err := s.nextLogBatch()
 	if err != nil {
-		return fmt.Errorf("scanning offloaded finalize flush: %w", err)
+		return err
 	}
-	if len(entries) == 0 {
+	if !ok {
 		return out.Finish()
 	}
-	batch, err := DeserializeRecordBatch(entries[0].Value)
+	batch, err := DeserializeRecordBatch(data)
 	if err != nil {
 		return fmt.Errorf("deserializing finalize batch: %w", err)
 	}
-	s.LogCursor = entries[0].ID
 	if s.CacheMeta != nil {
 		return out.EmitWithMetadata(batch, s.CacheMeta)
 	}
 	return out.Emit(batch)
 }
+
+// nextLogBatch returns the next offloaded batch's IPC bytes and advances the
+// cursor; ok false when the flush is drained. A turn reads at most one log row
+// past LogCursor -- a bounded pack of batches, served from this process's
+// finalizePackCache when the previous turn ran here -- which keeps an N-batch
+// flush linear.
+func (s *FinalizeProducerState) nextLogBatch() ([]byte, bool, error) {
+	if s.storage == nil {
+		return nil, false, fmt.Errorf("resuming an offloaded FINALIZE flush requires storage, which is unavailable")
+	}
+	if !s.LogPacked {
+		entries, err := s.storage.StateLogScan(s.LogKey, s.LogCursor, 1)
+		if err != nil {
+			return nil, false, fmt.Errorf("scanning offloaded finalize flush: %w", err)
+		}
+		if len(entries) == 0 {
+			return nil, false, nil
+		}
+		s.LogCursor = entries[0].ID
+		return entries[0].Value, true, nil
+	}
+	cacheKey := finalizePackKey{log: string(s.LogKey), after: s.LogCursor}
+	pack, ok := finalizePackCache.Get(cacheKey)
+	if !ok {
+		entries, err := s.storage.StateLogScan(s.LogKey, s.LogCursor, 1)
+		if err != nil {
+			return nil, false, fmt.Errorf("scanning offloaded finalize flush: %w", err)
+		}
+		if len(entries) == 0 {
+			return nil, false, nil
+		}
+		batches, err := unpackFinalizeBatches(entries[0].Value)
+		if err != nil {
+			return nil, false, err
+		}
+		pack = &finalizePack{id: entries[0].ID, batches: batches}
+		finalizePackCache.Put(cacheKey, pack)
+	}
+	if s.LogSub >= len(pack.batches) {
+		return nil, false, fmt.Errorf("offloaded finalize flush: cursor %d/%d past the end of its row", s.LogSub, len(pack.batches))
+	}
+	data := pack.batches[s.LogSub]
+	s.LogSub++
+	if s.LogSub == len(pack.batches) {
+		finalizePackCache.Delete(cacheKey)
+		s.LogCursor, s.LogSub = pack.id, 0
+	}
+	return data, true, nil
+}
+
+// finalizePackMaxBytes bounds one packed log row: under the 1 MiB value cap of
+// the Durable Object backend, with room for the row's framing. A single batch
+// larger than this still goes in a row of its own.
+const finalizePackMaxBytes = 1<<20 - 16<<10
+
+// packFinalizeBatches groups consecutive batches into rows of at most
+// finalizePackMaxBytes. Row format: u32be(count) || (u32be(len) || ipc)*.
+func packFinalizeBatches(batches [][]byte) [][]byte {
+	var rows [][]byte
+	var cur [][]byte
+	size := 4
+	flush := func() {
+		if len(cur) == 0 {
+			return
+		}
+		row := make([]byte, 4, size)
+		binary.BigEndian.PutUint32(row, uint32(len(cur)))
+		for _, b := range cur {
+			row = binary.BigEndian.AppendUint32(row, uint32(len(b)))
+			row = append(row, b...)
+		}
+		rows = append(rows, row)
+		cur, size = nil, 4
+	}
+	for _, b := range batches {
+		if len(cur) > 0 && size+4+len(b) > finalizePackMaxBytes {
+			flush()
+		}
+		cur = append(cur, b)
+		size += 4 + len(b)
+	}
+	flush()
+	return rows
+}
+
+func unpackFinalizeBatches(row []byte) ([][]byte, error) {
+	bad := fmt.Errorf("offloaded finalize flush: malformed packed row")
+	if len(row) < 4 {
+		return nil, bad
+	}
+	n := int(binary.BigEndian.Uint32(row))
+	row = row[4:]
+	if n == 0 || n > len(row)/4 {
+		return nil, bad
+	}
+	out := make([][]byte, 0, n)
+	for range n {
+		if len(row) < 4 {
+			return nil, bad
+		}
+		l := int(binary.BigEndian.Uint32(row))
+		row = row[4:]
+		if l > len(row) {
+			return nil, bad
+		}
+		out = append(out, row[:l:l])
+		row = row[l:]
+	}
+	if len(row) != 0 {
+		return nil, bad
+	}
+	return out, nil
+}
+
+// finalizePack is one decoded packed row.
+type finalizePack struct {
+	id      int64
+	batches [][]byte
+}
+
+// finalizePackKey names the row after `after` in one stream's log (the log key
+// carries a per-stream random id).
+type finalizePackKey struct {
+	log   string
+	after int64
+}
+
+// finalizePackCache keeps the packed row a turn is draining, so the next turn
+// in the same process does not read it again. Bounded; a miss only re-reads.
+var finalizePackCache = func() *boundedCache[finalizePackKey, *finalizePack] {
+	c := newBoundedCache[finalizePackKey, *finalizePack](256, 10*time.Minute)
+	c.maxCost = 128 << 20
+	c.costOf = func(p *finalizePack) int64 {
+		var n int64
+		for _, b := range p.batches {
+			n += int64(len(b))
+		}
+		return n
+	}
+	return c
+}()
 
 // offloadFlush moves the not-yet-emitted batches into the execution-scoped
 // state log and switches this state over to the cursor-drained form. Called
@@ -689,6 +832,10 @@ func (s *FinalizeProducerState) produceFromLog(out *vgirpc.OutputCollector) erro
 // written. Returns false, leaving the state untouched and still correct, when
 // the backend cannot serve a log: an exotic FunctionStorage degrades to the
 // old inline carry rather than failing the stream.
+//
+// The batches go in packed rows (packFinalizeBatches), so the offload costs
+// one append per ~1 MiB of flush instead of one per batch -- each a network
+// round trip on a remote backend.
 func (s *FinalizeProducerState) offloadFlush() bool {
 	if len(s.LogKey) > 0 {
 		return true
@@ -706,14 +853,26 @@ func (s *FinalizeProducerState) offloadFlush() bool {
 		return false
 	}
 	key := newFinalizeLogKey()
-	for _, data := range remaining {
-		if _, err := s.storage.StateAppend(key, data); err != nil {
+	rows := packFinalizeBatches(remaining)
+	var firstID int64
+	for i, row := range rows {
+		id, err := s.storage.StateAppend(key, row)
+		if err != nil {
 			LogRPC.Debug("finalize: state-log offload unavailable, carrying flush inline", "err", err)
 			return false
 		}
+		if i == 0 {
+			firstID = id
+		}
+	}
+	// The next turn usually runs in this process: hand it the first row now.
+	if first, err := unpackFinalizeBatches(rows[0]); err == nil {
+		finalizePackCache.Put(finalizePackKey{log: string(key), after: -1}, &finalizePack{id: firstID, batches: first})
 	}
 	s.LogKey = key
 	s.LogCursor = -1
+	s.LogPacked = true
+	s.LogSub = 0
 	s.BatchIPC = nil
 	s.BatchIdx = 0
 	s.batches = nil

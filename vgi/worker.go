@@ -362,8 +362,10 @@ type Worker struct {
 	// catalog_catalogs and mint a random per-ATTACH scope at attach (so two
 	// ATTACHes of the same alias are isolated). Keyed by catalog name.
 	catalogAliasInfos             map[string]CatalogInfo
-	storages                      sync.Map // map[hex execution ID string]*ExecutionStorage
-	bufferingParams               sync.Map // map[hex execution ID string]*bufferingParamsEntry
+	storages                      sync.Map // map[shard key "/" hex execution ID]*ExecutionStorage
+	bufferingParams               *boundedCache[bufferingCacheKey, *bufferingParamsEntry]
+	aggConstArgs                  *boundedCache[aggConstKey, []byte]
+	windowPartitions              *boundedCache[windowPartitionKey, *cachedWindowPartition]
 	fsOnce                        sync.Once
 	fs                            FunctionStorage
 	fsErr                         error
@@ -997,6 +999,9 @@ func NewWorker(opts ...WorkerOption) *Worker {
 		tableBufferings:   make(map[string][]TableBufferingFunction),
 		aggregates:        make(map[string][]AggregateFunction),
 		aggStorage:        newAggregateStorage(),
+		bufferingParams:   newBufferingCache(),
+		aggConstArgs:      newAggConstArgsCache(),
+		windowPartitions:  newWindowPartitionCache(),
 		extraCatalogs:     make(map[string]*WritableCatalog),
 		catalogAliases:    make(map[string]struct{}),
 		funcOrigins:       make(map[funcKey][]funcOrigin),
@@ -2091,15 +2096,17 @@ func newFinalizeLogKey() []byte {
 // backend (initialized lazily on first call) so every execution in the
 // worker uses one backend — one SQLite DB shared across all executions and
 // across worker subprocesses spawned for parallel scans.
+//
+// Cached per (shard key, execution id): the shard key pins the backend view to
+// one attach, so a request under another attach must not share -- or re-pin --
+// this execution's instance.
 func (w *Worker) getOrCreateStorage(ctx context.Context, executionID []byte, shardKey string) (*ExecutionStorage, error) {
-	key := hex.EncodeToString(executionID)
+	key := shardKey + "/" + hex.EncodeToString(executionID)
 	if tracker, ok := ctx.Value(storageTrackerKey).(*storageTracker); ok {
 		tracker.track(key)
 	}
 	if s, ok := w.storages.Load(key); ok {
-		es := s.(*ExecutionStorage)
-		es.SetShardKey(shardKey)
-		return es, nil
+		return s.(*ExecutionStorage), nil
 	}
 	back, err := w.functionStorage()
 	if err != nil {
@@ -2112,9 +2119,7 @@ func (w *Worker) getOrCreateStorage(ctx context.Context, executionID []byte, sha
 	}
 	s.SetShardKey(shardKey)
 	actual, _ := w.storages.LoadOrStore(key, s)
-	es := actual.(*ExecutionStorage)
-	es.SetShardKey(shardKey)
-	return es, nil
+	return actual.(*ExecutionStorage), nil
 }
 
 // functionStorage returns the worker's shared FunctionStorage backend,

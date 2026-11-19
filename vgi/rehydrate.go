@@ -8,6 +8,7 @@ import (
 	"encoding/gob"
 	"fmt"
 
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 )
 
@@ -213,9 +214,68 @@ func coldAttachScope(raw []byte) []byte {
 // rebuildProcessParams reconstructs ProcessParams from an InitRecipe.
 // It also returns the resolved function (via overload resolution) to avoid
 // a redundant second resolution by the caller.
+//
+// Used for an HTTP state token, which the HTTP server authenticates; a recipe
+// read back from FunctionStorage goes through rebuildProcessParamsLive instead.
 func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *ProcessParams, error) {
+	return w.rebuildProcessParamsLive(recipe, nil)
+}
+
+// liveScope is the per-call context a buffering RPC derives from its own,
+// authenticated request: storage routing, the function's schema, the attach
+// scope and options, the caller. It always wins over anything a stored recipe
+// says (a recipe read back from storage is sealed, but routing and identity
+// are the request's to decide).
+type liveScope struct {
+	shardKey      string
+	schemaPath    *[]string
+	attachScope   []byte
+	attachOptions *AttachOptions
+	auth          *vgirpc.AuthContext
+	clientLog     func(level vgirpc.LogLevel, msg string)
+}
+
+// apply overwrites the per-call fields of a ProcessParams copy.
+func (l *liveScope) apply(p *ProcessParams) {
+	p.Auth = l.auth
+	p.AttachScope = l.attachScope
+	p.attachOptions = l.attachOptions
+	p.clientLog = l.clientLog
+}
+
+// liveScopeFor opens the request's attach value (already verified by the
+// shard-key derivation) into the scope and options the function sees.
+func (w *Worker) liveScopeFor(r bufferingRequest, shardKey string) (*liveScope, error) {
+	l := &liveScope{shardKey: shardKey, schemaPath: r.schemaPath}
+	if r.cc != nil {
+		cc := r.cc
+		l.auth = cc.Auth
+		l.clientLog = func(level vgirpc.LogLevel, msg string) { cc.ClientLog(level, msg) }
+	}
+	if r.attach != nil && len(*r.attach) > 0 {
+		scope, err := w.openAttach(*r.attach, r.cc)
+		if err != nil {
+			return nil, err
+		}
+		opts, err := w.openAttachOptions(*r.attach, r.cc)
+		if err != nil {
+			return nil, err
+		}
+		l.attachScope, l.attachOptions = scope, opts
+	}
+	return l, nil
+}
+
+// rebuildProcessParamsLive is rebuildProcessParams with the routing and
+// identity fields taken from live when it is non-nil: the shard key, schema
+// path and attach scope / options of the request, not of the recipe.
+func (w *Worker) rebuildProcessParamsLive(recipe *InitRecipe, live *liveScope) (interface{}, *ProcessParams, error) {
 	// bind_call is carried structurally in the recipe.
-	bindReq := &recipe.BindCall
+	bindCall := recipe.BindCall
+	bindReq := &bindCall
+	if live != nil && live.schemaPath != nil {
+		bindReq.SchemaPath = live.schemaPath
+	}
 
 	// Parse bind params for argument access
 	bindParams, err := w.parseBindRequest(*bindReq, nil)
@@ -240,6 +300,15 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 		attachScope = recipe.AttachScope
 		bindParams.AttachOpaqueData = recipe.AttachScope
 		bindParams.TransactionOpaqueData = recipe.TransactionScope
+	}
+	shardKey := recipe.ShardKey
+	if live != nil {
+		// The request's attach, never the stored one: the transaction scope
+		// and secrets are the only context a stored recipe still supplies,
+		// because the buffering RPCs do not carry them.
+		attachScope, attachOptions = live.attachScope, live.attachOptions
+		bindParams.AttachOpaqueData = live.attachScope
+		shardKey = live.shardKey
 	}
 
 	// Resolve the function. The recipe replays the original bind_call, so the
@@ -315,7 +384,7 @@ func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *Process
 	// Restore storage — reuse the shard key the recipe persisted at init so a
 	// rehydrated turn routes to the same DO without re-opening the sealed attach.
 	ctx := context.Background()
-	storage, err := w.getOrCreateStorage(ctx, recipe.ExecutionID, recipe.ShardKey)
+	storage, err := w.getOrCreateStorage(ctx, recipe.ExecutionID, shardKey)
 	if err != nil {
 		return nil, nil, err
 	}

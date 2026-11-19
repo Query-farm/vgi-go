@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -78,46 +79,73 @@ func unpackWindowPartition(req AggregateWindowInitRequestWire) (*WindowPartition
 	}, nil
 }
 
-// loadCachedPartition rebuilds a WindowPartition from the gob-encoded payload
-// stored at WindowInit time, plus the optional gob-encoded WindowInit state.
+// loadCachedPartition returns the WindowPartition stored at WindowInit time,
+// plus the optional gob-encoded WindowInit state. The decoded partition is
+// cached per (shard, execution, function, partition) so the evaluate blocks of
+// one partition read and decode it from storage once, not once per block; the
+// window state is decoded per call (see cachedWindowPartition).
 func (w *Worker) loadCachedPartition(funcName string, execID []byte, partitionID int64, shardKey string) (*WindowPartition, interface{}, error) {
-	bucket := w.aggStorage.bucket(funcName, execID, shardKey)
-	data, err := bucket.getWindowPartition(partitionID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if data == nil {
-		return nil, nil, fmt.Errorf("aggregate_window: unknown partition_id=%d (window_init never ran or destructor already fired)", partitionID)
-	}
-	payload, err := decodeWindowPartitionPayload(data)
-	if err != nil {
-		return nil, nil, err
-	}
-	batch, err := DeserializeRecordBatch(payload.PartitionBatch)
-	if err != nil {
-		return nil, nil, fmt.Errorf("partition_batch: %w", err)
-	}
-	outSchema, err := DeserializeSchema(payload.OutputSchema)
-	if err != nil {
-		batch.Release()
-		return nil, nil, fmt.Errorf("output_schema: %w", err)
-	}
-	partition := &WindowPartition{
-		Inputs:       batch,
-		RowCount:     payload.RowCount,
-		FilterMask:   unpackBoolMask(payload.FilterMask, payload.RowCount),
-		FrameStats:   unpackFrameStats(payload.FrameStats),
-		AllValid:     unpackAllValid(payload.AllValid, int(batch.NumCols())),
-		OutputSchema: outSchema,
+	key := windowPartitionKey{shardKey: shardKey, executionID: hex.EncodeToString(execID), functionName: funcName, partitionID: partitionID}
+	cached, ok := w.windowPartitions.Get(key)
+	if !ok {
+		bucket := w.aggStorage.bucket(funcName, execID, shardKey)
+		data, err := bucket.getWindowPartition(partitionID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if data == nil {
+			return nil, nil, fmt.Errorf("aggregate_window: unknown partition_id=%d (window_init never ran or destructor already fired)", partitionID)
+		}
+		payload, err := decodeWindowPartitionPayload(data)
+		if err != nil {
+			return nil, nil, err
+		}
+		batch, err := DeserializeRecordBatch(payload.PartitionBatch)
+		if err != nil {
+			return nil, nil, fmt.Errorf("partition_batch: %w", err)
+		}
+		outSchema, err := DeserializeSchema(payload.OutputSchema)
+		if err != nil {
+			batch.Release()
+			return nil, nil, fmt.Errorf("output_schema: %w", err)
+		}
+		cached = &cachedWindowPartition{
+			partition: &WindowPartition{
+				Inputs:       batch,
+				RowCount:     payload.RowCount,
+				FilterMask:   unpackBoolMask(payload.FilterMask, payload.RowCount),
+				FrameStats:   unpackFrameStats(payload.FrameStats),
+				AllValid:     unpackAllValid(payload.AllValid, int(batch.NumCols())),
+				OutputSchema: outSchema,
+			},
+			windowState: payload.WindowState,
+			size:        int64(len(data)),
+		}
+		w.windowPartitions.Put(key, cached)
 	}
 	var ws interface{}
-	if len(payload.WindowState) > 0 {
-		ws, err = gobDecodeState(payload.WindowState)
+	if len(cached.windowState) > 0 {
+		var err error
+		ws, err = gobDecodeState(cached.windowState)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
-	return partition, ws, nil
+	// A shallow copy: a Window implementation that reassigns a field of its
+	// partition does not change the cached one.
+	p := *cached.partition
+	return &p, ws, nil
+}
+
+// primeWindowPartition caches the partition WindowInit just stored, so the
+// first evaluate block in this process does not read it back.
+func (w *Worker) primeWindowPartition(funcName string, execID []byte, partitionID int64, shardKey string, partition *WindowPartition, windowState []byte, size int) {
+	if partition == nil {
+		return
+	}
+	key := windowPartitionKey{shardKey: shardKey, executionID: hex.EncodeToString(execID), functionName: funcName, partitionID: partitionID}
+	cp := *partition
+	w.windowPartitions.Put(key, &cachedWindowPartition{partition: &cp, windowState: windowState, size: int64(size)})
 }
 
 // unpackBoolMask converts the C++ extension's packed-bit boolean encoding into
