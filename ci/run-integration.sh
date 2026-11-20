@@ -151,6 +151,13 @@ export VGI_SYNC_INIT_GLOBAL=1
 # in to test/sql/integration/secret/secret_lookup_*.test on every lane.
 export VGI_SECRET_LOOKUP_FIXTURES=1
 
+# Branch fixtures (catalog/multi_branch_*, catalog/scan_planning_*,
+# table/required_filters_native): each test writes its parquet/csv under
+# ${VGI_TEST_BRANCH_DIR} and the example worker returns branches naming the
+# same paths (branchPath in cmd/vgi-example-worker), so both must see one dir.
+# Exported before any worker boots; the http workers inherit it.
+export VGI_TEST_BRANCH_DIR="${VGI_TEST_BRANCH_DIR:-$(mktemp -d)}"
+
 # Coverage: when COVERAGE=1 the workers were built with `make build COVER=1`
 # (go build -cover -covermode=atomic). Exporting GOCOVERDIR makes every worker
 # process this run spawns — the main worker, the versioned HTTP workers, and the
@@ -414,8 +421,8 @@ EXPECTED_SKIP_REASONS=(
   'require-env VGI_HTTP_DISABLE_ZSTD'            # gzip-fallback fixture server
   'require-env VGI_HTTP_NO_COMPRESSION'          # no-compression fixture server (Python-side)
   'require-env VGI_TEST_BEARER_TOKEN'            # bearer-auth fixture server
-  'require-env VGI_TEST_BRANCH_DIR'              # multi-branch Iceberg fixture tree
   'require-env VGI_TEST_COMPANION_TARGET'        # companion-catalog fixture (Python-side)
+  'require-env VGI_TEST_ICEBERG'                 # multi_branch_iceberg: needs the iceberg extension + fixture tree
   'require-env VGI_DOCKER_IMAGE'                 # containerised worker lane
   'require-env VGI_DOCKER_TCP_IMAGE'             # containerised worker over TCP
   'require-env VGI_DOCKER_TX_IMAGE'              # containerised writable-tx worker lane

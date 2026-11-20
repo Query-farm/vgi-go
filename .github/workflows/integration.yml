@@ -23,11 +23,10 @@ concurrency:
 
 env:
   # Test sources and statically linked binaries come from this exact native commit.
-  VGI_REF: 9dae8d55c9692cbd8b69d021c28b20a09aeee438
-  # The vendor lane's suite: the first commit with test/sql/external_storage's
-  # SDK-neutral blob_test contract and test/start_fake_blob_vendor.sh.
-  # TODO: fold into VGI_REF when the other lanes move past it.
-  VGI_VENDOR_REF: f9e5df356dcc8fd18f545a3a348ca364ae58fe0e
+  # 91f8d63: the scan_planning_predicates*.test files and the planned_events row in
+  # table/comments.test (data.planned_events). It also carries test/sql/external_storage's
+  # blob_test contract and test/start_fake_blob_vendor.sh, so the vendor lane uses it too.
+  VGI_REF: 91f8d6355e1d86d2c6168e4c3a93396108a209c0
   VGI_NATIVE_RUNNER_BRANCH: v2.0
 
 jobs:
@@ -97,7 +96,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Query-farm/vgi
-          ref: ${{ matrix.lane == 'vendor' && env.VGI_VENDOR_REF || env.VGI_REF }}
+          ref: ${{ env.VGI_REF }}
           path: vgi-upstream
           token: ${{ secrets.GITHUB_TOKEN }}
 
