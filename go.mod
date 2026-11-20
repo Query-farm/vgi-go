@@ -16,7 +16,7 @@ replace github.com/google/flatbuffers => github.com/rustyconover/flatbuffers v25
 
 require (
 	github.com/Query-farm-haybarn/haybarn-go/v2 v2.20000.0-rc.9
-	github.com/Query-farm/vgi-rpc-go v0.37.1-0.20261120164121-f51b0b89c9e2 // TODO(release-wave): switch to vgi-rpc-go v0.38.0 (blob-vendor client + upload-URL v2; unreleased protocol-3.4 commit f51b0b8)
+	github.com/Query-farm/vgi-rpc-go v0.37.1-0.20261120170242-0da4608a5421 // TODO(release-wave): switch to vgi-rpc-go v0.38.0 (blob-vendor client + upload-URL v2; unreleased protocol-3.4 commit 0da4608)
 	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.0
 	github.com/apache/arrow-go/v18 v18.7.0
 	github.com/google/flatbuffers v25.12.19+incompatible
