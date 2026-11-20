@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+
+- **Protocol 3.4.0** (`vgi.ProtocolVersion`). Requires the matching VGI DuckDB
+  extension (protocol 3.4); peers must agree on major and minor. Nothing in
+  vgi itself changes: 3.4 signals vgi-rpc upload-URL protocol v2. The HTTP
+  serve path advertises `VGI-Upload-URL-Support: 2`, client uploads are
+  vended as sized grants (size + SHA-256, verified by storage), and a request
+  pointer without `vgi_rpc.location.sha256` is refused. Pins the unreleased
+  vgi-rpc-go `protocol-3.4` commit until the release wave.
+
 ## 0.43.0 (2026-11-19)
 
 ### Security

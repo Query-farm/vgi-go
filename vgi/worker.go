@@ -1700,8 +1700,11 @@ const ProtocolName = "vgi.v3"
 // see scan_planning.go); 3.3.0 adds FunctionInfo.visibility ("public" or
 // "table_only"): every function a catalog table names is listed, and the
 // table-only ones back their tables without being callable from SQL (see
-// FunctionVisibility).
-const ProtocolVersion = "3.3.0"
+// FunctionVisibility); 3.4.0 changes nothing in vgi itself: it signals the
+// vgi-rpc upload-URL protocol v2 (sized (size, sha256) upload requests,
+// VGI-Upload-URL-Support: 2) and makes vgi_rpc.location.sha256 mandatory on
+// request and result pointers.
+const ProtocolVersion = "3.4.0"
 
 // buildServer is the one place a worker's server is built, for every
 // transport; see hosting.go for what it hosts. An error means the worker must
