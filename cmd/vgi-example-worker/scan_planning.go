@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -46,6 +47,120 @@ func plannedDayStats(day time.Time) []vgi.BranchColumnStatistics {
 	}}
 }
 
+// planned_events: one file per day (planned_events_<day>.parquet, written by
+// scan_planning_predicates*.test), 10 rows each. Statistics cover event_date
+// and ts, so predicates on either prune; every other column only reaches
+// DuckDB. Mirrors vgi-python's _planned_events_branches.
+var plannedEventsColumns = arrow.NewSchema([]arrow.Field{
+	{Name: "event_date", Type: arrow.FixedWidthTypes.Date32, Nullable: true},
+	{Name: "ts", Type: &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}, Nullable: true},
+	{Name: "series", Type: arrow.BinaryTypes.String, Nullable: true},
+	{Name: "ticker", Type: arrow.BinaryTypes.String, Nullable: true},
+	{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+	{Name: "price", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+	{Name: "flag", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
+}, nil)
+
+func plannedEventFile(day time.Time) string {
+	return branchPath("planned_events_" + day.Format(time.DateOnly) + ".parquet")
+}
+
+// plannedEventStats: event_date is the day; ts spans 00:00-09:00 UTC.
+func plannedEventStats(day time.Time) []vgi.BranchColumnStatistics {
+	tsType := plannedEventsColumns.Field(1).Type
+	start := arrow.Timestamp(day.UnixMicro())
+	end := arrow.Timestamp(day.Add(9 * time.Hour).UnixMicro())
+	return append(plannedDayStats(day), vgi.BranchColumnStatistics{
+		ColumnName: "ts", Type: tsType, Min: start, Max: end, NoNulls: true,
+	})
+}
+
+// describeFilter is a stable one-line description of a decoded pushdown
+// filter, for test assertions; the same strings as vgi-python's fixture
+// _describe_filter ("col OP", "And(...)", "col IsNull", "col V2Expression").
+func describeFilter(f vgi.Filter) string {
+	switch f := f.(type) {
+	case *vgi.AndFilter:
+		return "And(" + describeFilters(f.Children, ", ") + ")"
+	case *vgi.OrFilter:
+		return "Or(" + describeFilters(f.Children, ", ") + ")"
+	case *vgi.ConstantFilter:
+		return f.ColumnName() + " " + strings.ToUpper(string(f.Op))
+	case *vgi.StructFilter:
+		return f.ColumnName() + "." + f.ChildName + " " + describeFilter(f.ChildFilter)
+	case *vgi.IsNullFilter:
+		return f.ColumnName() + " IsNull"
+	case *vgi.IsNotNullFilter:
+		return f.ColumnName() + " IsNotNull"
+	case *vgi.InFilter:
+		return f.ColumnName() + " In"
+	case *vgi.ExpressionFilter:
+		return f.ColumnName() + " Expression"
+	}
+	// Any other v2 shape: vgi-python's V2ExpressionFilter.
+	return f.ColumnName() + " V2Expression"
+}
+
+func describeFilters(filters []vgi.Filter, sep string) string {
+	parts := make([]string, len(filters))
+	for i, f := range filters {
+		parts[i] = describeFilter(f)
+	}
+	return strings.Join(parts, sep)
+}
+
+// plannedEventsBranches answers every planning call for data.planned_events:
+// one read_parquet branch over the day files the predicates may match. Each
+// call writes planned_events_last_plan.json with the planned days and the
+// sorted filter descriptions (null when the client sent no predicates), so a
+// test can assert what reached the worker, including that a predicate it
+// cannot use (LIKE, most functions) stayed with the client. Only
+// scan_planning_predicates*.test query this table, in one serial group, so the
+// record is never overwritten concurrently.
+func plannedEventsBranches(filters *vgi.ScanPlanningFilters) (*vgi.ScanBranchesResult, error) {
+	days, files := []string{}, []string{}
+	for _, day := range plannedDays {
+		if filters == nil || filters.MayMatchBranch(plannedEventStats(day)) {
+			days = append(days, day.Format(time.DateOnly))
+			files = append(files, plannedEventFile(day))
+		}
+	}
+	var described []string
+	if filters != nil {
+		decoded, err := filters.Decode()
+		if err != nil {
+			return nil, err
+		}
+		described = []string{}
+		if decoded != nil {
+			for _, f := range decoded.Filters {
+				described = append(described, describeFilter(f))
+			}
+		}
+		sort.Strings(described)
+	}
+	record, err := json.Marshal(map[string]any{"days": days, "filters": described})
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(branchPath("planned_events_last_plan.json"), record, 0o644); err != nil {
+		return nil, err
+	}
+	parquet := []string{"parquet"}
+	if len(files) == 0 {
+		return &vgi.ScanBranchesResult{RequiredExtensions: parquet}, nil
+	}
+	rows := int64(10 * len(files))
+	return &vgi.ScanBranchesResult{
+		Branches: []vgi.ScanBranch{{
+			FunctionName:        "read_parquet",
+			PositionalArguments: []vgi.ScanArg{{Value: files, Type: arrow.ListOf(arrow.BinaryTypes.String)}},
+			RowCount:            &rows,
+		}},
+		RequiredExtensions: parquet,
+	}, nil
+}
+
 func registerPlannedDaysTables(w *vgi.Worker) {
 	// Worker-side pruning of per-day files with the query's predicates.
 	w.RegisterCatalogTable("data", vgi.CatalogTable{
@@ -64,13 +179,24 @@ func registerPlannedDaysTables(w *vgi.Worker) {
 		Name: "planned_days_bf", Columns: plannedDaysColumns,
 		Comment: "Protocol 3.2: pruning by branch_filter contradiction — scan_planning_branch_filter.test",
 	})
+	// Filtered planning over a mixed-type table: the predicates a real catalog
+	// sees (string LIKE / functions / NULLs / timestamps / bools), most of
+	// which the worker cannot use and DuckDB must still apply.
+	w.RegisterCatalogTable("data", vgi.CatalogTable{
+		Name: "planned_events", Columns: plannedEventsColumns, ScanPlanning: vgi.ScanPlanningFiltered,
+		Comment: "Protocol 3.2: filtered planning, non-prunable predicates — scan_planning_predicates.test",
+	})
 }
 
 // plannedDaysScanBranchesPlan answers catalog_table_scan_branches_get for the
-// planned_days* tables, with or without predicates; every other table falls
-// through to multiBranchScanBranchesGet.
+// planned_days* and planned_events tables, with or without predicates; every
+// other table falls through to multiBranchScanBranchesGet.
 func plannedDaysScanBranchesPlan(_ []byte, schemaPath vgi.SchemaPath, name string, _, _ *string, filters *vgi.ScanPlanningFilters) (*vgi.ScanBranchesResult, bool, error) {
 	name = strings.ToLower(name)
+	if schemaPathIs(schemaPath, "data") && name == "planned_events" {
+		result, err := plannedEventsBranches(filters)
+		return result, err == nil, err
+	}
 	if !schemaPathIs(schemaPath, "data") || !strings.HasPrefix(name, "planned_days") {
 		return nil, false, nil
 	}
