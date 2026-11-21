@@ -76,6 +76,7 @@ var orchardHostedEnvNames = []string{
 	"VGI_BEARER_TOKENS", "VGI_JWT_ISSUER", "VGI_JWT_AUDIENCE", "VGI_JWT_JWKS_URI", "VGI_JWT_ALGORITHMS",
 	"VGI_RPC_GRANT_KEYS", "VGI_OAUTH_RESOURCE", "VGI_OAUTH_AUTH_SERVERS", "VGI_PROXY_PROOF_MODE",
 	"VGI_INTROSPECT_PRINCIPALS", "VGI_ORCHARD_HOSTED", "VGI_SIGNING_KEY", "VGI_HTTP_CORS_ORIGINS",
+	"VGI_RPC_MAX_REQUEST_BYTES",
 }
 
 // orchardJWKS serves the EC and RSA public keys; fail answers 500.
@@ -363,6 +364,24 @@ func TestHostedHeadHealthIsAnonymous(t *testing.T) {
 	}
 	if resp.Header.Get("VGI-Supported-Encodings") == "" {
 		t.Fatal("HEAD /health lacks the capability headers")
+	}
+	// VGI_RPC_MAX_REQUEST_BYTES unset: the hosted default cap is advertised.
+	if got, want := resp.Header.Get("VGI-Max-Request-Bytes"), fmt.Sprint(vgi.HostedDefaultMaxRequestBytes); got != want {
+		t.Fatalf("VGI-Max-Request-Bytes = %q, want %q", got, want)
+	}
+}
+
+func TestHostedMaxRequestBytesEnvWins(t *testing.T) {
+	jwks := newOrchardJWKS(t)
+	setHostedEnv(t, jwks.srv.URL, map[string]string{"VGI_RPC_MAX_REQUEST_BYTES": "65536"})
+	hs, err := hostedWorker().NewHttpServerForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	hs.ServeHTTP(rec, httptest.NewRequest(http.MethodHead, "/health", nil))
+	if got := rec.Header().Get("VGI-Max-Request-Bytes"); got != "65536" {
+		t.Fatalf("VGI-Max-Request-Bytes = %q, want 65536", got)
 	}
 }
 

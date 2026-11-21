@@ -736,7 +736,9 @@ VGI-Supported-Encodings: ...        (and the other VGI capability headers)
 ```
 
 There is no `resource_metadata` in the challenge. Authentication runs before
-the request body is read, size-checked or decompressed. CORS is open
+any of the request body is read, size-checked or decompressed. The request
+cap (`VGI_RPC_MAX_REQUEST_BYTES`) defaults to 32 MiB in hosted mode, advertised
+and enforced. CORS is open
 (`Access-Control-Allow-Origin: *`), because the only credential is the bearer
 Pass. The `Authorization` header is never logged, at any log level.
 

@@ -2072,6 +2072,9 @@ func (w *Worker) newHttpServer() (*vgirpc.HttpServer, error) {
 			return nil, err
 		}
 		hs.SetCorsOrigins("*")
+		if strings.TrimSpace(os.Getenv(vgirpc.EnvMaxRequestBytes)) == "" {
+			hs.SetMaxRequestBytes(HostedDefaultMaxRequestBytes)
+		}
 	} else if w.authenticateFunc != nil {
 		hs.SetAuthenticate(w.authenticateFunc)
 	}

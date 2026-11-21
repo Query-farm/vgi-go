@@ -62,6 +62,12 @@ const (
 	// HostedMinSigningKeyBytes is the shortest VGI_SIGNING_KEY a hosted
 	// worker accepts.
 	HostedMinSigningKeyBytes = 32
+	// HostedDefaultMaxRequestBytes is the request-body cap, advertised and
+	// enforced, when VGI_RPC_MAX_REQUEST_BYTES is unset in hosted mode. Go's
+	// server reads no body before the Pass check; the cap bounds what an
+	// authenticated caller can send inline (larger requests go by upload URL
+	// when a blob vendor is configured).
+	HostedDefaultMaxRequestBytes = 32 << 20
 )
 
 // hostedDefaultAlgorithms is the Pass algorithm allow-list unless
