@@ -23,14 +23,14 @@ concurrency:
 
 env:
   # Test sources and statically linked binaries come from this exact native commit.
-  # protocol-3.4: vgi protocol-3.4 653b879 (upload URLs v2, the client-upload
+  # protocol-3.4: vgi protocol-3.4 5b8b7a2 (upload URLs v2, the client-upload
   # counters in test/sql/external_storage) and the native runner that branch
   # built. TODO(release-wave): back to a v2.0 commit once 3.4 lands there.
-  VGI_REF: 653b879c1131a18594918874e8f670d274a37ccb
+  VGI_REF: 5b8b7a2a7e4e587e15573ddd62cf1dbcdf6b357e
   VGI_NATIVE_RUNNER_BRANCH: protocol-3.4
   # The vendor lane's fake vendor (test/start_fake_blob_vendor.sh): vgi-rpc-python
   # protocol-3.4 f0fb675, which counts client-upload grants by origin=client_upload.
-  # Same commit 653b879 pins; stated here so a VGI_REF bump cannot move it silently.
+  # Same commit 5b8b7a2 pins; stated here so a VGI_REF bump cannot move it silently.
   VGI_RPC_FAKE_VENDOR_REF: f0fb6754ae5b70900ba21629a1e2d48eb2182774
 
 jobs:

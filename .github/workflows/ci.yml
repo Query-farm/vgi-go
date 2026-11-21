@@ -54,7 +54,7 @@ jobs:
 
       - name: Unit tests with coverage
         env:
-          VGI_RPC_FAKE_VENDOR_CMD: uvx --from git+https://github.com/Query-farm/vgi-rpc-python@af57e6bb395e5198b2a5336def976d73bfc87d8f vgi-rpc-fake-vendor
+          VGI_RPC_FAKE_VENDOR_CMD: uvx --from git+https://github.com/Query-farm/vgi-rpc-python@f0fb6754ae5b70900ba21629a1e2d48eb2182774 vgi-rpc-fake-vendor
         run: make test-unit
 
       - name: Verify consumer FlatBuffers replacement
@@ -88,7 +88,8 @@ jobs:
           python-version: '3.13'
 
       - name: Clone vgi-rpc-python reference
-        run: git clone --depth 1 https://github.com/Query-farm/vgi-rpc-python.git "$RUNNER_TEMP/vgi-rpc-python"
+        # TODO(release-wave): back to main (unpinned) once protocol-3.4 is merged.
+        run: git clone --depth 1 --branch protocol-3.4 https://github.com/Query-farm/vgi-rpc-python.git "$RUNNER_TEMP/vgi-rpc-python"
 
       - name: Install the reference's conformance suite
         run: |
