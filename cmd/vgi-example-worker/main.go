@@ -15,6 +15,7 @@ import (
 	"github.com/Query-farm/vgi-go/examples/blobtest"
 	"github.com/Query-farm/vgi-go/examples/catalog_contents"
 	"github.com/Query-farm/vgi-go/examples/narrow_bind"
+	"github.com/Query-farm/vgi-go/examples/scalar"
 	"github.com/Query-farm/vgi-go/examples/schema_reconcile"
 	"github.com/Query-farm/vgi-go/examples/table"
 	"github.com/Query-farm/vgi-go/examples/ticket_probe"
@@ -203,6 +204,16 @@ func main() {
 	// table-bufferings, aggregates, schema_reconcile). Catalog tables, secret
 	// types, and settings remain wired below — they're fixture-specific.
 	all.RegisterAll(w)
+	// Orchard hosted mode (VGI_ORCHARD_HOSTED=1): pass_claims, the hosted-mode
+	// conformance fixture. Registered only in hosted mode, so the ordinary
+	// function listing the shared suite counts is unchanged. A bad value
+	// counts as hosted here (no test-only auth is installed) and RunHttp
+	// refuses it.
+	hosted, hostedErr := vgi.HostedModeEnabled()
+	hosted = hosted || hostedErr != nil
+	if hosted {
+		w.RegisterScalar(&scalar.PassClaimsFunction{})
+	}
 	w.RegisterCatalogTable("main", vgi.CatalogTable{Name: "projection_rows", Function: &table.ProjectionSequence{}})
 
 	// Register the accumulate fixture (catalog-scoped, so it is invisible under
@@ -1130,8 +1141,10 @@ func main() {
 	})(w)
 
 	// HTTP-only hooks: bearer/JWT auth and the OAuth resource metadata document
-	// have no meaning on the stdio/socket transports.
-	if *cli.HTTP {
+	// have no meaning on the stdio/socket transports. In hosted mode the SDK
+	// verifies Passes itself and refuses any other authenticator, so none of
+	// these test-only hooks are installed.
+	if *cli.HTTP && !hosted {
 		authFn, jwtCleanup := resolveAuthenticate()
 		if jwtCleanup != nil {
 			defer jwtCleanup()

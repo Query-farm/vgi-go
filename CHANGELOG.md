@@ -12,6 +12,19 @@
   pointer without `vgi_rpc.location.sha256` is refused. Pins the unreleased
   vgi-rpc-go `protocol-3.4` commit until the release wave.
 
+### Added
+
+- **Orchard hosted mode** (`VGI_ORCHARD_HOSTED=1`). `RunHttp` accepts only an
+  Orchard Pass (RFC 9068 `at+jwt`, ES256, exact `iss` and single `aud`, `exp`
+  required, 60 s leeway) on every request but `HEAD /health` and CORS
+  preflights, verified against a JWKS cached for at most 10 minutes that fails
+  closed (503) rather than serving stale keys. Startup refuses any other way
+  in (bearer tokens, grant keys, identity hooks, OAuth, proxy proof, Iroh, a
+  custom authenticator, non-HTTP transports including stdio) and a missing or
+  short `VGI_SIGNING_KEY`. Claims reach `ProcessParams.Auth` with their JSON
+  types, domain `orchard`. See the README. The example worker registers the
+  `pass_claims` fixture in hosted mode, and CI runs vgi's hosted-mode harness.
+
 ## 0.43.0 (2026-11-19)
 
 ### Security

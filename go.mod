@@ -16,9 +16,10 @@ replace github.com/google/flatbuffers => github.com/rustyconover/flatbuffers v25
 
 require (
 	github.com/Query-farm-haybarn/haybarn-go/v2 v2.20000.0-rc.9
-	github.com/Query-farm/vgi-rpc-go v0.37.1-0.20261120195604-c5d919816de1 // TODO(release-wave): switch to vgi-rpc-go v0.38.0 (blob-vendor client + upload-URL v2; unreleased protocol-3.4 commit c5d9198)
-	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.0
+	github.com/Query-farm/vgi-rpc-go v0.37.1-0.20261121184019-59ac013bd4f1 // TODO(release-wave): switch to vgi-rpc-go v0.38.0 (blob-vendor client + upload-URL v2 + strict auth; unreleased protocol-3.4 commit 59ac013)
+	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.1-0.20261121184019-59ac013bd4f1 // TODO(release-wave): the jwtauth release carrying the hardened verifier (protocol-3.4 commit 59ac013)
 	github.com/apache/arrow-go/v18 v18.7.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/flatbuffers v25.12.19+incompatible
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.19.2
@@ -35,7 +36,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/klauspost/asmfmt v1.3.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect

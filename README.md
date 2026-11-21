@@ -669,6 +669,100 @@ worker serves the cross-SDK `ticket_probe` fixture catalog
 `vgi-test-alice` / `vgi-test-bob` count as fresh logins, so they can call
 `issue_grant`.
 
+## Orchard hosted mode
+
+`VGI_ORCHARD_HOSTED=1` runs the worker as an Orchard *Field Worker*. The hosted
+base image sets it; you do not set it per deployment, and the worker's code
+does not change. Callers present a *Pass*: a short-lived
+[RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) JWT access token issued by
+the Orchard Front Desk for one canonical Desk Address. The worker verifies
+every Pass locally and accepts no other credential. The full design is in the
+extension repository's `docs/location-delegation.md`.
+
+```bash
+VGI_ORCHARD_HOSTED=1 \
+VGI_JWT_ISSUER=https://auth.queryfarm.cloud \
+VGI_JWT_AUDIENCE=https://desk.queryfarm.cloud/d/dep_123 \
+VGI_JWT_JWKS_URI=https://auth.queryfarm.cloud/.well-known/jwks.json \
+VGI_SIGNING_KEY=... \
+./my-worker --http
+```
+
+**Startup fails closed.** `RunHttp` prints the reason to stderr and exits with
+status 1 unless all three of `VGI_JWT_ISSUER`, `VGI_JWT_AUDIENCE` and
+`VGI_JWT_JWKS_URI` are set. Unset and empty are both errors. Each takes
+exactly one value: a value containing a comma is refused. `VGI_SIGNING_KEY`
+(or `WithHttpSigningKey`) must be configured with at least 32 bytes, because a
+key minted per process breaks every attached session when a machine restarts.
+The worker also refuses to start when any other way in is configured:
+
+- `VGI_BEARER_TOKENS`;
+- sealed-grant keys (`VGI_RPC_GRANT_KEYS`, `--grant-key` or `WithGrantKeys`);
+- a `WithIdentity` `ResolveToken` or `MintGrant` hook;
+- `VGI_OAUTH_RESOURCE`, `SetOAuthResourceMetadata` or `SetOAuthPkce`;
+- `VGI_PROXY_PROOF_MODE` other than `off`, or Iroh peer identity
+  (`SetIrohBridge`);
+- an authenticator passed to `SetAuthenticate`;
+- any transport but HTTP: `RunStdio`, `RunUnix`, `RunTcp` and
+  `RunIrohTcpUpstream` carry no Pass;
+- a `VGI_ORCHARD_HOSTED` value other than `1`/`0`/`true`/`false`/`yes`/`no`/`on`/`off`.
+
+**Verification:**
+
+- algorithm `ES256` only (`VGI_JWT_ALGORITHMS` overrides; `none` and `HS*`
+  are always refused);
+- JOSE header `typ` must be `at+jwt` (case-insensitive, `application/` prefix
+  optional);
+- `iss` must match exactly, and `aud` must name exactly one value, matched
+  exactly;
+- `exp` is required, and `exp` / `nbf` are checked with 60 s of clock skew;
+- the JWKS is cached for at most 10 minutes, or less if its
+  `Cache-Control: max-age` is shorter. When that time is up the keys are
+  discarded. If the re-fetch fails, requests get a 503 with `Retry-After` until
+  it succeeds; stale keys are never used;
+- a Pass with an unknown `kid` triggers a JWKS re-fetch at most once every 60
+  seconds. Between re-fetches it is simply rejected.
+
+**Every request needs a Pass**, except `HEAD /health` (the Front Desk's
+liveness probe) and CORS preflights, which browsers send without credentials.
+That includes `GET /health`, `OPTIONS /health`, the landing and describe pages
+and unknown paths. A request without a valid Pass gets:
+
+```text
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer error="invalid_token"
+VGI-Auth-Reason: missing_credential | invalid_credential | expired_credential
+VGI-Supported-Encodings: ...        (and the other VGI capability headers)
+```
+
+There is no `resource_metadata` in the challenge. Authentication runs before
+the request body is read, size-checked or decompressed. CORS is open
+(`Access-Control-Allow-Origin: *`), because the only credential is the bearer
+Pass. The `Authorization` header is never logged, at any log level.
+
+**Function code sees the Pass's claims** through `ProcessParams.Auth` (and
+`BindParams.Auth`), with their JSON types: `email_verified` is a `bool` and
+`exp` an `int64`. `Auth.Principal` is `sub` and `Auth.Domain` is `"orchard"`.
+
+| Claim | Meaning |
+|-------|---------|
+| `sub` | Users: the WorkOS user id. Workloads: an opaque Registry id |
+| `kind` | `user` or `workload` |
+| `email`, `email_verified` | Users only |
+| `name` | The user's name, or the name an admin gave the Workload |
+| `org_id`, `org_name` | The workspace that owns the deployment |
+| `federated_iss`, `federated_sub` | Workloads signed in through a Trust Rule only |
+| `client_id`, `iat`, `nbf`, `exp`, `jti` | Standard token claims |
+
+A valid Pass means "a member, or a Workload, of the workspace that owns this
+deployment". Anything finer is the worker's own decision. Code that authorizes
+by `sub` or `name` must also check `kind`, because a Workload's id and name
+could look like a user's.
+
+The example worker registers `pass_claims(x BIGINT) -> VARCHAR`
+(`examples/scalar/pass_claims.go`) in hosted mode only; it returns the
+verified claims as JSON and is the hosted-mode conformance fixture.
+
 ## Examples
 
 The `cmd/vgi-example-worker` binary registers every example function via

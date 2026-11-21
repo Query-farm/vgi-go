@@ -1844,6 +1844,8 @@ func (w *Worker) mustBuildServer(transport serverTransport) *vgirpc.Server {
 // A worker that cannot be built (see [WithHostedProtocols], [WithIdentity])
 // refuses to start: the reason goes to stderr and the process exits 1.
 func (w *Worker) RunStdio() {
+	// Orchard hosted mode serves HTTP only (hosted.go).
+	_ = exitIfHostedRefusal(refuseNonHTTPTransportIfHosted("stdio"))
 	s := w.mustBuildServer(transportStdio)
 	s.RunStdio()
 }
@@ -1854,6 +1856,9 @@ func (w *Worker) RunStdio() {
 // self-shuts-down after idleTimeout with no active connections (<=0 disables
 // the timeout). Mutually exclusive with HTTP.
 func (w *Worker) RunUnix(path string, idleTimeout time.Duration) error {
+	if err := refuseNonHTTPTransportIfHosted("--unix"); err != nil {
+		return exitIfHostedRefusal(err)
+	}
 	s, err := w.buildServer(transportUnix)
 	if err != nil {
 		return err
@@ -1874,6 +1879,9 @@ func (w *Worker) RunUnix(path string, idleTimeout time.Duration) error {
 // Raw TCP framing carries no auth/encryption — bind loopback / a trusted
 // network only; use RunHttp for untrusted networks.
 func (w *Worker) RunTcp(host string, port int, idleTimeout time.Duration) error {
+	if err := refuseNonHTTPTransportIfHosted("--tcp"); err != nil {
+		return exitIfHostedRefusal(err)
+	}
 	s, err := w.buildServer(transportTCP)
 	if err != nil {
 		return err
@@ -1888,6 +1896,9 @@ func (w *Worker) RunTcp(host string, port int, idleTimeout time.Duration) error 
 // vgi-iroh-bridge. The listener requires the bridge's PROXY-v2 EndpointId
 // preamble and rejects every immediate peer outside the exact trust list.
 func (w *Worker) RunIrohTcpUpstream(host string, port int, idleTimeout time.Duration, options IrohBridgeOptions) error {
+	if err := refuseNonHTTPTransportIfHosted("--iroh-raw-upstream"); err != nil {
+		return exitIfHostedRefusal(err)
+	}
 	if host == "" {
 		host = "127.0.0.1"
 	}
@@ -1924,10 +1935,15 @@ func (w *Worker) RunIrohTcpUpstream(host string, port int, idleTimeout time.Dura
 // RunHttp runs the worker serving RPC over HTTP. It listens on the given
 // address (e.g. "127.0.0.1:0" for a random port) and prints "PORT:<n>" to
 // stdout so callers can discover the assigned port.
+//
+// With VGI_ORCHARD_HOSTED=1 the worker runs in Orchard hosted mode (see
+// hosted.go): every request but HEAD /health needs a valid Pass, and a
+// configuration that could admit anything else refuses to start -- the
+// reason goes to stderr and the process exits 1.
 func (w *Worker) RunHttp(addr string) error {
 	hs, err := w.newHttpServer()
 	if err != nil {
-		return err
+		return exitIfHostedRefusal(err)
 	}
 
 	listener, err := net.Listen("tcp", addr)
@@ -1967,6 +1983,12 @@ func (w *Worker) newHttpServer() (*vgirpc.HttpServer, error) {
 		if env := os.Getenv(SigningKeyEnv); env != "" {
 			WithHttpSigningKey([]byte(env))(w)
 		}
+	}
+	// Orchard hosted mode: check the whole configuration before anything is
+	// built, and build the Pass verifier. nil when hosted mode is off.
+	passAuth, _, err := w.hostedPassAuthenticate()
+	if err != nil {
+		return nil, err
 	}
 	s, err := w.buildServer(transportHTTP)
 	if err != nil {
@@ -2040,7 +2062,17 @@ func (w *Worker) newHttpServer() (*vgirpc.HttpServer, error) {
 	} else if config != nil {
 		fmt.Fprintf(os.Stderr, "Blob vendor enabled: threshold=%d bytes\n", config.ExternalizeThresholdBytes)
 	}
-	if w.authenticateFunc != nil {
+	if passAuth != nil {
+		// Hosted mode: Passes only, on every request but HEAD /health and
+		// CORS preflights, authenticated before any body is read. CORS is
+		// open because the only credential is the bearer Pass.
+		hs.SetAuthenticate(passAuth)
+		hs.SetStrictAuth(true)
+		if err := hs.SetWWWAuthenticate(HostedChallenge); err != nil {
+			return nil, err
+		}
+		hs.SetCorsOrigins("*")
+	} else if w.authenticateFunc != nil {
 		hs.SetAuthenticate(w.authenticateFunc)
 	}
 	if w.oauthMetadata != nil {

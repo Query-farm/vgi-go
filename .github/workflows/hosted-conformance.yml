@@ -1,0 +1,75 @@
+# Orchard hosted mode (VGI_ORCHARD_HOSTED=1): the SDK-neutral black-box
+# harness from Query-farm/vgi (test/hosted/run_hosted_conformance.py, contract
+# in test/hosted/README.md) against the example worker, which registers the
+# pass_claims fixture in hosted mode. The harness is a uv script with pinned
+# dependencies; it needs no DuckDB build.
+name: Orchard hosted conformance
+
+on:
+  push:
+    branches: [main, protocol-3.4]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # vgi protocol-3.4 with the hosted-mode harness.
+  # TODO(release-wave): a v2.0 commit once 3.4 lands there.
+  VGI_HOSTED_REF: 2957674e1167abf884fbd0d7e159472afa31291c
+
+jobs:
+  orchard-hosted-conformance:
+    name: Orchard hosted-mode harness
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout the vgi hosted-mode harness
+        uses: actions/checkout@v4
+        with:
+          repository: Query-farm/vgi
+          ref: ${{ env.VGI_HOSTED_REF }}
+          path: vgi-upstream
+          sparse-checkout: test/hosted
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Build example worker
+        run: go build -o vgi-example-worker-go ./cmd/vgi-example-worker
+
+      # Every non-HTTP transport the SDK has must refuse: stdio, --unix, --tcp
+      # and the raw Iroh upstream. --streaming-body: Go's net/http hands the
+      # request to the server before the body arrives, so authentication runs
+      # before any of it is read.
+      - name: Run the harness
+        run: |
+          W="$PWD/vgi-example-worker-go"
+          timeout 900 uv run --script vgi-upstream/test/hosted/run_hosted_conformance.py \
+            --worker-cwd "$PWD" \
+            --worker-cmd "$W --http --host 127.0.0.1 --port {port} --log-level debug" \
+            --refuse-cmd "$W" \
+            --refuse-cmd "$W --unix $RUNNER_TEMP/vgi-hosted-refuse-{port}.sock" \
+            --refuse-cmd "$W --tcp 127.0.0.1:{port}" \
+            --refuse-cmd "$W --iroh-raw-upstream 127.0.0.1:{port} --iroh-issuer iroh" \
+            --streaming-body \
+            --log-dir "$RUNNER_TEMP/hosted-logs"
+
+      - name: Upload worker logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-conformance-logs
+          path: ${{ runner.temp }}/hosted-logs
+          if-no-files-found: ignore
