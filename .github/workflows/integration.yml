@@ -23,11 +23,15 @@ concurrency:
 
 env:
   # Test sources and statically linked binaries come from this exact native commit.
-  # 91f8d63: the scan_planning_predicates*.test files and the planned_events row in
-  # table/comments.test (data.planned_events). It also carries test/sql/external_storage's
-  # blob_test contract and test/start_fake_blob_vendor.sh, so the vendor lane uses it too.
-  VGI_REF: 91f8d6355e1d86d2c6168e4c3a93396108a209c0
-  VGI_NATIVE_RUNNER_BRANCH: v2.0
+  # protocol-3.4: vgi protocol-3.4 653b879 (upload URLs v2, the client-upload
+  # counters in test/sql/external_storage) and the native runner that branch
+  # built. TODO(release-wave): back to a v2.0 commit once 3.4 lands there.
+  VGI_REF: 653b879c1131a18594918874e8f670d274a37ccb
+  VGI_NATIVE_RUNNER_BRANCH: protocol-3.4
+  # The vendor lane's fake vendor (test/start_fake_blob_vendor.sh): vgi-rpc-python
+  # protocol-3.4 f0fb675, which counts client-upload grants by origin=client_upload.
+  # Same commit 653b879 pins; stated here so a VGI_REF bump cannot move it silently.
+  VGI_RPC_FAKE_VENDOR_REF: f0fb6754ae5b70900ba21629a1e2d48eb2182774
 
 jobs:
   build-worker:
