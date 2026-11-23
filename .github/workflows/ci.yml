@@ -18,6 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A manual dispatch has no base commit, so golangci-lint compares
+          # against origin/main (below), which needs the history.
+          fetch-depth: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
 
       - uses: actions/setup-go@v5
         with:
@@ -37,7 +41,11 @@ jobs:
           # ever running golangci-lint (the workflow failed earlier, at checkout,
           # before this step). Gate on issues introduced by the change under test
           # so new code stays clean while the backlog is paid down separately.
-          only-new-issues: true
+          only-new-issues: ${{ github.event_name != 'workflow_dispatch' }}
+          # A manual dispatch (e.g. on protocol-3.4) has no PR or push base for
+          # only-new-issues, which then reports the whole backlog: compare with
+          # main instead.
+          args: ${{ github.event_name == 'workflow_dispatch' && '--new-from-rev=origin/main' || '' }}
 
       - name: Build
         run: make build

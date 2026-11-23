@@ -20,9 +20,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # vgi protocol-3.4 with the hosted-mode harness.
+  # vgi protocol-3.4 with the hosted-mode harness (0283f91: its client is
+  # vgi-python 33099b4 / vgi-rpc 6a21ee3, which speak the 3.4 BindRequest).
   # TODO(release-wave): a v2.0 commit once 3.4 lands there.
-  VGI_HOSTED_REF: fce57984a7e8ea35f9dcd4a034b5ed37c85ca5c5
+  VGI_HOSTED_REF: 0283f91f98f69337708c9ce4c6a40706355d3aa5
 
 jobs:
   orchard-hosted-conformance:

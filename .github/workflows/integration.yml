@@ -23,15 +23,15 @@ concurrency:
 
 env:
   # Test sources and statically linked binaries come from this exact native commit.
-  # protocol-3.4: vgi protocol-3.4 e99683f (argument references, init StateRef,
-  # the large-value files in test/sql/external_storage) and the native runner
-  # that branch built. TODO(release-wave): back to a v2.0 commit once 3.4 lands
-  # there.
-  VGI_REF: e99683f2af215c5a166697945e796c91d0cc66fe
+  # protocol-3.4: vgi protocol-3.4 0283f91 (argument references, init StateRef,
+  # the large-value files in test/sql/external_storage, SDK-neutral
+  # arguments_ref_state_ref.test) and the native runner that branch built.
+  # TODO(release-wave): back to a v2.0 commit once 3.4 lands there.
+  VGI_REF: 0283f91f98f69337708c9ce4c6a40706355d3aa5
   VGI_NATIVE_RUNNER_BRANCH: protocol-3.4
   # The vendor lane's fake vendor (test/start_fake_blob_vendor.sh): vgi-rpc-python
   # 6a21ee3 (state_ref / client_upload counters and the delete-object route).
-  # Same commit e99683f pins; stated here so a VGI_REF bump cannot move it silently.
+  # Same commit 0283f91 pins; stated here so a VGI_REF bump cannot move it silently.
   VGI_RPC_FAKE_VENDOR_REF: 6a21ee3b2fb21d9c348c9b615fd97dce8e0bb852
 
 jobs:
