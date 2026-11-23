@@ -104,7 +104,7 @@ func main() {
 		// attached catalog tells their implementations apart (see
 		// examples/twin_catalogs).
 		vgi.WithCatalogAliases("projection_repro", "schema_reconcile", narrow_bind.CatalogName,
-			twin_catalogs.CatalogA, twin_catalogs.CatalogB, blobtest.CatalogName),
+			twin_catalogs.CatalogA, twin_catalogs.CatalogB),
 		// The accumulate fixture catalog is discoverable (data version 2.0.0)
 		// and isolated per ATTACH (random scope); its functions are registered
 		// catalog-scoped below so they don't leak into the example catalog.
@@ -222,8 +222,8 @@ func main() {
 
 	// blob_test: functions sized by their arguments for the extension's
 	// blob-vendor externalization tests (test/sql/external_storage/; contract
-	// in the vgi extension's docs/testing/blob-test-catalog.md). Catalog-scoped,
-	// so the example catalog's function inventory is unchanged.
+	// in the vgi extension's docs/testing/blob-test-catalog.md). A sub-catalog,
+	// so the example catalog's inventory is unchanged.
 	blobtest.Register(w)
 
 	// Register the two colliding twin catalogs (catalog-scoped): one worker

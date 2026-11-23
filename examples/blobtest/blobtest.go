@@ -17,6 +17,10 @@
 //	blob_buffer_echo(t)      table-buffering  stores each input batch, replays it
 //	blob_tio(t)              table-in-out     stores each batch, reads it back
 //	blob_store_values(t)     table-in-out     stores each value of column 0 exactly
+//	blob_param_batches(p, n) table            large bind parameter over n stream turns
+//	blob_param_streams(p, n) table (splits)   large bind parameter, n parallel streams
+//	blob_param_scalar(i, p)  scalar           large constant parameter of a scalar
+//	blob_param_table         catalog table    a scan binding blob_param_echo(repeat('t', 65536))
 //
 // The checksum columns are payload_len (UTF-8 byte length) and payload_sha256
 // (lowercase hex SHA-256) of a value as text, matching DuckDB's strlen(x) and
@@ -56,17 +60,31 @@ var checksumFields = []arrow.Field{
 	{Name: "payload_sha256", Type: arrow.BinaryTypes.String, Nullable: true},
 }
 
-// Register wires the seven functions onto w, scoped to the blob_test catalog.
-// The caller must also pass vgi.WithCatalogAliases(CatalogName) to NewWorker
-// so the catalog is ATTACHable.
+// Register serves the blob_test catalog from w, as a sub-catalog (it has a
+// table of its own, blob_param_table, which must not appear in w's catalog).
 func Register(w *vgi.Worker) {
-	w.RegisterScalarForCatalog(CatalogName, &BlobRepeatFunction{})
-	w.RegisterScalarForCatalog(CatalogName, &BlobLenFunction{})
-	w.RegisterTableForCatalog(CatalogName, vgi.AsTableFunction[blobRowsState](&BlobRowsFunction{}))
-	w.RegisterTableForCatalog(CatalogName, vgi.AsTableFunction[paramEchoState](&BlobParamEchoFunction{}))
-	w.RegisterTableBufferingForCatalog(CatalogName, &BlobBufferEchoFunction{})
-	w.RegisterTableInOutForCatalog(CatalogName, vgi.AsTableInOutFunction[struct{}](&BlobTioFunction{}))
-	w.RegisterTableInOutForCatalog(CatalogName, vgi.AsTableInOutFunction[struct{}](&BlobStoreValuesFunction{}))
+	c := vgi.NewWorker(
+		vgi.WithCatalogName(CatalogName),
+		vgi.WithCatalogComment("Functions sized by their arguments, for blob externalization tests"),
+	)
+	c.RegisterScalar(&BlobRepeatFunction{})
+	c.RegisterScalar(&BlobLenFunction{})
+	c.RegisterTable(vgi.AsTableFunction[blobRowsState](&BlobRowsFunction{}))
+	c.RegisterTable(vgi.AsTableFunction[paramEchoState](&BlobParamEchoFunction{}))
+	c.RegisterTableBuffering(&BlobBufferEchoFunction{})
+	c.RegisterTableInOut(vgi.AsTableInOutFunction[struct{}](&BlobTioFunction{}))
+	c.RegisterTableInOut(vgi.AsTableInOutFunction[struct{}](&BlobStoreValuesFunction{}))
+	c.RegisterTable(vgi.AsTableFunction[paramBatchesState](&BlobParamBatchesFunction{}))
+	c.RegisterTable(vgi.AsTableFunction[paramStreamsState](&BlobParamStreamsFunction{}))
+	c.RegisterScalar(&BlobParamScalarFunction{})
+	c.RegisterCatalogTable("main", vgi.CatalogTable{
+		Name:     "blob_param_table",
+		Comment:  "blob_param_echo(repeat('t', 65536)), STABLE_WITHIN_QUERY, bound over RPC on every scan",
+		Columns:  paramEchoSchema,
+		Function: vgi.AsTableFunction[paramEchoState](&blobParamTableScan{}),
+		FuncArgs: []vgi.CatalogTableArg{{Position: 0, Value: BlobParamTableArgument, Type: arrow.BinaryTypes.String}},
+	})
+	w.RegisterSubCatalog(c)
 }
 
 // ---------------------------------------------------------------------------
@@ -632,4 +650,273 @@ func (*BlobStoreValuesFunction) Process(_ context.Context, params *vgi.ProcessPa
 
 func (*BlobStoreValuesFunction) Finalize(context.Context, *vgi.ProcessParams, *struct{}) ([]arrow.RecordBatch, error) {
 	return nil, nil
+}
+
+// ---------------------------------------------------------------------------
+// Argument references (protocol 3.4): large bind parameters over many turns,
+// parallel streams, a scalar's constant parameter, and a catalog table.
+// ---------------------------------------------------------------------------
+
+// paramDigest is (strlen, sha256) of a parameter.
+func paramDigest(payload string) (int64, string) {
+	sum := sha256.Sum256([]byte(payload))
+	return int64(len(payload)), hex.EncodeToString(sum[:])
+}
+
+func emitDigestRow(out *vgirpc.OutputCollector, schema *arrow.Schema, first int64, payload string) error {
+	length, digest := paramDigest(payload)
+	b := array.NewRecordBuilder(memory.DefaultAllocator, schema)
+	defer b.Release()
+	b.Field(0).(*array.Int64Builder).Append(first)
+	b.Field(1).(*array.Int64Builder).Append(length)
+	b.Field(2).(*array.StringBuilder).Append(digest)
+	return out.Emit(b.NewRecordBatch()) // the collector owns the batch
+}
+
+func int64Arg(params *vgi.BindParams, pos int, name string, min int64) (int64, error) {
+	v, err := params.Args.GetScalarInt64(pos)
+	if err != nil {
+		return 0, err
+	}
+	if v < min {
+		return 0, fmt.Errorf("%s must be >= %d, got %d", name, min, v)
+	}
+	return v, nil
+}
+
+var paramBatchesSchema = arrow.NewSchema(append([]arrow.Field{
+	{Name: "i", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, checksumFields...), nil)
+
+// BlobParamBatchesFunction is blob_param_batches(payload, batches): batches
+// one-row batches, one per stream turn, row i = (i, strlen(payload),
+// sha256(payload)). A 60-batch call is at least 60 continuations.
+type BlobParamBatchesFunction struct{}
+
+type paramBatchesState struct {
+	Next int64
+}
+
+var _ vgi.TypedTableFunc[paramBatchesState] = (*BlobParamBatchesFunction)(nil)
+
+func (*BlobParamBatchesFunction) Name() string { return "blob_param_batches" }
+
+func (*BlobParamBatchesFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description: "Length and SHA-256 of a parameter, once per batch (argument references over many turns)",
+		Stability:   vgi.StabilityConsistent,
+		Examples:    []vgi.CatalogExample{{SQL: "SELECT * FROM blob_param_batches('abc', 3)", Description: "3 rows, i = 0..2"}},
+	}
+}
+
+func (*BlobParamBatchesFunction) ArgumentSpecs() []vgi.ArgSpec {
+	zero := 0.0
+	return []vgi.ArgSpec{
+		{Name: "payload", Position: 0, ArrowType: "varchar", IsConst: true, ArrowDataType: arrow.BinaryTypes.String, Doc: "Parameter to measure"},
+		{Name: "batches", Position: 1, ArrowType: "int64", IsConst: true, ArrowDataType: arrow.PrimitiveTypes.Int64, Doc: "Number of one-row batches", Ge: &zero},
+	}
+}
+
+func (*BlobParamBatchesFunction) OnBind(*vgi.BindParams) (*vgi.BindResponse, error) {
+	return vgi.BindSchema(paramBatchesSchema)
+}
+
+// Cardinality is exactly batches rows.
+func (*BlobParamBatchesFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
+	n, err := int64Arg(params, 1, "batches", 0)
+	if err != nil {
+		return nil, err
+	}
+	return &vgi.TableCardinality{Estimate: n, Max: n}, nil
+}
+
+func (*BlobParamBatchesFunction) NewState(*vgi.ProcessParams) (*paramBatchesState, error) {
+	return &paramBatchesState{}, nil
+}
+
+// Process emits one one-row batch per tick.
+func (*BlobParamBatchesFunction) Process(_ context.Context, params *vgi.ProcessParams, state *paramBatchesState, out *vgirpc.OutputCollector) error {
+	n, err := params.Args.GetScalarInt64(1)
+	if err != nil {
+		return err
+	}
+	if state.Next >= n {
+		return out.Finish()
+	}
+	payload, err := params.Args.GetScalarString(0)
+	if err != nil {
+		return err
+	}
+	if err := emitDigestRow(out, params.OutputSchema, state.Next, payload); err != nil {
+		return err
+	}
+	state.Next++
+	return nil
+}
+
+var paramStreamsSchema = arrow.NewSchema(append([]arrow.Field{
+	{Name: "stream", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, checksumFields...), nil)
+
+// BlobParamStreamsFunction is blob_param_streams(payload, streams): one bind
+// planned as streams splits, each emitting (stream index, strlen(payload),
+// sha256(payload)). Every split's init embeds the same bind call, so with an
+// argument reference the worker process fetches the argument once.
+type BlobParamStreamsFunction struct{}
+
+type paramStreamsState struct {
+	Streams []int64
+	Next    int
+}
+
+var _ vgi.TypedTableFunc[paramStreamsState] = (*BlobParamStreamsFunction)(nil)
+
+func (*BlobParamStreamsFunction) Name() string { return "blob_param_streams" }
+
+func (*BlobParamStreamsFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description:    "Length and SHA-256 of a parameter from parallel streams (argument references)",
+		Stability:      vgi.StabilityConsistent,
+		SupportsSplits: true,
+		Examples:       []vgi.CatalogExample{{SQL: "SELECT * FROM blob_param_streams('abc', 4)", Description: "4 rows, stream = 0..3"}},
+	}
+}
+
+func (*BlobParamStreamsFunction) ArgumentSpecs() []vgi.ArgSpec {
+	one := 1.0
+	return []vgi.ArgSpec{
+		{Name: "payload", Position: 0, ArrowType: "varchar", IsConst: true, ArrowDataType: arrow.BinaryTypes.String, Doc: "Parameter to measure"},
+		{Name: "streams", Position: 1, ArrowType: "int64", IsConst: true, ArrowDataType: arrow.PrimitiveTypes.Int64, Doc: "Number of parallel streams (one split each)", Ge: &one},
+	}
+}
+
+func (*BlobParamStreamsFunction) OnBind(*vgi.BindParams) (*vgi.BindResponse, error) {
+	return vgi.BindSchema(paramStreamsSchema)
+}
+
+// Cardinality is one row per stream.
+func (*BlobParamStreamsFunction) Cardinality(params *vgi.BindParams) (*vgi.TableCardinality, error) {
+	n, err := int64Arg(params, 1, "streams", 1)
+	if err != nil {
+		return nil, err
+	}
+	return &vgi.TableCardinality{Estimate: n, Max: n}, nil
+}
+
+// Plan is one split per stream; the payload is the stream index.
+func (*BlobParamStreamsFunction) Plan(params *vgi.BindParams, _ vgi.PlanRequestWire) (*vgi.PlanResult, error) {
+	n, err := int64Arg(params, 1, "streams", 1)
+	if err != nil {
+		return nil, err
+	}
+	splits := make([]vgi.ScanSplit, n)
+	one := int64(1)
+	for i := range splits {
+		splits[i] = vgi.ScanSplit{Payload: binary.LittleEndian.AppendUint64(nil, uint64(i)), EstimatedRows: &one, RowsExact: true}
+	}
+	return &vgi.PlanResult{Splits: splits, EstimatedTotalSplits: &n, EstimatedTotalRows: &n}, nil
+}
+
+// Redeem declares the capability; the payloads are read in NewState.
+func (*BlobParamStreamsFunction) Redeem(*vgi.InitParams) error { return nil }
+
+// NewState claims the stream indices of this reader's splits.
+func (*BlobParamStreamsFunction) NewState(params *vgi.ProcessParams) (*paramStreamsState, error) {
+	if params.SplitPayloads == nil {
+		return nil, errors.New("blob_param_streams is split-only; vgi_split_scans is probably off")
+	}
+	state := &paramStreamsState{}
+	for _, p := range params.SplitPayloads {
+		if len(p) != 8 {
+			return nil, fmt.Errorf("blob_param_streams: bad split payload (%d bytes)", len(p))
+		}
+		state.Streams = append(state.Streams, int64(binary.LittleEndian.Uint64(p)))
+	}
+	return state, nil
+}
+
+// Process emits one row per claimed stream, then finishes.
+func (*BlobParamStreamsFunction) Process(_ context.Context, params *vgi.ProcessParams, state *paramStreamsState, out *vgirpc.OutputCollector) error {
+	if state.Next >= len(state.Streams) {
+		return out.Finish()
+	}
+	payload, err := params.Args.GetScalarString(0)
+	if err != nil {
+		return err
+	}
+	if err := emitDigestRow(out, params.OutputSchema, state.Streams[state.Next], payload); err != nil {
+		return err
+	}
+	state.Next++
+	return nil
+}
+
+// BlobParamScalarFunction is blob_param_scalar(i, payload): sha256(payload)
+// for every row whose i is not NULL. payload is a constant parameter, so it
+// rides the scalar's bind (and with it an argument reference), not its input.
+type BlobParamScalarFunction struct{}
+
+func (*BlobParamScalarFunction) Name() string { return "blob_param_scalar" }
+
+func (*BlobParamScalarFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description: "SHA-256 of a constant parameter for every row (argument references for scalars)",
+		Stability:   vgi.StabilityConsistent,
+		ReturnType:  arrow.BinaryTypes.String,
+		Examples:    []vgi.CatalogExample{{SQL: "SELECT blob_param_scalar(1, 'abc')", Description: "sha256('abc')"}},
+	}
+}
+
+func (*BlobParamScalarFunction) ArgumentSpecs() []vgi.ArgSpec {
+	return []vgi.ArgSpec{
+		{Name: "i", Position: 0, ArrowType: "int64", Doc: "Row value; NULL gives NULL"},
+		{Name: "payload", Position: 1, ArrowType: "varchar", IsConst: true, ArrowDataType: arrow.BinaryTypes.String, Doc: "Constant parameter to hash"},
+	}
+}
+
+func (*BlobParamScalarFunction) OnBind(*vgi.BindParams) (*vgi.BindResponse, error) {
+	return vgi.BindResult(arrow.BinaryTypes.String)
+}
+
+// Process returns sha256(payload) for each non-NULL i.
+func (*BlobParamScalarFunction) Process(_ context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+	payload, err := params.Args.GetScalarString(1)
+	if err != nil {
+		return nil, err
+	}
+	_, digest := paramDigest(payload)
+	col := batch.Column(0)
+	b := array.NewStringBuilder(memory.DefaultAllocator)
+	defer b.Release()
+	for r := 0; r < int(batch.NumRows()); r++ {
+		if col.IsNull(r) {
+			b.AppendNull()
+		} else {
+			b.Append(digest)
+		}
+	}
+	out := b.NewArray()
+	defer out.Release()
+	return array.NewRecordBatch(params.OutputSchema, []arrow.Array{out}, batch.NumRows()), nil
+}
+
+// BlobParamTableArgument is the fixed argument blob_param_table binds:
+// repeat('t', 65536).
+var BlobParamTableArgument = strings.Repeat("t", 65536)
+
+// blobParamTableScan backs blob_param_table: blob_param_echo with a fixed
+// argument. It reports STABLE_WITHIN_QUERY and is never inline-bound, so every
+// scan binds over RPC and a serialized-plan rebind must reproduce the same
+// bind bytes (the extension's per-query argument-reference memo).
+type blobParamTableScan struct{ BlobParamEchoFunction }
+
+func (*blobParamTableScan) Name() string { return "blob_param_table_scan" }
+
+func (*blobParamTableScan) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description: "Length and SHA-256 of blob_param_table's fixed parameter (STABLE_WITHIN_QUERY)",
+		Stability:   vgi.StabilityConsistent,
+	}
+}
+
+func (*blobParamTableScan) OnBind(*vgi.BindParams) (*vgi.BindResponse, error) {
+	return &vgi.BindResponse{OutputSchema: paramEchoSchema, Repeatability: vgi.BindRepeatabilityStableWithinQuery}, nil
 }
