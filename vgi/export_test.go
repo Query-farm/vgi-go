@@ -3,6 +3,7 @@
 package vgi
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
@@ -15,6 +16,16 @@ import (
 // NewHttpServerForTest returns the handler RunHttp serves.
 func (w *Worker) NewHttpServerForTest() (*vgirpc.HttpServer, error) {
 	return w.newHttpServer()
+}
+
+// HttpHandlerForTest returns exactly what RunHttp serves: the server plus the
+// argument-reference capability header.
+func (w *Worker) HttpHandlerForTest() (http.Handler, error) {
+	hs, err := w.newHttpServer()
+	if err != nil {
+		return nil, err
+	}
+	return w.httpHandler(hs), nil
 }
 
 // ServeTcpForTest serves w over raw TCP on a loopback port with the server

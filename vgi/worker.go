@@ -415,7 +415,10 @@ type Worker struct {
 	logLoggers           []string     // empty means all known loggers
 	logConfigured        bool         // true once any logging WorkerOption fires
 	httpSigningKey       []byte       // HMAC key for HTTP state tokens (explicit via WithHttpSigningKey, else ephemeral per-process)
-	irohBridge           *IrohBridgeOptions
+	// argumentsRefBytes is the VGI-Arguments-Ref-Bytes value the HTTP server
+	// advertises (0: none); decided by newHttpServer.
+	argumentsRefBytes int64
+	irohBridge        *IrohBridgeOptions
 	// sealOpaqueData gates AEAD sealing of catalog opaque-data envelopes. It is
 	// set when the worker serves HTTP -- the transport that authenticates
 	// callers -- with the resolved signing key, configured or generated at
@@ -1955,7 +1958,7 @@ func (w *Worker) RunHttp(addr string) error {
 	fmt.Printf("PORT:%d\n", port)
 	_ = os.Stdout.Sync()
 
-	srv := &http.Server{Handler: hs}
+	srv := &http.Server{Handler: w.httpHandler(hs)}
 
 	// Handle SIGTERM/SIGINT for clean shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -1970,6 +1973,16 @@ func (w *Worker) RunHttp(addr string) error {
 		return nil
 	}
 	return err
+}
+
+// TokenTTL is the maximum stream duration over HTTP (protocol 3.4): cursor
+// and call tokens and stored StateRef tags expire after 6 h.
+const TokenTTL = 6 * time.Hour
+
+// httpHandler is what RunHttp serves: hs plus the VGI-Arguments-Ref-Bytes
+// capability header when newHttpServer decided to advertise it.
+func (w *Worker) httpHandler(hs *vgirpc.HttpServer) http.Handler {
+	return withArgumentsRefHeader(hs, w.argumentsRefBytes)
 }
 
 // newHttpServer builds the handler RunHttp serves -- everything short of the
@@ -2057,10 +2070,25 @@ func (w *Worker) newHttpServer() (*vgirpc.HttpServer, error) {
 	// get upload URLs for requests over VGI_RPC_MAX_REQUEST_BYTES (advertised
 	// and enforced whenever set), and VGI_RPC_MAX_UPLOAD_BYTES is advertised.
 	// Applied after SetPrefix: vending upload URLs adds a route.
-	if config, err := vgirpc.ConfigureHTTPServerFromEnv(hs, nil); err != nil {
+	config, err := vgirpc.ConfigureHTTPServerFromEnv(hs, nil)
+	if err != nil {
 		return nil, fmt.Errorf("blob vendor: %w", err)
 	} else if config != nil {
 		fmt.Fprintf(os.Stderr, "Blob vendor enabled: threshold=%d bytes\n", config.ExternalizeThresholdBytes)
+	}
+	// Protocol 3.4 argument references: advertise VGI-Arguments-Ref-Bytes
+	// whenever this server vends upload URLs from an ObjectStore.
+	if w.argumentsRefBytes, err = argumentsRefAdvertised(config, nil); err != nil {
+		return nil, err
+	}
+	// Protocol 3.4: a stream lives at most 6 h (cursor and call tokens and
+	// stored StateRef tags; vgi-rpc-go's own default was 5 min, which also
+	// capped every stream that missed the call cache), and VGI keeps its
+	// unchanging stream state in a StateRef, so an over-budget cursor is
+	// refused (cursor_too_large) rather than only warned about.
+	hs.SetTokenTTL(TokenTTL)
+	if err := hs.SetCursorRule(vgirpc.CursorRuleError); err != nil {
+		return nil, err
 	}
 	if passAuth != nil {
 		// Hosted mode: Passes only, on every request but HEAD /health and

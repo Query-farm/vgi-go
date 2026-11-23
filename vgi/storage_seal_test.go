@@ -230,10 +230,11 @@ func newSecretBufferRun(t *testing.T) *secretBufferRun {
 	secrets := secretsBatch(t)
 	phase := string(PhaseTableBuffering)
 	sink, err := w.handleInit(ctx, shapeTestCallCtx(), InitRequestWire{
-		BindCall: BindRequestWire{
+		BindCall: testNested(t, BindRequestWire{
+			Arguments:    testNoArgs(t),
 			FunctionName: "secret_buffer", FunctionType: string(FunctionTypeTable),
 			InputSchema: &inputSchema, AttachOpaqueData: attach, Secrets: &secrets,
-		},
+		}),
 		OutputSchema: outSchema, Phase: &phase,
 	})
 	if err != nil {

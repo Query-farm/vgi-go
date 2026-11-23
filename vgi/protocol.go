@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -17,154 +18,6 @@ import (
 // ---------------------------------------------------------------------------
 // Wire types for RPC serialization (used with vgirpc struct tags)
 // ---------------------------------------------------------------------------
-
-// BindRequestWire is the wire format for bind requests. It is deserialized
-// two ways: as the top-level params of the bind RPC (via the vgirpc tags) and
-// as the nested bind_call struct of init/cardinality/statistics/
-// dynamic_to_string (via the arrow tags, which the framework reads for struct
-// children).
-type BindRequestWire struct {
-	FunctionName            string  `vgirpc:"function_name" arrow:"function_name"`
-	Arguments               []byte  `vgirpc:"arguments" arrow:"arguments"`
-	FunctionType            string  `vgirpc:"function_type,enum" arrow:"function_type,enum"`
-	InputSchema             *[]byte `vgirpc:"input_schema" arrow:"input_schema"`
-	Settings                *[]byte `vgirpc:"settings" arrow:"settings"`
-	Secrets                 *[]byte `vgirpc:"secrets" arrow:"secrets"`
-	AttachOpaqueData        *[]byte `vgirpc:"attach_opaque_data" arrow:"attach_opaque_data"`
-	TransactionOpaqueData   *[]byte `vgirpc:"transaction_opaque_data" arrow:"transaction_opaque_data"`
-	ResolvedSecretsProvided bool    `vgirpc:"resolved_secrets_provided" arrow:"resolved_secrets_provided"`
-	// AtUnit/AtValue carry the AT (TIMESTAMP|VERSION ...) time-travel clause for
-	// this scan, threaded onto the bind request embedded in each InitRequest so
-	// function-backed tables can read it at init (the on_bind RPC itself runs
-	// once at attach with no AT). Both nil when the scan has no AT clause.
-	AtUnit  *string `vgirpc:"at_unit" arrow:"at_unit"`
-	AtValue *string `vgirpc:"at_value" arrow:"at_value"`
-
-	// CopyFrom carries the COPY ... FROM context (None unless this bind/init
-	// opens a COPY-FROM scan). Mirrors Python's BindRequest.copy_from. The C++
-	// extension ships it as a nested struct<format, file_path, expected_schema>
-	// column. It is ALWAYS present (null on a non-COPY bind): a worker that
-	// validates its declared parameter contract compares field order, name, type
-	// and nullability, so an omitted column is a contract violation rather than
-	// an absent value. The `struct` tag option is what derives the INLINE struct
-	// column the protocol declares; without it the field derives as `binary`
-	// (ArrowSerializable) and every bind from the C++ client is rejected.
-	// Nil here means the cell was Arrow-null, i.e. this is not a COPY bind.
-	CopyFrom *CopyFromContextWire `vgirpc:"copy_from,struct" arrow:"copy_from"`
-
-	// CopyTo carries the COPY ... TO context (None unless this bind/init opens a
-	// COPY-TO sink). Mirrors Python's BindRequest.copy_to. The C++ extension
-	// ships it as a nested struct<format, file_path> column, always present and
-	// null on a non-COPY bind (see CopyFrom above).
-	// The source columns ride the existing InputSchema, so they are not
-	// duplicated here. Read at bind/init via CopyToContextWire.
-	CopyTo *CopyToContextWire `vgirpc:"copy_to,struct" arrow:"copy_to"`
-
-	// SchemaPath is the catalog schema that owns the function being bound. A
-	// worker may register the same function name in more than one schema, so
-	// the bare name is not a unique key — dispatch resolves
-	// (schema_path, function_name). The C++ extension sets it from the schema
-	// entry the function was registered into; it is nil for callers with no
-	// schema to name (COPY handler binds, which are advertised at catalog
-	// level), where lookup falls back to a cross-schema search by name.
-	SchemaPath *[]string `vgirpc:"schema_path" arrow:"schema_path"`
-
-	// ArgumentNames is aligned with the complete logical argument order. Fixed
-	// parameters carry their declared names, unnamed varargs carry nil, and
-	// named varargs retain the caller-provided name. Nil means unavailable.
-	ArgumentNames *[]*string `vgirpc:"argument_names" arrow:"argument_names"`
-}
-
-// CopyFromContextWire is the wire form of a COPY ... FROM context, carried as a
-// nested struct on the bind request. Mirrors Python's CopyFromContext dataclass:
-// format (utf8), file_path (utf8), expected_schema (binary IPC schema bytes).
-type CopyFromContextWire struct {
-	Format         string `vgirpc:"format" arrow:"format"`
-	FilePath       string `vgirpc:"file_path" arrow:"file_path"`
-	ExpectedSchema []byte `vgirpc:"expected_schema" arrow:"expected_schema"`
-}
-
-// copyFromContextWireType is the Arrow struct type for the copy_from field; its
-// child field names/types must match the arrow tags on CopyFromContextWire and
-// the C++ extension's encoder (vgi_rpc_types.cpp).
-var copyFromContextWireType = arrow.StructOf(
-	arrow.Field{Name: "format", Type: arrow.BinaryTypes.String},
-	arrow.Field{Name: "file_path", Type: arrow.BinaryTypes.String},
-	arrow.Field{Name: "expected_schema", Type: arrow.BinaryTypes.Binary},
-)
-
-// copyFromContextWireSchema describes the children of the copy_from struct.
-var copyFromContextWireSchema = arrow.NewSchema(copyFromContextWireType.Fields(), nil)
-
-// ArrowSchema keeps CopyFromContextWire an ArrowSerializable. It no longer
-// decides the copy_from COLUMN type — the `vgirpc:"copy_from,struct"` tag does
-// that, deriving struct<format, file_path, expected_schema> from the vgirpc
-// tags above (ArrowSerializable alone would derive `binary`, which is what
-// made every C++ bind fail the parameter-contract check). What it still buys
-// is tolerance on the UNVALIDATED nested bind_call path: a peer that ships
-// copy_from as binary IPC bytes rather than an inline struct still decodes.
-func (CopyFromContextWire) ArrowSchema() *arrow.Schema {
-	return copyFromContextWireSchema
-}
-
-// CopyToContextWire is the wire form of a COPY ... TO context, carried as a
-// nested struct on the bind request. Mirrors Python's CopyToContext dataclass:
-// format (utf8), file_path (utf8). The source columns ride InputSchema, so they
-// are not carried here.
-type CopyToContextWire struct {
-	Format   string `vgirpc:"format" arrow:"format"`
-	FilePath string `vgirpc:"file_path" arrow:"file_path"`
-}
-
-// copyToContextWireType is the Arrow struct type for the copy_to field; its
-// child field names/types must match the arrow tags on CopyToContextWire and
-// the C++ extension's encoder (vgi_rpc_types.cpp).
-var copyToContextWireType = arrow.StructOf(
-	arrow.Field{Name: "format", Type: arrow.BinaryTypes.String},
-	arrow.Field{Name: "file_path", Type: arrow.BinaryTypes.String},
-)
-
-// copyToContextWireSchema describes the children of the copy_to struct.
-var copyToContextWireSchema = arrow.NewSchema(copyToContextWireType.Fields(), nil)
-
-// ArrowSchema keeps CopyToContextWire an ArrowSerializable; see the note on
-// CopyFromContextWire.ArrowSchema for why the `struct` tag, not this method,
-// is what makes copy_to an inline struct column.
-func (CopyToContextWire) ArrowSchema() *arrow.Schema {
-	return copyToContextWireSchema
-}
-
-// bindRequestWireSchema is the Arrow struct schema for a bind_call. Field
-// names/types must match the arrow tags above.
-var bindRequestWireSchema = arrow.NewSchema([]arrow.Field{
-	{Name: "function_name", Type: arrow.BinaryTypes.String},
-	{Name: "arguments", Type: arrow.BinaryTypes.Binary},
-	{Name: "function_type", Type: &arrow.DictionaryType{IndexType: arrow.PrimitiveTypes.Int16, ValueType: arrow.BinaryTypes.String}},
-	{Name: "input_schema", Type: arrow.BinaryTypes.Binary, Nullable: true},
-	{Name: "settings", Type: arrow.BinaryTypes.Binary, Nullable: true},
-	{Name: "secrets", Type: arrow.BinaryTypes.Binary, Nullable: true},
-	{Name: "attach_opaque_data", Type: arrow.BinaryTypes.Binary, Nullable: true},
-	{Name: "transaction_opaque_data", Type: arrow.BinaryTypes.Binary, Nullable: true},
-	{Name: "resolved_secrets_provided", Type: &arrow.BooleanType{}},
-	{Name: "at_unit", Type: arrow.BinaryTypes.String, Nullable: true},
-	{Name: "at_value", Type: arrow.BinaryTypes.String, Nullable: true},
-	// Protocol order: copy_from, copy_to, then schema_path last. Readers match
-	// bind_call children by name, so order is not load-bearing here — but this
-	// schema is the shape a Go CLIENT emits, and it should agree with the
-	// struct-tag derivation above rather than drift from it.
-	{Name: "copy_from", Type: copyFromContextWireType, Nullable: true},
-	{Name: "copy_to", Type: copyToContextWireType, Nullable: true},
-	{Name: "schema_path", Type: arrow.ListOf(arrow.BinaryTypes.String), Nullable: true},
-	{Name: "argument_names", Type: arrow.ListOf(arrow.BinaryTypes.String), Nullable: true},
-}, nil)
-
-// ArrowSchema makes BindRequestWire an ArrowSerializable. The framework then
-// encodes a nested bind_call as binary IPC at the parameter level (how the C++
-// extension sends it) while still accepting an inline struct column (how the
-// Python client sends it) — see vgi-rpc's setFieldFromArrow.
-func (BindRequestWire) ArrowSchema() *arrow.Schema {
-	return bindRequestWireSchema
-}
 
 // BindResponseWire is the wire format for bind responses.
 type BindResponseWire struct {
@@ -177,59 +30,6 @@ type BindResponseWire struct {
 	Repeatability                string   `vgirpc:"repeatability,enum"`
 }
 
-// InitRequestWire is the wire format for init requests.
-type InitRequestWire struct {
-	// Field ORDER matches generated.InitRequestSchema (asserted by
-	// TestWireRecordSchemasMatchGenerated). Deserialization is by name, so order
-	// is not load-bearing for any peer we ship — but keeping it identical makes
-	// the derived schema byte-comparable with the other SDKs, which is how a
-	// drifted declaration gets caught at all.
-	BindCall       BindRequestWire `vgirpc:"bind_call"`
-	OutputSchema   []byte          `vgirpc:"output_schema"`
-	BindOpaqueData *[]byte         `vgirpc:"bind_opaque_data"`
-
-	// ProjectionIDs are int64 on the wire, not int32. Declaring []int32 here
-	// derived list<int32>, so a worker validating its parameter contract would
-	// reject every projected scan the C++ client sends.
-	ProjectionIDs *[]int64 `vgirpc:"projection_ids"`
-
-	// PushdownFilters / JoinKeys / SplitTokens are LARGE binary: a serialized
-	// filter tree, a set of join keys, or a batch of split tokens can exceed the
-	// 2 GiB that 32-bit offsets address. `elem=` is what carries the override to
-	// a list's ITEM — a bare option would describe the field, which is a list.
-	PushdownFilters *[]byte   `vgirpc:"pushdown_filters,large_binary"`
-	JoinKeys        *[][]byte `vgirpc:"join_keys,elem=large_binary"`
-
-	// SplitTokens carries the framework-stamped envelopes this init redeems.
-	// A LIST because DataFusion's partition_count() is its concurrency, so it
-	// bin-packs at planning time and must read a whole group per partition;
-	// DuckDB always sends exactly one. A worker handed several concatenates
-	// them into one stream in the order given.
-	SplitTokens *[][]byte `vgirpc:"split_tokens,elem=large_binary"`
-	RowLimit    *int64    `vgirpc:"row_limit"`
-
-	Phase           *string `vgirpc:"phase,enum"`
-	FinalizeStateID *[]byte `vgirpc:"finalize_state_id"`
-	ExecutionID     *[]byte `vgirpc:"execution_id"`
-	InitOpaqueData  *[]byte `vgirpc:"init_opaque_data"`
-
-	// SubstreamID is the stable, CLIENT-minted per-substream id for parallel
-	// streaming table-in-out functions. The extension threads it on every init
-	// of one substream (INPUT + FINALIZE), so a worker can key that substream's
-	// accumulated state even when an HTTP load balancer spreads the substream's
-	// requests across backends (unlike the worker-minted execution_id). Nil when
-	// the client did not supply one (serial path, non-table-in-out functions,
-	// old clients). Mirrors vgi-python's InitRequest.substream_id.
-	SubstreamID *[]byte `vgirpc:"substream_id"`
-
-	OrderByColumnName     *string  `vgirpc:"order_by_column_name"`
-	OrderByDirection      *string  `vgirpc:"order_by_direction,enum"`
-	OrderByNullOrder      *string  `vgirpc:"order_by_null_order,enum"`
-	OrderByLimit          *int64   `vgirpc:"order_by_limit"`
-	TablesamplePercentage *float64 `vgirpc:"tablesample_percentage"`
-	TablesampleSeed       *int64   `vgirpc:"tablesample_seed"`
-}
-
 // GlobalInitResponseWire is the wire format for global init responses.
 type GlobalInitResponseWire struct {
 	// Field ORDER matches generated.GlobalInitResponseSchema — see
@@ -240,10 +40,14 @@ type GlobalInitResponseWire struct {
 	MaxWorkers  int64   `vgirpc:"max_workers"`
 }
 
-// CardinalityRequestWire is the wire format for cardinality requests.
+// CardinalityRequestWire is a decoded cardinality / statistics request: the
+// generated TableFunctionCardinalityRequestWire / TableFunctionStatistics-
+// RequestWire with bind_call decoded (and the received bytes kept in
+// BindCallIPC).
 type CardinalityRequestWire struct {
-	BindCall       BindRequestWire `vgirpc:"bind_call"`
-	BindOpaqueData *[]byte         `vgirpc:"bind_opaque_data"`
+	BindCall       BindRequestWire
+	BindCallIPC    []byte
+	BindOpaqueData *[]byte
 }
 
 // ---------------------------------------------------------------------------
@@ -252,9 +56,15 @@ type CardinalityRequestWire struct {
 
 // ScalarExchangeState implements ExchangeState for scalar functions.
 type ScalarExchangeState struct {
-	Recipe InitRecipe     // exported, serialized
-	fn     ScalarFunction // transient
-	params *ProcessParams // transient
+	// Init is the stream's init recipe as a vgi-rpc StateRef: the one
+	// serialized field (see ScalarExchangeState.GobEncode).
+	Init vgirpc.StateRef
+	// Recipe is Init's value: set at init, and resolved from Init at the
+	// entry of the first turn after an HTTP rehydration. Never serialized.
+	Recipe  InitRecipe
+	fn      ScalarFunction // transient
+	params  *ProcessParams // transient
+	pending *Worker        // transient: set by rehydrate until the turn's entry rebuilds
 
 	// cacheMetaResolved memoizes the result-cache annotation for this stream.
 	// Metadata()/CacheControl.Metadata() are invariant across batches, so we
@@ -267,6 +77,9 @@ type ScalarExchangeState struct {
 // Exchange processes one input batch through the scalar function and emits the
 // resulting batch to the output collector.
 func (s *ScalarExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
+	if err := s.resume(callCtx); err != nil {
+		return err
+	}
 	s.params.Auth = callCtx.Auth
 	result, err := s.fn.Process(ctx, s.params, input)
 	if err != nil {
@@ -296,9 +109,10 @@ func (s *ScalarExchangeState) Exchange(ctx context.Context, input arrow.RecordBa
 
 // TableProducerState implements ProducerState for table functions.
 type TableProducerState struct {
-	Recipe         InitRecipe // exported, serialized
-	UserStateBytes []byte     // exported, gob-serialized user state
-	AutoProjectIDs []int32    // exported
+	Init           vgirpc.StateRef // serialized: the init recipe (see ScalarExchangeState.Init)
+	Recipe         InitRecipe      // Init's value; never serialized
+	UserStateBytes []byte          // exported, gob-serialized user state
+	AutoProjectIDs []int32         // exported
 	// FilterDeltaIPC is the stream's compacted dynamic-filter delta history
 	// and FilterPredicateOrder the live predicate order it rebuilds; both are
 	// replayed after HTTP rehydration (see filter_delta_history.go).
@@ -308,6 +122,7 @@ type TableProducerState struct {
 	params               *ProcessParams   // transient
 	state                interface{}      // transient (reconstructed from UserStateBytes)
 	autoApply            *PushdownFilters // transient
+	pending              *Worker          // transient: set by rehydrate until the turn's entry rebuilds
 }
 
 // filterHistory is the stream's dynamic-filter bookkeeping.
@@ -319,6 +134,9 @@ func (s *TableProducerState) filterHistory() streamFilterHistory {
 // update carried on the tick's metadata and emitting produced batches to the
 // output collector.
 func (s *TableProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
+	if err := s.resume(callCtx); err != nil {
+		return err
+	}
 	s.params.Auth = callCtx.Auth
 	// Apply any dynamic filter update carried on this tick's custom metadata.
 	// DuckDB's dynamic-filter pushdown ships a delta document once per change
@@ -442,8 +260,9 @@ func projectBatch(batch arrow.RecordBatch, ids []int32) arrow.RecordBatch {
 
 // TableInOutExchangeState implements ExchangeState for table-in-out INPUT phase.
 type TableInOutExchangeState struct {
-	Recipe         InitRecipe // exported, serialized
-	UserStateBytes []byte     // exported, gob-serialized user state
+	Init           vgirpc.StateRef // serialized: the init recipe (see ScalarExchangeState.Init)
+	Recipe         InitRecipe      // Init's value; never serialized
+	UserStateBytes []byte          // exported, gob-serialized user state
 	// FilterDeltaIPC is the stream's compacted dynamic-filter delta history
 	// and FilterPredicateOrder the live predicate order it rebuilds; both are
 	// replayed after HTTP rehydration (see filter_delta_history.go).
@@ -457,6 +276,7 @@ type TableInOutExchangeState struct {
 	params      *ProcessParams     // transient
 	state       interface{}        // transient
 	autoApply   *PushdownFilters   // transient
+	pending     *Worker            // transient: set by rehydrate until the turn's entry rebuilds
 }
 
 // filterHistory is the stream's dynamic-filter bookkeeping.
@@ -467,6 +287,9 @@ func (s *TableInOutExchangeState) filterHistory() streamFilterHistory {
 // Exchange transforms one input batch through the table-in-out function and emits
 // the resulting batches to the output collector.
 func (s *TableInOutExchangeState) Exchange(ctx context.Context, input arrow.RecordBatch, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
+	if err := s.resume(callCtx); err != nil {
+		return err
+	}
 	s.params.Auth = callCtx.Auth
 	applied, err := s.filterHistory().applyTick(s.params, callCtx.InputMetadata)
 	if err != nil {
@@ -617,7 +440,9 @@ func selectColumnsByName(src arrow.RecordBatch, schema *arrow.Schema) (arrow.Rec
 // stream transports never serialize a token, so they never offload and keep
 // the in-memory drain unchanged.
 type FinalizeProducerState struct {
-	Recipe   InitRecipe          // exported, serialized
+	Init     vgirpc.StateRef     // serialized: the init recipe (see ScalarExchangeState.Init)
+	Recipe   InitRecipe          // Init's value; never serialized
+	pending  *Worker             // transient: set by rehydrate until the turn's entry rebuilds
 	BatchIPC [][]byte            // exported, remaining flush IPC bytes (pre-offload only)
 	BatchIdx int                 // exported, current emission position within BatchIPC
 	batches  []arrow.RecordBatch // transient (deserialized from BatchIPC)
@@ -650,6 +475,9 @@ type FinalizeProducerState struct {
 // Produce emits the next buffered finalize batch to the output collector, finishing
 // the stream once all batches have been emitted.
 func (s *FinalizeProducerState) Produce(ctx context.Context, out *vgirpc.OutputCollector, callCtx *vgirpc.CallContext) error {
+	if err := s.resume(callCtx); err != nil {
+		return err
+	}
 	if len(s.LogKey) > 0 {
 		return s.produceFromLog(out)
 	}
@@ -898,7 +726,8 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 	LogRPC.Debug("bind: received request",
 		"function", req.FunctionName,
 		"type", req.FunctionType,
-		"args_len", len(req.Arguments),
+		"args_inline", req.Arguments != nil,
+		"args_location", req.ArgumentsLocation != nil,
 		"has_input_schema", req.InputSchema != nil,
 	)
 	bindParams, err := w.parseBindRequest(req, callCtx)
@@ -1021,15 +850,27 @@ func (w *Worker) handleBind(ctx context.Context, callCtx *vgirpc.CallContext, re
 
 // handleInit processes an init RPC request and returns a StreamResult.
 func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, req InitRequestWire) (result *vgirpc.StreamResult, err error) {
-	defer RecoverPanic("init", req.BindCall.FunctionName, &err)
+	defer RecoverPanic("init", "", &err)
+	// bind_call arrives as a nested Arrow IPC record, held as received and
+	// decoded here, on access.
+	bindCall, err := bindCallValue(generated.InitRequest(req).BindCallValue)
+	if err != nil {
+		return nil, err
+	}
+	bindReq := &bindCall
 	LogRPC.Debug("init: received request",
-		"function", req.BindCall.FunctionName,
+		"function", bindReq.FunctionName,
 		"output_schema_len", len(req.OutputSchema),
 		"phase", req.Phase,
 		"exec_id_present", req.ExecutionID != nil,
 	)
-	// bind_call arrives as a nested struct on the wire.
-	bindReq := &req.BindCall
+	defer func() {
+		// The stream carries its (never-changing) init recipe as one StateRef,
+		// created here -- the only place vgi-rpc allows it.
+		if err == nil && result != nil {
+			err = attachInitRef(callCtx, result.State)
+		}
+	}()
 	LogRPC.Debug("init: parsed bind call", "function", bindReq.FunctionName, "type", bindReq.FunctionType)
 
 	// Parse output schema
@@ -1210,7 +1051,7 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 
 	// Build InitRecipe for HTTP state serialization
 	recipe := InitRecipe{
-		BindCall:        req.BindCall,
+		BindCallIPC:     req.BindCall.Bytes(),
 		OutputSchemaIPC: req.OutputSchema,
 		FunctionName:    bindReq.FunctionName,
 		FunctionType:    normalizeFunctionType(FunctionType(bindReq.FunctionType)),
@@ -1785,11 +1626,21 @@ func (w *Worker) handlePlan(ctx context.Context, callCtx *vgirpc.CallContext, re
 // Helper methods
 // ---------------------------------------------------------------------------
 
-// parseBindRequest converts a wire bind request into BindParams.
+// parseBindRequest converts a wire bind request into BindParams, resolving
+// externalized arguments and opening sealed values with callCtx.
 func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallContext) (*BindParams, error) {
-	args, err := ParseArguments(req.Arguments)
+	return w.parseBindRequestWith(req, callCtx, callCtx)
+}
+
+// parseBindRequestWith is parseBindRequest with the two uses of the call
+// context split: openCtx opens the sealed attach and transaction values (nil
+// on a rebuilt turn, which restores them from the init recipe instead), and
+// argCtx resolves an arguments_location (the turn's own context, wherever one
+// exists).
+func (w *Worker) parseBindRequestWith(req BindRequestWire, callCtx, argCtx *vgirpc.CallContext) (*BindParams, error) {
+	args, err := parseBindArguments(&req, argCtx)
 	if err != nil {
-		return nil, fmt.Errorf("parsing arguments: %w", err)
+		return nil, err
 	}
 
 	params := &BindParams{
@@ -1801,7 +1652,7 @@ func (w *Worker) parseBindRequest(req BindRequestWire, callCtx *vgirpc.CallConte
 		params.SchemaPath = *req.SchemaPath
 	}
 	if req.ArgumentNames != nil {
-		params.ArgumentNames = append([]*string(nil), (*req.ArgumentNames)...)
+		params.ArgumentNames = argumentNamesOf(*req.ArgumentNames)
 	}
 
 	if req.InputSchema != nil {

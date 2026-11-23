@@ -230,7 +230,7 @@ func TestDecodedFunctionTypeIsCanonical(t *testing.T) {
 		}
 	}
 	w := NewWorker()
-	params, err := w.parseBindRequest(BindRequestWire{FunctionName: "f", FunctionType: "SCALAR", Arguments: mustEmptyArguments(t)}, nil)
+	params, err := w.parseBindRequest(BindRequestWire{FunctionName: "f", FunctionType: "SCALAR", Arguments: testNoArgs(t)}, nil)
 	if err != nil {
 		t.Fatalf("parseBindRequest: %v", err)
 	}
@@ -239,13 +239,8 @@ func TestDecodedFunctionTypeIsCanonical(t *testing.T) {
 	}
 }
 
-func mustEmptyArguments(t *testing.T) []byte {
-	t.Helper()
-	data, err := SerializeRecordBatch(array.NewRecordBatch(arrow.NewSchema(nil, nil), nil, 1))
-	if err != nil {
-		t.Fatalf("serializing empty arguments: %v", err)
-	}
-	return data
+func emptyArgumentsBatch() arrow.RecordBatch {
+	return array.NewRecordBatch(arrow.NewSchema(nil, nil), nil, 1)
 }
 
 // minimalWireRecordCases builds each hand-assembled record from a struct with

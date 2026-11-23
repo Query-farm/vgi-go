@@ -106,6 +106,7 @@ func TestHandleBindRejectsTableInOutWithNoInputSchema(t *testing.T) {
 	w.RegisterTableInOut(shapeTestInOutFunction{})
 
 	req := BindRequestWire{
+		Arguments:    testNoArgs(t),
 		FunctionName: "shape_test_in_out",
 		FunctionType: string(FunctionTypeTable),
 		InputSchema:  nil, // table_function() sends no input stream at all
@@ -132,6 +133,7 @@ func TestHandleBindAcceptsTableInOutWithInputSchema(t *testing.T) {
 
 	schemaBytes := shapeTestInputSchema(t)
 	req := BindRequestWire{
+		Arguments:    testNoArgs(t),
 		FunctionName: "shape_test_in_out",
 		FunctionType: string(FunctionTypeTable),
 		InputSchema:  &schemaBytes,
@@ -147,6 +149,7 @@ func TestHandleBindRejectsPlainTableWithInputSchema(t *testing.T) {
 
 	schemaBytes := shapeTestInputSchema(t)
 	req := BindRequestWire{
+		Arguments:    testNoArgs(t),
 		FunctionName: "shape_test_table",
 		FunctionType: string(FunctionTypeTable),
 		InputSchema:  &schemaBytes, // table_in_out_function(input=...) sends one
@@ -172,6 +175,7 @@ func TestHandleBindAcceptsPlainTableWithNoInputSchema(t *testing.T) {
 	w.RegisterTable(shapeTestTableFunction{})
 
 	req := BindRequestWire{
+		Arguments:    testNoArgs(t),
 		FunctionName: "shape_test_table",
 		FunctionType: string(FunctionTypeTable),
 		InputSchema:  nil,
@@ -200,11 +204,12 @@ func TestHandleInitRejectsTableInOutWithNoPhase(t *testing.T) {
 	}
 
 	req := InitRequestWire{
-		BindCall: BindRequestWire{
+		BindCall: testNested(t, BindRequestWire{
+			Arguments:    testNoArgs(t),
 			FunctionName: "shape_test_in_out",
 			FunctionType: string(FunctionTypeTable),
 			InputSchema:  nil,
-		},
+		}),
 		OutputSchema: outSchema,
 		Phase:        nil, // no INPUT/FINALIZE phase at all
 	}
@@ -235,11 +240,12 @@ func TestHandleInitAcceptsTableInOutWithInputPhase(t *testing.T) {
 	phase := string(PhaseInput)
 
 	req := InitRequestWire{
-		BindCall: BindRequestWire{
+		BindCall: testNested(t, BindRequestWire{
+			Arguments:    testNoArgs(t),
 			FunctionName: "shape_test_in_out",
 			FunctionType: string(FunctionTypeTable),
 			InputSchema:  &schemaBytes,
-		},
+		}),
 		OutputSchema: outSchema,
 		Phase:        &phase,
 	}
@@ -262,11 +268,12 @@ func TestHandleInitRejectsPlainTableWithPhaseSet(t *testing.T) {
 	phase := string(PhaseInput)
 
 	req := InitRequestWire{
-		BindCall: BindRequestWire{
+		BindCall: testNested(t, BindRequestWire{
+			Arguments:    testNoArgs(t),
 			FunctionName: "shape_test_table",
 			FunctionType: string(FunctionTypeTable),
 			InputSchema:  &schemaBytes, // table_in_out_function(input=...) sends one
-		},
+		}),
 		OutputSchema: outSchema,
 		Phase:        &phase, // ...and an init phase
 	}
@@ -295,11 +302,12 @@ func TestHandleInitAcceptsPlainTableWithNoPhase(t *testing.T) {
 	}
 
 	req := InitRequestWire{
-		BindCall: BindRequestWire{
+		BindCall: testNested(t, BindRequestWire{
+			Arguments:    testNoArgs(t),
 			FunctionName: "shape_test_table",
 			FunctionType: string(FunctionTypeTable),
 			InputSchema:  nil,
-		},
+		}),
 		OutputSchema: outSchema,
 		Phase:        nil,
 	}

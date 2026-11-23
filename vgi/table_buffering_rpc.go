@@ -176,7 +176,7 @@ func (w *Worker) loadBufferingParams(r bufferingRequest) (TableBufferingFunction
 	if recipe.FunctionName != r.functionName {
 		return nil, nil, fmt.Errorf("table-buffering: execution belongs to %q, not %q", recipe.FunctionName, r.functionName)
 	}
-	fn, params, err := w.rebuildProcessParamsLive(recipe, live)
+	fn, params, err := w.rebuildProcessParamsLive(recipe, live, r.cc)
 	if err != nil {
 		return nil, nil, err
 	}

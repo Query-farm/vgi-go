@@ -23,19 +23,16 @@ import (
 // it does not promise support for every expression: a callback may decline.
 const ScalarProjectionProfile = scalarExpressionProfile
 
+// projectionDecodedRequest is a projection proposal with its nested records
+// decoded. BindCallLen is the received bind_call's byte length (the 8 MiB
+// proposal budget counts the bind call as sent, which with an externalized
+// argument is its small reference form).
 type projectionDecodedRequest struct {
-	BindCall     BindRequestWire  `vgirpc:"bind_call"`
-	BindResult   BindResponseWire `vgirpc:"bind_result"`
-	Expressions  [][]byte         `vgirpc:"expressions,elem=large_binary"`
-	ResultSchema []byte           `vgirpc:"result_schema"`
-}
-
-// TableFunctionProjectionRequestWire carries a canonical scalar projection proposal.
-type TableFunctionProjectionRequestWire struct {
-	BindCall     []byte   `vgirpc:"bind_call"`
-	BindResult   []byte   `vgirpc:"bind_result"`
-	Expressions  [][]byte `vgirpc:"expressions,elem=large_binary"`
-	ResultSchema []byte   `vgirpc:"result_schema"`
+	BindCall     BindRequestWire
+	BindCallLen  int
+	BindResult   BindResponseWire
+	Expressions  [][]byte
+	ResultSchema []byte
 }
 
 var _ vgirpc.WrappedRequestSizeLimiter = TableFunctionProjectionRequestWire{}
@@ -115,7 +112,7 @@ func handleProjection(w workerService, ctx context.Context, cc *vgirpc.CallConte
 	if len(req.BindResult.LookupSecretTypes)+len(req.BindResult.LookupScopes)+len(req.BindResult.LookupNames) > 0 {
 		return decline, fmt.Errorf("projection cannot request secrets")
 	}
-	total := len(req.ResultSchema) + len(req.BindResult.OutputSchema) + len(req.BindResult.OpaqueData) + len(req.BindCall.Arguments)
+	total := len(req.ResultSchema) + len(req.BindResult.OutputSchema) + len(req.BindResult.OpaqueData) + req.BindCallLen
 	for _, raw := range req.Expressions {
 		total += len(raw)
 	}
@@ -279,63 +276,6 @@ func projectionStrings(col arrow.Array) ([]string, error) {
 	}
 	return result, nil
 }
-func decodeProjectionCall(raw []byte) (BindRequestWire, error) {
-	row, err := readProjectionRecord(raw, bindRequestWireSchema)
-	if err != nil {
-		return BindRequestWire{}, err
-	}
-	defer row.Release()
-	binary := func(name string) *[]byte {
-		c := FindColumn(row, name)
-		if c.IsNull(0) {
-			return nil
-		}
-		value := bytes.Clone(c.(*array.Binary).Value(0))
-		return &value
-	}
-	stringValue := func(name string) *string {
-		c := FindColumn(row, name)
-		if c.IsNull(0) {
-			return nil
-		}
-		v := c.(*array.String).Value(0)
-		return &v
-	}
-	enum := FindColumn(row, "function_type").(*array.Dictionary)
-	kind := enum.Dictionary().(*array.String).Value(enum.GetValueIndex(0))
-	r := BindRequestWire{FunctionName: *stringValue("function_name"), Arguments: *binary("arguments"), FunctionType: kind, InputSchema: binary("input_schema"), Settings: binary("settings"), Secrets: binary("secrets"), AttachOpaqueData: binary("attach_opaque_data"), TransactionOpaqueData: binary("transaction_opaque_data"), ResolvedSecretsProvided: FindColumn(row, "resolved_secrets_provided").(*array.Boolean).Value(0), AtUnit: stringValue("at_unit"), AtValue: stringValue("at_value")}
-	if !FindColumn(row, "schema_path").IsNull(0) {
-		names, e := projectionStrings(FindColumn(row, "schema_path"))
-		if e != nil {
-			return r, e
-		}
-		r.SchemaPath = &names
-	}
-	if c := FindColumn(row, "argument_names"); !c.IsNull(0) {
-		list := c.(*array.List)
-		a, b := list.ValueOffsets(0)
-		values := list.ListValues().(*array.String)
-		names := make([]*string, 0, b-a)
-		for i := a; i < b; i++ {
-			var v *string
-			if !values.IsNull(int(i)) {
-				value := values.Value(int(i))
-				v = &value
-			}
-			names = append(names, v)
-		}
-		r.ArgumentNames = &names
-	}
-	if c := FindColumn(row, "copy_from"); !c.IsNull(0) {
-		v := c.(*array.Struct)
-		r.CopyFrom = &CopyFromContextWire{Format: v.Field(0).(*array.String).Value(0), FilePath: v.Field(1).(*array.String).Value(0), ExpectedSchema: bytes.Clone(v.Field(2).(*array.Binary).Value(0))}
-	}
-	if c := FindColumn(row, "copy_to"); !c.IsNull(0) {
-		v := c.(*array.Struct)
-		r.CopyTo = &CopyToContextWire{Format: v.Field(0).(*array.String).Value(0), FilePath: v.Field(1).(*array.String).Value(0)}
-	}
-	return r, nil
-}
 func decodeProjectionBind(raw []byte) (BindResponseWire, error) {
 	row, err := readProjectionRecord(raw, generated.BindResultSchema)
 	if err != nil {
@@ -394,7 +334,7 @@ func encodeProjectionBind(value BindResponseWire) ([]byte, error) {
 func (w workerService) TableFunctionProjection(ctx context.Context, cc *vgirpc.CallContext, raw TableFunctionProjectionRequestWire) (response TableFunctionProjectionResponseWire, err error) {
 	defer RecoverPanic("projection", "", &err)
 	decline := TableFunctionProjectionResponseWire{AcceptedIndices: []int64{}}
-	size := len(raw.BindCall) + len(raw.BindResult) + len(raw.ResultSchema)
+	size := raw.BindCall.Len() + len(raw.BindResult) + len(raw.ResultSchema)
 	for _, e := range raw.Expressions {
 		size += len(e)
 	}
@@ -403,7 +343,7 @@ func (w workerService) TableFunctionProjection(ctx context.Context, cc *vgirpc.C
 	}
 	builder := array.NewRecordBuilder(memory.DefaultAllocator, generated.TableFunctionProjectionRequestSchema)
 	defer builder.Release()
-	builder.Field(0).(*array.BinaryBuilder).Append(raw.BindCall)
+	builder.Field(0).(*array.BinaryBuilder).Append(raw.BindCall.Bytes())
 	builder.Field(1).(*array.BinaryBuilder).Append(raw.BindResult)
 	list := builder.Field(2).(*array.ListBuilder)
 	list.Append(true)
@@ -421,7 +361,10 @@ func (w workerService) TableFunctionProjection(ctx context.Context, cc *vgirpc.C
 		return decline, fmt.Errorf("projection exceeds 8MiB")
 	}
 
-	call, err := decodeProjectionCall(raw.BindCall)
+	// The generated decoder checks the nested record's schema; a null
+	// arguments cell is a valid reference-form bind call, refused or resolved
+	// by parseBindRequest (never dereferenced here).
+	call, err := bindCallValue(generated.TableFunctionProjectionRequest(raw).BindCallValue)
 	if err != nil {
 		return decline, err
 	}
@@ -429,7 +372,7 @@ func (w workerService) TableFunctionProjection(ctx context.Context, cc *vgirpc.C
 	if err != nil {
 		return decline, err
 	}
-	result, err := handleProjection(w, ctx, cc, projectionDecodedRequest{BindCall: call, BindResult: bind, Expressions: raw.Expressions, ResultSchema: raw.ResultSchema})
+	result, err := handleProjection(w, ctx, cc, projectionDecodedRequest{BindCall: call, BindCallLen: raw.BindCall.Len(), BindResult: bind, Expressions: raw.Expressions, ResultSchema: raw.ResultSchema})
 	if err != nil {
 		return decline, err
 	}

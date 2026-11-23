@@ -52,6 +52,7 @@ func scanColumnFor(t *testing.T, w *Worker, schema SchemaPath, table string) str
 		t.Fatalf("%v.%s: scan homed in %v, want the table's own schema", schema, table, result.SchemaPath)
 	}
 	resp, err := w.handleBind(context.Background(), shapeTestCallCtx(), BindRequestWire{
+		Arguments:    testNoArgs(t),
 		FunctionName: result.FunctionName,
 		FunctionType: string(FunctionTypeTable),
 		SchemaPath:   result.SchemaPath,

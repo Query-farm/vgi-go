@@ -4,51 +4,100 @@ package vgi
 
 import (
 	"bytes"
-	"encoding/gob"
 	"reflect"
 	"testing"
+
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
 
-func TestInitRecipeGobRoundTripNullableArgumentNames(t *testing.T) {
-	left := "left"
-	right := "right"
-	names := []*string{&left, nil, &right}
-	want := InitRecipe{
-		BindCall: BindRequestWire{
-			FunctionName:  "probe",
-			FunctionType:  string(FunctionTypeScalar),
-			ArgumentNames: &names,
-		},
+// The recipe carries the bind call as the bytes the client sent, so a null
+// argument name (which the generated []string cannot hold) and every other
+// field survive the stream untouched, and the decoded copy reads it back.
+func TestInitRecipeCarriesBindCallBytes(t *testing.T) {
+	names := []string{"left", "", "right"}
+	bind := testNested(t, BindRequestWire{
+		FunctionName:  "probe",
+		FunctionType:  string(FunctionTypeScalar),
+		Arguments:     testNoArgs(t),
+		ArgumentNames: &names,
+	})
+	want := InitRecipe{BindCallIPC: bind.Bytes(), FunctionName: "probe"}
+	data, err := encodeInitRecipe(&want)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(want); err != nil {
-		t.Fatalf("encode InitRecipe: %v", err)
+	got, err := decodeInitRecipe(data)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	var got InitRecipe
-	if err := gob.NewDecoder(&buf).Decode(&got); err != nil {
-		t.Fatalf("decode InitRecipe: %v", err)
+	if !reflect.DeepEqual(*got, want) {
+		t.Fatalf("round trip = %#v, want %#v", *got, want)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("round trip = %#v, want %#v", got, want)
+	call, err := got.bindCall()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call.FunctionName != "probe" || call.ArgumentNames == nil || !reflect.DeepEqual(*call.ArgumentNames, names) {
+		t.Fatalf("decoded bind call = %+v", call)
+	}
+	if !bytes.Equal(got.BindCallIPC, bind.Bytes()) {
+		t.Fatal("recipe bind_call bytes changed")
 	}
 }
 
-func TestInitRecipeGobRoundTripAbsentArgumentNames(t *testing.T) {
-	want := InitRecipe{BindCall: BindRequestWire{FunctionName: "probe"}}
-
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(want); err != nil {
-		t.Fatalf("encode InitRecipe: %v", err)
+// A state token carries the init recipe only as the Init StateRef: the
+// Recipe field never rides the token.
+func TestStateTokensCarryInitRefNotRecipe(t *testing.T) {
+	recipe := InitRecipe{FunctionName: "probe", OutputSchemaIPC: bytes.Repeat([]byte("s"), 64)}
+	ref, err := initRef(nil, &recipe)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	var got InitRecipe
-	if err := gob.NewDecoder(&buf).Decode(&got); err != nil {
-		t.Fatalf("decode InitRecipe: %v", err)
+	type token interface {
+		GobEncode() ([]byte, error)
+		GobDecode([]byte) error
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("round trip = %#v, want %#v", got, want)
+	pairs := [][2]token{
+		{&ScalarExchangeState{Init: ref, Recipe: recipe}, &ScalarExchangeState{}},
+		{&TableProducerState{Init: ref, Recipe: recipe}, &TableProducerState{}},
+		{&TableInOutExchangeState{Init: ref, Recipe: recipe}, &TableInOutExchangeState{}},
+		{&FinalizeProducerState{Init: ref, Recipe: recipe}, &FinalizeProducerState{}},
+	}
+	for _, pair := range pairs {
+		data, err := pair[0].GobEncode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pair[1].GobDecode(data); err != nil {
+			t.Fatal(err)
+		}
+		var got InitRecipe
+		var init vgirpc.StateRef
+		switch d := pair[1].(type) {
+		case *ScalarExchangeState:
+			got, init = d.Recipe, d.Init
+		case *TableProducerState:
+			got, init = d.Recipe, d.Init
+		case *TableInOutExchangeState:
+			got, init = d.Recipe, d.Init
+		case *FinalizeProducerState:
+			got, init = d.Recipe, d.Init
+		}
+		if !reflect.DeepEqual(got, InitRecipe{}) || init.IsZero() {
+			t.Fatalf("%T token: Recipe %#v rode the token or Init is missing", pair[0], got)
+		}
+	}
+	var s ScalarExchangeState
+	data, _ := (&ScalarExchangeState{Init: ref, Recipe: recipe}).GobEncode()
+	if err := s.GobDecode(data); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveInitRecipe(nil, s.Init)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, recipe) {
+		t.Fatalf("resolved recipe = %#v, want %#v", got, recipe)
 	}
 }
 

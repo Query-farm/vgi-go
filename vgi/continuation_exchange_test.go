@@ -365,5 +365,5 @@ func TestRehydratePendingWithoutStateRefused(t *testing.T) {
 	if err := s.GobDecode(data); err != nil {
 		t.Fatal(err)
 	}
-	wantErr(t, NewWorker().rehydrateTableInOut(&s), "carries no state")
+	wantErr(t, NewWorker().rehydrateTableInOut(&s, nil), "carries no state")
 }

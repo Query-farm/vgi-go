@@ -3,12 +3,21 @@
 package vgi
 
 // InitRecipe carries all serializable data needed to reconstruct
-// ProcessParams after a state token round-trip through HTTP transport.
-// It captures the raw IPC bytes from the init request so that the
-// rehydration path can replay the same bind/init logic without the
-// original wire message.
+// ProcessParams on a later HTTP turn. It captures the raw IPC bytes from the
+// init request so that the rehydration path can replay the same bind/init
+// logic without the original wire message.
+//
+// It never changes for the life of a stream, so it rides the cursor as one
+// vgi-rpc StateRef (the states' Init field, protocol 3.4 "init: StateRef"),
+// created once while handling the init request: inline (compressed) when
+// small, stored once when large. Table buffering also persists it, sealed, in
+// function storage for its unary process/combine RPCs, which have no cursor.
 type InitRecipe struct {
-	BindCall          BindRequestWire
+	// BindCallIPC is the init request's bind_call exactly as the client sent
+	// it (large-values spec §3.3 rule 1): the reference form, so an
+	// externalized argument travels as its arguments_location, never its
+	// value, and a sealed attach value stays sealed.
+	BindCallIPC       []byte
 	OutputSchemaIPC   []byte
 	FunctionName      string
 	FunctionType      FunctionType
@@ -42,4 +51,9 @@ type InitRecipe struct {
 	// section (secret options still encrypted under the worker's key), so a
 	// rehydrated turn can decode ProcessParams.AttachOptions again.
 	AttachOptionsScope []byte
+}
+
+// bindCall decodes the recipe's bind call.
+func (r *InitRecipe) bindCall() (BindRequestWire, error) {
+	return bindCallFromBytes(r.BindCallIPC)
 }

@@ -89,6 +89,7 @@ func TestTableBufferingEmptyInputCombinesAndFinalizes(t *testing.T) {
 		t.Fatal(err)
 	}
 	bind := BindRequestWire{
+		Arguments:    testNoArgs(t),
 		FunctionName: "empty_input_counter",
 		FunctionType: string(FunctionTypeTable),
 		InputSchema:  &inputSchema,
@@ -97,7 +98,7 @@ func TestTableBufferingEmptyInputCombinesAndFinalizes(t *testing.T) {
 	// 1. The extension's own TABLE_BUFFERING init (no Sink thread received a row).
 	sinkPhase := string(PhaseTableBuffering)
 	sink, err := w.handleInit(ctx, shapeTestCallCtx(), InitRequestWire{
-		BindCall: bind, OutputSchema: outSchema, Phase: &sinkPhase,
+		BindCall: testNested(t, bind), OutputSchema: outSchema, Phase: &sinkPhase,
 	})
 	if err != nil {
 		t.Fatalf("sink init: %v", err)
@@ -125,7 +126,7 @@ func TestTableBufferingEmptyInputCombinesAndFinalizes(t *testing.T) {
 	finalPhase := string(PhaseTableBufferingFinalize)
 	fsid := combined.FinalizeStateIDs[0]
 	fin, err := w.handleInit(ctx, shapeTestCallCtx(), InitRequestWire{
-		BindCall: bind, OutputSchema: outSchema, Phase: &finalPhase,
+		BindCall: testNested(t, bind), OutputSchema: outSchema, Phase: &finalPhase,
 		FinalizeStateID: &fsid, ExecutionID: &execID,
 	})
 	if err != nil {

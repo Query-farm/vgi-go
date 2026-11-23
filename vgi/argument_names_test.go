@@ -13,10 +13,14 @@ func TestParseBindRequestPreservesArgumentNames(t *testing.T) {
 	right := "right"
 	want := []*string{&left, nil, &right}
 
+	// The generated record's []string cannot hold a null item: an unnamed
+	// vararg arrives as "" and reads back as nil.
+	wire := []string{"left", "", "right"}
 	params, err := NewWorker().parseBindRequest(BindRequestWire{
 		FunctionName:  "probe",
 		FunctionType:  string(FunctionTypeScalar),
-		ArgumentNames: &want,
+		Arguments:     testNoArgs(t),
+		ArgumentNames: &wire,
 	}, shapeTestCallCtx())
 	if err != nil {
 		t.Fatalf("parseBindRequest: %v", err)

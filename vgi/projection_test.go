@@ -37,7 +37,7 @@ func TestProjectionAcceptanceContract(t *testing.T) {
 	owner := []string{"main"}
 	text, _ := GeneratedExpressionMetadata(`CAST("n" AS BIGINT)`, owner)
 	expression, _ := base64.StdEncoding.DecodeString(text)
-	req := projectionDecodedRequest{BindCall: BindRequestWire{FunctionName: "projection_test", FunctionType: "TABLE", Arguments: args, SchemaPath: &owner}, BindResult: BindResponseWire{OutputSchema: schemaBytes, ProjectionExpressionProfiles: []string{ScalarProjectionProfile}, Repeatability: string(BindRepeatabilityUnknown)}, Expressions: [][]byte{expression}, ResultSchema: resultBytes}
+	req := projectionDecodedRequest{BindCall: BindRequestWire{FunctionName: "projection_test", FunctionType: "TABLE", Arguments: &args, SchemaPath: &owner}, BindResult: BindResponseWire{OutputSchema: schemaBytes, ProjectionExpressionProfiles: []string{ScalarProjectionProfile}, Repeatability: string(BindRepeatabilityUnknown)}, Expressions: [][]byte{expression}, ResultSchema: resultBytes}
 	f := &projectionTestFunction{}
 	w := NewWorker()
 	w.RegisterTable(f)

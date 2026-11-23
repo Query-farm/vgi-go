@@ -63,6 +63,7 @@ func insertColumnFor(t *testing.T, w *Worker, schema SchemaPath, table string) s
 	}
 	input := shapeTestInputSchema(t)
 	resp, err := w.handleBind(context.Background(), shapeTestCallCtx(), BindRequestWire{
+		Arguments:    testNoArgs(t),
 		FunctionName: result.FunctionName,
 		FunctionType: string(FunctionTypeTable),
 		SchemaPath:   result.SchemaPath,

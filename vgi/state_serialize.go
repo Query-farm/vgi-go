@@ -6,70 +6,9 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+
+	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
-
-// nullableStringWire is the gob-safe form of a nullable string list element.
-// encoding/gob rejects nil elements in slices of pointers, which is the wire
-// shape used by BindRequestWire.ArgumentNames for unnamed arguments.
-type nullableStringWire struct {
-	Value string
-	Valid bool
-}
-
-// bindRequestGobWire keeps BindRequestWire's Arrow-facing representation out
-// of HTTP state tokens. The plain request has ArgumentNames cleared so gob
-// never encounters a nil slice element; the lossless nullable representation
-// is carried alongside it.
-type bindRequestGobWire struct {
-	Request              bindRequestGobPlain
-	ArgumentNamesPresent bool
-	ArgumentNames        []nullableStringWire
-}
-
-type bindRequestGobPlain BindRequestWire
-
-// GobEncode preserves nullable argument names when a bind request is embedded
-// in an HTTP continuation token.
-func (r BindRequestWire) GobEncode() ([]byte, error) {
-	plain := bindRequestGobPlain(r)
-	plain.ArgumentNames = nil
-	w := bindRequestGobWire{Request: plain}
-	if r.ArgumentNames != nil {
-		w.ArgumentNamesPresent = true
-		w.ArgumentNames = make([]nullableStringWire, len(*r.ArgumentNames))
-		for i, name := range *r.ArgumentNames {
-			if name != nil {
-				w.ArgumentNames[i] = nullableStringWire{Value: *name, Valid: true}
-			}
-		}
-	}
-
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(w); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// GobDecode restores the Arrow-facing nullable argument-name representation.
-func (r *BindRequestWire) GobDecode(data []byte) error {
-	var w bindRequestGobWire
-	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&w); err != nil {
-		return err
-	}
-	*r = BindRequestWire(w.Request)
-	if w.ArgumentNamesPresent {
-		names := make([]*string, len(w.ArgumentNames))
-		for i, name := range w.ArgumentNames {
-			if name.Valid {
-				value := name.Value
-				names[i] = &value
-			}
-		}
-		r.ArgumentNames = &names
-	}
-	return nil
-}
 
 // Continuation-token state serialization.
 //
@@ -98,6 +37,33 @@ func (r *BindRequestWire) GobDecode(data []byte) error {
 // to move its flush out of the token and into the state log the first time one
 // is written. See FinalizeProducerState.GobEncode below.
 
+// scalarExchangeWire is the gob wire form of ScalarExchangeState: the init
+// StateRef only. A scalar stream has no per-turn state to carry.
+type scalarExchangeWire struct {
+	Init vgirpc.StateRef
+}
+
+// GobEncode encodes the wire form: Recipe rides as the Init StateRef, never as
+// itself.
+func (s *ScalarExchangeState) GobEncode() ([]byte, error) {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(scalarExchangeWire{Init: s.Init}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// GobDecode restores the wire form; the turn's entry resolves Init and
+// rebuilds the transient fields (resume).
+func (s *ScalarExchangeState) GobDecode(data []byte) error {
+	var w scalarExchangeWire
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&w); err != nil {
+		return err
+	}
+	s.Init = w.Init
+	return nil
+}
+
 // tableProducerWire is the gob wire form of TableProducerState: the exported
 // snapshot fields only (the transient fn/params/state are rebuilt by rehydrate).
 //
@@ -107,7 +73,7 @@ func (r *BindRequestWire) GobDecode(data []byte) error {
 // from the init snapshot alone and the worker stopped pruning after the turn
 // that received the change.
 type tableProducerWire struct {
-	Recipe               InitRecipe
+	Init                 vgirpc.StateRef
 	UserStateBytes       []byte
 	AutoProjectIDs       []int32
 	FilterDeltaIPC       [][]byte
@@ -127,7 +93,7 @@ func (s *TableProducerState) GobEncode() ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(tableProducerWire{
-		Recipe:               s.Recipe,
+		Init:                 s.Init,
 		UserStateBytes:       usb,
 		AutoProjectIDs:       s.AutoProjectIDs,
 		FilterDeltaIPC:       s.FilterDeltaIPC,
@@ -145,7 +111,7 @@ func (s *TableProducerState) GobDecode(data []byte) error {
 	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&w); err != nil {
 		return err
 	}
-	s.Recipe = w.Recipe
+	s.Init = w.Init
 	s.UserStateBytes = w.UserStateBytes
 	s.AutoProjectIDs = w.AutoProjectIDs
 	s.FilterDeltaIPC = w.FilterDeltaIPC
@@ -157,7 +123,7 @@ func (s *TableProducerState) GobDecode(data []byte) error {
 // flush has been offloaded to the state log BatchIPC is empty, so the token is
 // a fixed handful of bytes however large the flush was.
 type finalizeProducerWire struct {
-	Recipe    InitRecipe
+	Init      vgirpc.StateRef
 	BatchIPC  [][]byte
 	BatchIdx  int
 	LogKey    []byte
@@ -176,7 +142,7 @@ func (s *FinalizeProducerState) GobEncode() ([]byte, error) {
 	s.offloadFlush()
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(finalizeProducerWire{
-		Recipe:    s.Recipe,
+		Init:      s.Init,
 		BatchIPC:  s.BatchIPC,
 		BatchIdx:  s.BatchIdx,
 		LogKey:    s.LogKey,
@@ -197,7 +163,7 @@ func (s *FinalizeProducerState) GobDecode(data []byte) error {
 	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&w); err != nil {
 		return err
 	}
-	s.Recipe = w.Recipe
+	s.Init = w.Init
 	s.BatchIPC = w.BatchIPC
 	s.BatchIdx = w.BatchIdx
 	s.LogKey = w.LogKey
@@ -212,7 +178,7 @@ func (s *FinalizeProducerState) GobDecode(data []byte) error {
 // the dynamic-filter history for the reason tableProducerWire does, and
 // MorePending so the next turn knows whether only a continuation tick is valid.
 type tableInOutWire struct {
-	Recipe               InitRecipe
+	Init                 vgirpc.StateRef
 	UserStateBytes       []byte
 	FilterDeltaIPC       [][]byte
 	FilterPredicateOrder []string
@@ -233,7 +199,7 @@ func (s *TableInOutExchangeState) GobEncode() ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(tableInOutWire{
-		Recipe:               s.Recipe,
+		Init:                 s.Init,
 		UserStateBytes:       usb,
 		FilterDeltaIPC:       s.FilterDeltaIPC,
 		FilterPredicateOrder: s.FilterPredicateOrder,
@@ -251,7 +217,7 @@ func (s *TableInOutExchangeState) GobDecode(data []byte) error {
 	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&w); err != nil {
 		return err
 	}
-	s.Recipe = w.Recipe
+	s.Init = w.Init
 	s.UserStateBytes = w.UserStateBytes
 	s.FilterDeltaIPC = w.FilterDeltaIPC
 	s.FilterPredicateOrder = w.FilterPredicateOrder

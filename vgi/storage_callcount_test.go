@@ -305,9 +305,9 @@ func TestStorageCallCountsBuffered(t *testing.T) {
 
 	inputSchema := shapeTestInputSchema(t)
 	outSchema, _ := SerializeSchema(emptyInputCounterSchema)
-	bind := BindRequestWire{FunctionName: "cc_buffer", FunctionType: string(FunctionTypeTable), InputSchema: &inputSchema, AttachOpaqueData: attach}
+	bind := BindRequestWire{FunctionName: "cc_buffer", Arguments: testNoArgs(t), FunctionType: string(FunctionTypeTable), InputSchema: &inputSchema, AttachOpaqueData: attach}
 	phase := string(PhaseTableBuffering)
-	sink, err := w.handleInit(ctx, cc, InitRequestWire{BindCall: bind, OutputSchema: outSchema, Phase: &phase})
+	sink, err := w.handleInit(ctx, cc, InitRequestWire{BindCall: testNested(t, bind), OutputSchema: outSchema, Phase: &phase})
 	if err != nil {
 		t.Fatalf("sink init: %v", err)
 	}

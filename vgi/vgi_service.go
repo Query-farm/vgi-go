@@ -5,6 +5,7 @@ package vgi
 import (
 	"context"
 
+	"github.com/Query-farm/vgi-go/vgi/generated"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 )
 
@@ -114,23 +115,39 @@ func (w workerService) TableBufferingProcess(ctx context.Context, cc *vgirpc.Cal
 }
 
 // TableFunctionCardinality serves vgi.v3 table_function_cardinality.
-func (w workerService) TableFunctionCardinality(ctx context.Context, cc *vgirpc.CallContext, req CardinalityRequestWire) (TableCardinality, error) {
-	return w.handleCardinality(ctx, cc, req)
+func (w workerService) TableFunctionCardinality(ctx context.Context, cc *vgirpc.CallContext, req TableFunctionCardinalityRequestWire) (TableCardinality, error) {
+	call, err := bindCallValue(generated.TableFunctionCardinalityRequest(req).BindCallValue)
+	if err != nil {
+		return TableCardinality{}, err
+	}
+	return w.handleCardinality(ctx, cc, CardinalityRequestWire{BindCall: call, BindCallIPC: req.BindCall.Bytes(), BindOpaqueData: req.BindOpaqueData})
 }
 
 // TableFunctionDynamicToString serves vgi.v3 table_function_dynamic_to_string.
 func (w workerService) TableFunctionDynamicToString(ctx context.Context, cc *vgirpc.CallContext, req TableFunctionDynamicToStringRequestWire) (TableFunctionDynamicToStringResponseWire, error) {
-	return w.handleTableFunctionDynamicToString(ctx, cc, req)
+	call, err := bindCallValue(generated.TableFunctionDynamicToStringRequest(req).BindCallValue)
+	if err != nil {
+		return TableFunctionDynamicToStringResponseWire{}, err
+	}
+	return w.handleTableFunctionDynamicToString(ctx, cc, dynamicToStringRequest{BindCall: call, BindOpaqueData: req.BindOpaqueData, GlobalExecutionID: req.GlobalExecutionID})
 }
 
 // TableFunctionPlan serves vgi.v3 table_function_plan.
-func (w workerService) TableFunctionPlan(ctx context.Context, cc *vgirpc.CallContext, req PlanRequestWire) (PlanResponseWire, error) {
-	return w.handlePlan(ctx, cc, req)
+func (w workerService) TableFunctionPlan(ctx context.Context, cc *vgirpc.CallContext, req TableFunctionPlanRequestWire) (PlanResponseWire, error) {
+	plan, err := planRequestOf(req)
+	if err != nil {
+		return PlanResponseWire{}, err
+	}
+	return w.handlePlan(ctx, cc, plan)
 }
 
 // TableFunctionStatistics serves vgi.v3 table_function_statistics.
-func (w workerService) TableFunctionStatistics(ctx context.Context, cc *vgirpc.CallContext, req CardinalityRequestWire) (*[]byte, error) {
-	return w.handleTableFunctionStatistics(ctx, cc, req)
+func (w workerService) TableFunctionStatistics(ctx context.Context, cc *vgirpc.CallContext, req TableFunctionStatisticsRequestWire) (*[]byte, error) {
+	call, err := bindCallValue(generated.TableFunctionStatisticsRequest(req).BindCallValue)
+	if err != nil {
+		return nil, err
+	}
+	return w.handleTableFunctionStatistics(ctx, cc, CardinalityRequestWire{BindCall: call, BindCallIPC: req.BindCall.Bytes(), BindOpaqueData: req.BindOpaqueData})
 }
 
 // IndexCreateRequestWire is the inner request record for catalog_index_create

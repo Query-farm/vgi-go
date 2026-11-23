@@ -42,12 +42,13 @@ type DynamicToStringParams struct {
 	Auth *vgirpc.AuthContext
 }
 
-// TableFunctionDynamicToStringRequestWire mirrors vgi-python's
-// TableFunctionDynamicToStringRequest dataclass.
-type TableFunctionDynamicToStringRequestWire struct {
-	BindCall          BindRequestWire `vgirpc:"bind_call"`
-	BindOpaqueData    *[]byte         `vgirpc:"bind_opaque_data"`
-	GlobalExecutionID []byte          `vgirpc:"global_execution_id"`
+// dynamicToStringRequest is a decoded table_function_dynamic_to_string
+// request (the generated TableFunctionDynamicToStringRequestWire with its
+// bind_call decoded).
+type dynamicToStringRequest struct {
+	BindCall          BindRequestWire
+	BindOpaqueData    *[]byte
+	GlobalExecutionID []byte
 }
 
 // TableFunctionDynamicToStringResponseWire is the parallel-list wire format.
@@ -56,7 +57,7 @@ type TableFunctionDynamicToStringResponseWire struct {
 	Values []string `vgirpc:"values"`
 }
 
-func (w *Worker) handleTableFunctionDynamicToString(ctx context.Context, callCtx *vgirpc.CallContext, req TableFunctionDynamicToStringRequestWire) (TableFunctionDynamicToStringResponseWire, error) {
+func (w *Worker) handleTableFunctionDynamicToString(ctx context.Context, callCtx *vgirpc.CallContext, req dynamicToStringRequest) (TableFunctionDynamicToStringResponseWire, error) {
 	// bind_call arrives as a nested struct — its function name and schema
 	// pick the TableFunction.
 	bindReq := &req.BindCall

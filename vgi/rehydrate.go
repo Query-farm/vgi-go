@@ -30,25 +30,29 @@ func gobDecode(data []byte) (interface{}, error) {
 	return v, nil
 }
 
-// rehydrateState reconstructs non-serializable fields on a deserialized stream
-// state. This is the RehydrateFunc callback for the HTTP server.
+// rehydrateState is the RehydrateFunc callback for the HTTP server. It runs
+// with no call context, so it only records the worker: the turn's entry
+// (Produce / Exchange, via resume) resolves the init StateRef and any
+// argument reference with the turn's context and rebuilds the non-serializable
+// fields (see init_state_ref.go).
 func (w *Worker) rehydrateState(state interface{}, method string) error {
 	switch s := state.(type) {
 	case *ScalarExchangeState:
-		return w.rehydrateScalar(s)
+		s.pending = w
 	case *TableProducerState:
-		return w.rehydrateTableProducer(s)
+		s.pending = w
 	case *TableInOutExchangeState:
-		return w.rehydrateTableInOut(s)
+		s.pending = w
 	case *FinalizeProducerState:
-		return w.rehydrateFinalize(s)
+		s.pending = w
 	default:
 		return fmt.Errorf("unknown state type for rehydration: %T", state)
 	}
+	return nil
 }
 
-func (w *Worker) rehydrateScalar(s *ScalarExchangeState) error {
-	fn, params, err := w.rebuildProcessParams(&s.Recipe)
+func (w *Worker) rehydrateScalar(s *ScalarExchangeState, cc *vgirpc.CallContext) error {
+	fn, params, err := w.rebuildProcessParams(&s.Recipe, cc)
 	if err != nil {
 		return err
 	}
@@ -61,8 +65,8 @@ func (w *Worker) rehydrateScalar(s *ScalarExchangeState) error {
 	return nil
 }
 
-func (w *Worker) rehydrateTableProducer(s *TableProducerState) error {
-	fn, params, err := w.rebuildProcessParams(&s.Recipe)
+func (w *Worker) rehydrateTableProducer(s *TableProducerState, cc *vgirpc.CallContext) error {
+	fn, params, err := w.rebuildProcessParams(&s.Recipe, cc)
 	if err != nil {
 		return err
 	}
@@ -110,7 +114,7 @@ func (w *Worker) rehydrateTableProducer(s *TableProducerState) error {
 	return nil
 }
 
-func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
+func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState, cc *vgirpc.CallContext) error {
 	// Output is pending: the state is Resume's position, so there must be one.
 	// A token with none (a raw TableInOutResumer whose NewState returned nil,
 	// so GobEncode wrote no state) must not fall back to a fresh NewState,
@@ -119,7 +123,7 @@ func (w *Worker) rehydrateTableInOut(s *TableInOutExchangeState) error {
 		return fmt.Errorf("%s: output is pending but the state token carries no state; continued output must resume from its saved state", s.Recipe.FunctionName)
 	}
 
-	fn, params, err := w.rebuildProcessParams(&s.Recipe)
+	fn, params, err := w.rebuildProcessParams(&s.Recipe, cc)
 	if err != nil {
 		return err
 	}
@@ -217,8 +221,10 @@ func coldAttachScope(raw []byte) []byte {
 //
 // Used for an HTTP state token, which the HTTP server authenticates; a recipe
 // read back from FunctionStorage goes through rebuildProcessParamsLive instead.
-func (w *Worker) rebuildProcessParams(recipe *InitRecipe) (interface{}, *ProcessParams, error) {
-	return w.rebuildProcessParamsLive(recipe, nil)
+// cc is the turn's context: it resolves an argument reference (through the
+// object cache, so a cold replica fetches the argument once, not per turn).
+func (w *Worker) rebuildProcessParams(recipe *InitRecipe, cc *vgirpc.CallContext) (interface{}, *ProcessParams, error) {
+	return w.rebuildProcessParamsLive(recipe, nil, cc)
 }
 
 // liveScope is the per-call context a buffering RPC derives from its own,
@@ -233,6 +239,8 @@ type liveScope struct {
 	attachOptions *AttachOptions
 	auth          *vgirpc.AuthContext
 	clientLog     func(level vgirpc.LogLevel, msg string)
+	// cc is the request's context, which resolves an argument reference.
+	cc *vgirpc.CallContext
 }
 
 // apply overwrites the per-call fields of a ProcessParams copy.
@@ -249,6 +257,7 @@ func (w *Worker) liveScopeFor(r bufferingRequest, shardKey string) (*liveScope, 
 	l := &liveScope{shardKey: shardKey, schemaPath: r.schemaPath}
 	if r.cc != nil {
 		cc := r.cc
+		l.cc = cc
 		l.auth = cc.Auth
 		l.clientLog = func(level vgirpc.LogLevel, msg string) { cc.ClientLog(level, msg) }
 	}
@@ -269,16 +278,25 @@ func (w *Worker) liveScopeFor(r bufferingRequest, shardKey string) (*liveScope, 
 // rebuildProcessParamsLive is rebuildProcessParams with the routing and
 // identity fields taken from live when it is non-nil: the shard key, schema
 // path and attach scope / options of the request, not of the recipe.
-func (w *Worker) rebuildProcessParamsLive(recipe *InitRecipe, live *liveScope) (interface{}, *ProcessParams, error) {
-	// bind_call is carried structurally in the recipe.
-	bindCall := recipe.BindCall
+func (w *Worker) rebuildProcessParamsLive(recipe *InitRecipe, live *liveScope, cc *vgirpc.CallContext) (interface{}, *ProcessParams, error) {
+	// bind_call is carried in the recipe as the bytes the client sent; this
+	// decodes a private copy (overriding a field never touches those bytes).
+	bindCall, err := recipe.bindCall()
+	if err != nil {
+		return nil, nil, err
+	}
 	bindReq := &bindCall
 	if live != nil && live.schemaPath != nil {
 		bindReq.SchemaPath = live.schemaPath
 	}
+	if cc == nil && live != nil {
+		cc = live.cc
+	}
 
-	// Parse bind params for argument access
-	bindParams, err := w.parseBindRequest(*bindReq, nil)
+	// Parse bind params for argument access. Sealed attach / transaction
+	// values are restored from the recipe below, not opened here; an
+	// argument reference resolves with the turn's context.
+	bindParams, err := w.parseBindRequestWith(*bindReq, nil, cc)
 	if err != nil {
 		return nil, nil, err
 	}

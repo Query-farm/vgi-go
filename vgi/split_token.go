@@ -240,7 +240,11 @@ func bindFingerprintFor(req *BindRequestWire) []byte {
 	// projection_ids is not a BindRequest field (it rides InitRequest), so it
 	// feeds in empty — matching the reference implementation, which reads it off
 	// the bind call and likewise finds nothing there.
-	return BindFingerprint(schema, req.FunctionName, req.Arguments, settingsRepr, nil)
+	//
+	// Arguments contribute their form-tagged input (argumentsFingerprintInput):
+	// an externalized argument its size and SHA-256, never the sealed ref,
+	// whose random nonce would differ between two equal binds.
+	return BindFingerprint(schema, req.FunctionName, argumentsFingerprintInput(req), settingsRepr, nil)
 }
 
 // splitAnchor encodes the consistency anchor. catalog_version is the counter

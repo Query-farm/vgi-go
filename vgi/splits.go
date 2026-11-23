@@ -16,11 +16,11 @@ import (
 // rather than describing it is the point: "these three files at version 47"
 // survives a retry, "rows 0-999 of whatever this returns now" does not.
 
-// PlanRequestWire is the inner request record for table_function_plan.
-//
-// Field order and nullability are wire-significant — they must match
-// vgi/protocol.py's TableFunctionPlanRequest exactly, or the extension rejects
-// the response with a schema-mismatch error naming the field count.
+// PlanRequestWire is a decoded table_function_plan request, as a split
+// planner sees it: the generated TableFunctionPlanRequestWire with bind_call
+// decoded. BindCall is the bind call as the client sent it: with an
+// externalized argument its Arguments is nil and ArgumentsLocation set --
+// read arguments from BindParams, which always holds them resolved.
 type PlanRequestWire struct {
 	BindCall       BindRequestWire `vgirpc:"bind_call"`
 	BindOpaqueData []byte          `vgirpc:"bind_opaque_data,nullable"`
@@ -438,4 +438,43 @@ func splitPlannerFor(fn any) (TableFunctionWithPlan, bool) {
 		fn = u.InnerFunc()
 	}
 	return nil, false
+}
+
+// planRequestOf decodes a wire plan request into the planner-facing form.
+func planRequestOf(req TableFunctionPlanRequestWire) (PlanRequestWire, error) {
+	call, err := bindCallValue(generated.TableFunctionPlanRequest(req).BindCallValue)
+	if err != nil {
+		return PlanRequestWire{}, err
+	}
+	deref := func(p *[]byte) []byte {
+		if p == nil {
+			return nil
+		}
+		return *p
+	}
+	out := PlanRequestWire{
+		BindCall:              call,
+		BindOpaqueData:        deref(req.BindOpaqueData),
+		ProjectionIDs:         req.ProjectionIDs,
+		PushdownFilters:       deref(req.PushdownFilters),
+		RowLimit:              req.RowLimit,
+		TargetSplitBytes:      req.TargetSplitBytes,
+		MinSplits:             req.MinSplits,
+		MaxSplitsPerResponse:  req.MaxSplitsPerResponse,
+		Cursor:                deref(req.Cursor),
+		RefinedFilters:        deref(req.RefinedFilters),
+		FiltersComplete:       req.FiltersComplete,
+		StartPosition:         deref(req.StartPosition),
+		EndPosition:           deref(req.EndPosition),
+		OrderByColumnName:     req.OrderByColumnName,
+		OrderByDirection:      req.OrderByDirection,
+		OrderByNullOrder:      req.OrderByNullOrder,
+		OrderByLimit:          req.OrderByLimit,
+		TablesamplePercentage: req.TablesamplePercentage,
+		TablesampleSeed:       req.TablesampleSeed,
+	}
+	if req.JoinKeys != nil {
+		out.JoinKeys = *req.JoinKeys
+	}
+	return out, nil
 }
