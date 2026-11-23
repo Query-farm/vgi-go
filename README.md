@@ -765,6 +765,24 @@ The example worker registers `pass_claims(x BIGINT) -> VARCHAR`
 (`examples/scalar/pass_claims.go`) in hosted mode only; it returns the
 verified claims as JSON and is the hosted-mode conformance fixture.
 
+## Large values (protocol 3.4)
+
+Over HTTP a worker with a blob vendor (`VGI_BLOB_VENDOR_URL`) accepts
+**argument references**: the extension uploads a large argument once, through
+the worker's upload grant, and every request of that bind carries a small
+sealed reference (`BindRequest.arguments_location`) instead of the value.
+The SDK resolves it at each request's entry, through vgi-rpc's object cache
+(one fetch per process per object), so functions see their arguments exactly
+as before. The worker advertises the capability with `VGI-Arguments-Ref-Bytes`
+(default 4 MiB, set with `VGI_ARGUMENTS_REF_BYTES`); an argument object that
+storage has since deleted (after about a day) fails a prepared statement with
+"this prepared statement's large argument has expired; prepare it again".
+
+A stream's init request rides its continuation tokens as one vgi-rpc
+`StateRef`: inline when small, stored once in the vendor when large
+(`VGI_RPC_STATE_REF_INLINE_BYTES`, default 16 KiB). HTTP streams live up to
+6 hours, and a cursor over the turn budget is refused (`cursor_too_large`).
+
 ## Examples
 
 The `cmd/vgi-example-worker` binary registers every example function via

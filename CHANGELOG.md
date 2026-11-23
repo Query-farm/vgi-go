@@ -11,6 +11,47 @@
   vended as sized grants (size + SHA-256, verified by storage), and a request
   pointer without `vgi_rpc.location.sha256` is refused. Pins the unreleased
   vgi-rpc-go `protocol-3.4` commit until the release wave.
+- **Large values (protocol 3.4, vgi `docs/large-values-3.4.md`).**
+  - Generated bind types: `BindRequestWire`, `InitRequestWire` and the
+    cardinality, statistics, plan, projection and dynamic-to-string requests
+    are the generated records (`vgi/generated`). Every `bind_call` is a
+    raw-preserving `generated.Nested[generated.BindRequest]`, decoded on access
+    (`BindCallValue()`) and re-encoded as the bytes received.
+    `BindRequestWire.Arguments` is now `*[]byte` (nullable),
+    `ArgumentNames` is `*[]string` (an unnamed vararg arrives as `""`; parsed
+    `BindParams.ArgumentNames` still has `nil` there), `CopyFrom` / `CopyTo` are
+    the generated `CopyFromContext` / `CopyToContext`. The hand-written
+    `CopyFromContextWire` / `CopyToContextWire` are gone; `PlanRequestWire`
+    (what a split planner gets) and `CardinalityRequestWire` stay as the
+    decoded forms.
+  - Argument references: a bind call sets exactly one of `arguments` and
+    `arguments_location`, else `invalid_bind_request` (INVALID_ARGUMENT,
+    "BindRequest must set exactly one of 'arguments' and
+    'arguments_location'"); a bind with no arguments now needs an empty
+    arguments stream, not a null. A location is resolved at each request's
+    entry through vgi-rpc (sealed ref, size/SHA-256, the object cache, one
+    fetch per process): `invalid_arguments_ref`, `arguments_ref_integrity`,
+    and `arguments_ref_missing` with "this prepared statement's large argument
+    has expired; prepare it again". The HTTP server sends
+    `VGI-Arguments-Ref-Bytes` (default 4 MiB, `VGI_ARGUMENTS_REF_BYTES`)
+    whenever it vends upload URLs from an object store
+    (`VGI_TEST_DISABLE_ARGUMENTS_REF=1` turns it off). Split-token
+    fingerprints take a location's size and SHA-256, never the ref.
+  - `init: StateRef`: stream states carry their init recipe as one vgi-rpc
+    `StateRef` (`Init`), inline when small and stored once when large; the
+    recipe holds the bind call's received bytes (`InitRecipe.BindCallIPC`,
+    replacing `InitRecipe.BindCall`), so an externalized argument travels by
+    reference. `Recipe` is no longer serialized. HTTP rehydration resolves the
+    recipe and the arguments at the turn's entry.
+  - HTTP streams live up to 6 h (`TokenTTL`; vgi-rpc-go defaulted to 5 min),
+    and an over-budget cursor is refused (`cursor_too_large`).
+  - Projection: a null `arguments` cell no longer panics the decoder.
+  - A table-buffering finalize stream's token carries only the batches still
+    to emit (it carried the whole flush, so a single wide batch emitted on
+    the init turn put the next continuation over the turn budget).
+  - The blob_test fixture catalog is a sub-catalog and gains
+    `blob_param_batches`, `blob_param_streams`, `blob_param_scalar` and the
+    `blob_param_table` table.
 
 ### Added
 

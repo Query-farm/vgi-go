@@ -119,10 +119,17 @@ mkdir -p "$STAGE/test/sql/integration"
 if [ "$TRANSPORT" = "vendor" ]; then
   EXTERNAL_STORAGE="$VGI_SRC/test/sql/external_storage"
   [ -d "$EXTERNAL_STORAGE" ] || { echo "::error::no test/sql/external_storage under VGI_SRC=$VGI_SRC"; exit 1; }
-  mkdir -p "$STAGE/test/sql/external_storage"
+  mkdir -p "$STAGE/test/sql/external_storage" "$STAGE/test/sql/external_storage_server_env"
   for f in "$EXTERNAL_STORAGE"/*.test; do
+    # A file declaring `# server-env: NAME=VALUE` needs its own worker started
+    # with that environment (vgi scripts/run_tests.py --server-per-test), so it
+    # is staged apart and run against one below.
+    dest="$STAGE/test/sql/external_storage"
+    if head -40 "$f" | grep -qE '^#[[:space:]]*server-env:'; then
+      dest="$STAGE/test/sql/external_storage_server_env"
+    fi
     awk -v http="$AWK_HTTP" -v install="$PREPROCESS" -f "$HERE/preprocess-require.awk" "$f" \
-      > "$STAGE/test/sql/external_storage/$(basename "$f")"
+      > "$dest/$(basename "$f")"
   done
 fi
 
@@ -369,6 +376,10 @@ case "$TRANSPORT" in
       # A file, not a trap: the EXIT trap is cleanup(), which kills the
       # workers; the vendor is one more background process to stop there.
       printf '%s\t0\tfake-blob-vendor\t\n' "$VGI_FAKE_BLOB_VENDOR_PID" >> "$BG_PIDS_FILE"
+      # Protocol 3.4 large values (test/sql/external_storage/arguments_ref*.test):
+      # this worker resolves argument references and carries its init as a
+      # StateRef, and the pinned fake vendor has the delete-object route.
+      export VGI_WORKER_ARGUMENTS_REF=1 VGI_WORKER_INIT_STATE_REF=1 VGI_FAKE_VENDOR_DELETE_ROUTE=1
     fi
     # Whole-suite-over-HTTP (mirrors make test-http). Every ATTACH goes over
     # http://, so staging injected `LOAD httpfs` (AWK_HTTP=1) and dropped the
@@ -613,6 +624,23 @@ if [ "$TRANSPORT" = "vendor" ]; then
   # else may share the vendor while they run (the runner is serial).
   echo "Running test/sql/external_storage/* (transport=$TRANSPORT) ..."
   run_unittest "test/sql/external_storage/*" || suite_rc=$?
+  # The server-env files, each against its own worker booted with the
+  # environment it declares (e.g. a 1-byte object cache for a cold cache).
+  for f in "$STAGE"/test/sql/external_storage_server_env/*.test; do
+    [ -f "$f" ] || continue
+    rel="test/sql/external_storage_server_env/$(basename "$f")"
+    env_pairs="$(head -40 "$f" | sed -n 's/^#[[:space:]]*server-env:[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*\)[[:space:]]*$/\1/p')"
+    echo "Running $rel (transport=$TRANSPORT, own worker: $(echo $env_pairs)) ..."
+    port=""
+    (
+      for pair in $env_pairs; do export "$pair"; done
+      boot_http_worker "$WORKER" 0 && echo "$BOOTED_PORT" > "$STAGE/server_env_port"
+    ) && port="$(cat "$STAGE/server_env_port")"
+    if [ -z "$port" ]; then
+      echo "::error::could not boot a worker for $rel"; suite_rc=1; continue
+    fi
+    VGI_TEST_WORKER="http://localhost:${port}" run_unittest "$rel" || suite_rc=$?
+  done
 fi
 assert_bg_workers_alive || suite_rc=1
 
