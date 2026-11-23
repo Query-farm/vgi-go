@@ -16,8 +16,8 @@ replace github.com/google/flatbuffers => github.com/rustyconover/flatbuffers v25
 
 require (
 	github.com/Query-farm-haybarn/haybarn-go/v2 v2.20000.0-rc.9
-	github.com/Query-farm/vgi-rpc-go v0.37.1-0.20261121184019-59ac013bd4f1 // TODO(release-wave): switch to vgi-rpc-go v0.38.0 (blob-vendor client + upload-URL v2 + strict auth; unreleased protocol-3.4 commit 59ac013)
-	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.1-0.20261121184019-59ac013bd4f1 // TODO(release-wave): the jwtauth release carrying the hardened verifier (protocol-3.4 commit 59ac013)
+	github.com/Query-farm/vgi-rpc-go v0.37.1-0.20261123041519-c1c5cd674fbf // TODO(release-wave): switch to vgi-rpc-go v0.38.0 (blob-vendor client + upload-URL v2 + strict auth; unreleased protocol-3.4 commit c1c5cd6: StateRef, argument refs, object cache, Nested hook)
+	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.16.1-0.20261123041519-c1c5cd674fbf // TODO(release-wave): the jwtauth release carrying the hardened verifier (protocol-3.4 commit c1c5cd6)
 	github.com/apache/arrow-go/v18 v18.7.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/flatbuffers v25.12.19+incompatible
