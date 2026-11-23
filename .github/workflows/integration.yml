@@ -28,6 +28,11 @@ env:
   # arguments_ref_state_ref.test) and the native runner that branch built.
   # TODO(release-wave): back to a v2.0 commit once 3.4 lands there.
   VGI_REF: 0283f91f98f69337708c9ce4c6a40706355d3aa5
+  # The native runner comes from this vgi commit. 0283f91 changed only tests,
+  # so vgi's CI built no runner for it (path-filtered); e99683f has the same
+  # src/ tree (git diff e99683f 0283f91 -- src is empty). Set it equal to
+  # VGI_REF again whenever a VGI_REF bump changes src/.
+  VGI_RUNNER_REF: e99683f2af215c5a166697945e796c91d0cc66fe
   VGI_NATIVE_RUNNER_BRANCH: protocol-3.4
   # The vendor lane's fake vendor (test/start_fake_blob_vendor.sh): vgi-rpc-python
   # 6a21ee3 (state_ref / client_upload counters and the delete-object route).
@@ -105,6 +110,15 @@ jobs:
           path: vgi-upstream
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Checkout the vgi commit whose native runner is used
+        uses: actions/checkout@v4
+        with:
+          repository: Query-farm/vgi
+          ref: ${{ env.VGI_RUNNER_REF }}
+          path: vgi-runner-ref
+          sparse-checkout: scripts
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
@@ -125,10 +139,10 @@ jobs:
 
       - name: Download native runner matching the test suite
         run: |
-          python3 "$VGI_SRC/scripts/ci_fetch_native_runner.py" \
-            --source "$VGI_SRC" --output "$RUNNER_TEMP/vgi-native"
+          python3 "$VGI_RUNNER_SRC/scripts/ci_fetch_native_runner.py" \
+            --source "$VGI_RUNNER_SRC" --output "$RUNNER_TEMP/vgi-native"
         env:
-          VGI_SRC: ${{ github.workspace }}/vgi-upstream
+          VGI_RUNNER_SRC: ${{ github.workspace }}/vgi-runner-ref
           GH_TOKEN: ${{ github.token }}
 
       - name: Run integration suite (${{ matrix.lane }})
