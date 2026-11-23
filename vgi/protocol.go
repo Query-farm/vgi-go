@@ -863,6 +863,9 @@ func (w *Worker) handleInit(ctx context.Context, callCtx *vgirpc.CallContext, re
 		"output_schema_len", len(req.OutputSchema),
 		"phase", req.Phase,
 		"exec_id_present", req.ExecutionID != nil,
+		"bind_call_len", req.BindCall.Len(),
+		"pushdown_filters_len", lenOrZero(req.PushdownFilters),
+		"join_key_batches", lenOrZeroList(req.JoinKeys),
 	)
 	defer func() {
 		// The stream carries its (never-changing) init recipe as one StateRef,
@@ -1832,4 +1835,18 @@ var globalInitResponseWireSchema = vgiInitHeaderSchema
 // ArrowSchema returns the Arrow schema used to serialize a GlobalInitResponseWire.
 func (r *GlobalInitResponseWire) ArrowSchema() *arrow.Schema {
 	return globalInitResponseWireSchema
+}
+
+func lenOrZero(b *[]byte) int {
+	if b == nil {
+		return 0
+	}
+	return len(*b)
+}
+
+func lenOrZeroList(b *[][]byte) int {
+	if b == nil {
+		return 0
+	}
+	return len(*b)
 }

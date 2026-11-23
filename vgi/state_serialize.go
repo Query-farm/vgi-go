@@ -140,11 +140,15 @@ type finalizeProducerWire struct {
 // keep the in-memory drain they have today. See FinalizeProducerState.
 func (s *FinalizeProducerState) GobEncode() ([]byte, error) {
 	s.offloadFlush()
+	// Only the batches still to emit ride the token: an emitted batch is never
+	// read again, and carrying it put the whole flush (a single wide batch,
+	// emitted on the init turn) on the next continuation request.
+	start := min(s.BatchIdx, len(s.BatchIPC))
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(finalizeProducerWire{
 		Init:      s.Init,
-		BatchIPC:  s.BatchIPC,
-		BatchIdx:  s.BatchIdx,
+		BatchIPC:  s.BatchIPC[start:],
+		BatchIdx:  0,
 		LogKey:    s.LogKey,
 		LogCursor: s.LogCursor,
 		CacheMeta: s.CacheMeta,
