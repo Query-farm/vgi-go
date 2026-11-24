@@ -97,6 +97,10 @@ jobs:
           - { lane: shm, shm_bytes: '67108864' }
           - { lane: http }
           - { lane: vendor }
+          # s3:     http + direct S3 storage on RustFS (direct-storage contract
+          #         v1): results over 4 KiB in the bucket, requests over 32 KiB
+          #         through the worker's own presigned upload grants.
+          - { lane: s3 }
     name: integration (${{ matrix.lane }})
     steps:
       - name: Checkout vgi-go

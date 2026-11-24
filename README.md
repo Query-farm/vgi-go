@@ -767,7 +767,7 @@ verified claims as JSON and is the hosted-mode conformance fixture.
 
 ## Large values (protocol 3.4)
 
-Over HTTP a worker with a blob vendor (`VGI_BLOB_VENDOR_URL`) accepts
+Over HTTP a worker with a blob vendor (`VGI_BLOB_VENDOR_URL`) or direct object storage (below) accepts
 **argument references**: the extension uploads a large argument once, through
 the worker's upload grant, and every request of that bind carries a small
 sealed reference (`BindRequest.arguments_location`) instead of the value.
@@ -782,6 +782,41 @@ A stream's init request rides its continuation tokens as one vgi-rpc
 `StateRef`: inline when small, stored once in the vendor when large
 (`VGI_RPC_STATE_REF_INLINE_BYTES`, default 16 KiB). HTTP streams live up to
 6 hours, and a cursor over the turn budget is refused (`cursor_too_large`).
+
+### Direct object storage (S3, GCS)
+
+A self-hosted worker can keep these large values in the operator's own bucket
+instead of the blob vendor (direct-storage contract v1). Link the backends
+into the worker's main package:
+
+```go
+import _ "github.com/Query-farm/vgi-go/vgi/storage/objectstore/all" // or .../objectstore/s3, .../objectstore/gcs
+```
+
+Then configure them through the environment:
+
+```sh
+VGI_STORAGE_S3_BUCKET=my-bucket            # selects the S3 backend
+VGI_STORAGE_S3_ENDPOINT=http://minio:9000  # unset for AWS
+VGI_STORAGE_S3_ACCESS_KEY_ID=... VGI_STORAGE_S3_SECRET_ACCESS_KEY=...  # or the AWS default chain
+VGI_STORAGE_ALLOW_PLAIN_HTTP=1             # only for a plain-http endpoint
+```
+
+`VGI_STORAGE_BACKEND` (`vendor`, `s3`, `gcs` or `none`) chooses explicitly.
+Unset, the worker infers the backend from whichever of `VGI_BLOB_VENDOR_URL`,
+`VGI_STORAGE_S3_BUCKET` or `VGI_STORAGE_GCS_BUCKET` is set. When more than one
+is set, it refuses to start.
+
+A worker selected for a backend it was not built with also refuses to start,
+and the error names the import to add. The full variable table (prefix, region,
+path style, public endpoint, checksum mode, session token, URL TTL, startup
+check) is in vgi-rpc-go's API docs under "Direct object storage".
+
+The worker never deletes objects: add a lifecycle rule that expires the prefix
+after 1–2 days. With `VGI_STORAGE_S3_CHECKSUM=none`, the worker advertises no
+upload grants or argument references, but it still externalizes results.
+Function-storage externalization (`VGI_STORAGE_EXTERNALIZE`) still needs the
+blob vendor.
 
 ## Examples
 

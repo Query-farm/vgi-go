@@ -101,7 +101,9 @@ func argumentsRefAdvertised(config *vgirpc.ExternalLocationConfig, getenv func(s
 	if config == nil || config.Storage == nil {
 		return 0, nil
 	}
-	if _, ok := config.Storage.(vgirpc.UploadURLProvider); !ok {
+	// No upload grants (no provider, or a backend that turned them off,
+	// e.g. VGI_STORAGE_S3_CHECKSUM=none): no argument references either.
+	if !vgirpc.StorageVendsUploadGrants(config.Storage) {
 		return 0, nil
 	}
 	if _, ok := config.Storage.(vgirpc.ObjectStore); !ok {

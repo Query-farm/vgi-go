@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Added
+
+- **Direct object storage (S3, GCS) for self-hosted workers** (direct-storage
+  contract v1). With `VGI_STORAGE_BACKEND=s3` or `gcs`, a worker keeps
+  externalized results, upload grants, argument references and StateRef
+  objects in the operator's own bucket instead of the blob vendor. Setting
+  `VGI_STORAGE_S3_BUCKET` or `VGI_STORAGE_GCS_BUCKET` alone also selects the
+  backend. The worker signs its own URLs.
+  - Configuration is through `VGI_STORAGE_S3_*` / `VGI_STORAGE_GCS_*`,
+    `VGI_STORAGE_URL_TTL_SECONDS` and `VGI_STORAGE_ALLOW_PLAIN_HTTP`.
+  - Link the backends with
+    `import _ "github.com/Query-farm/vgi-go/vgi/storage/objectstore/all"`;
+    the example worker does.
+  - A worker refuses to start when several backends are set without
+    `VGI_STORAGE_BACKEND`, or when the selected backend is not linked.
+  - `VGI_STORAGE_S3_CHECKSUM=none` turns off upload grants and argument
+    references.
+  - New integration lane `s3`: the whole suite over http with RustFS as the
+    storage.
+
 ### Fixed
 
 - **Large storage transfers on slow links.** Through vgi-rpc-go (pinned to its

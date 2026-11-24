@@ -23,6 +23,8 @@ import (
 	"github.com/Query-farm/vgi-go/internal/workercli"
 	"github.com/Query-farm/vgi-go/vgi"
 	"github.com/Query-farm/vgi-go/vgi/storage/resolve"
+	// Direct object storage: VGI_STORAGE_BACKEND=s3|gcs (VGI_STORAGE_S3_* / VGI_STORAGE_GCS_*).
+	_ "github.com/Query-farm/vgi-go/vgi/storage/objectstore/all"
 	"github.com/Query-farm/vgi-rpc-go/conformance"
 	"github.com/Query-farm/vgi-rpc-go/vgirpc"
 	"github.com/apache/arrow-go/v18/arrow"

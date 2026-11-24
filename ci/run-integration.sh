@@ -22,8 +22,9 @@
 #   HAYBARN_UNITTEST  path to the haybarn-unittest binary
 # Optional:
 #   BIN_DIR           dir holding the built worker binaries (default: repo root)
-#   TRANSPORT         stdio | shm | launch | http | vendor   (default: stdio)
+#   TRANSPORT         stdio | shm | launch | http | vendor | s3   (default: stdio)
 #                     vendor = the http lane with the blob vendor: see below
+#                     s3     = the http lane with direct S3 storage (RustFS)
 #   VGI_RPC_SHM_SIZE_BYTES  shm side-channel segment size (the shm lane)
 #   RUNNER_LINKS_EXTENSIONS  1 uses the native runner's linked extensions and disables installs
 #   STAGE             scratch dir for the preprocessed test tree (default: mktemp)
@@ -82,7 +83,7 @@ EXTRA_SKIP=()
 #     its own comment), and it passes over launch: against the Go fixture worker
 #     (verified: 36 assertions). Keeping it preserves coverage of exactly what
 #     the launcher changes — connection multiplexing.
-if [ "$TRANSPORT" = "http" ] || [ "$TRANSPORT" = "vendor" ]; then
+if [ "$TRANSPORT" = "http" ] || [ "$TRANSPORT" = "vendor" ] || [ "$TRANSPORT" = "s3" ]; then
   AWK_HTTP=1
   # Dropped on http only:
   #   * projection_pushdown_repro.test — one POST round-trip per two rows; fully
@@ -189,6 +190,8 @@ fi
 # Each line is "<pid>\t<critical>\t<binary>\t<logfile>" (see boot_http_worker).
 BG_PIDS_FILE="$(mktemp)"
 cleanup() {
+  # The s3 lane's RustFS container (ci/start-rustfs.sh).
+  if declare -F stop_rustfs >/dev/null; then stop_rustfs; fi
   [ -f "$BG_PIDS_FILE" ] || return 0
   while IFS="$(printf '\t')" read -r p _ _ _; do
     [ -n "$p" ] && kill "$p" 2>/dev/null || true
@@ -360,7 +363,15 @@ case "$TRANSPORT" in
     fi
     SUITE_GLOB="test/sql/integration/*"
     ;;
-  http|vendor)
+  http|vendor|s3)
+    # s3: this http lane with direct S3 storage (direct-storage contract v1)
+    # on RustFS in docker (ci/start-rustfs.sh), no vendor: the whole suite
+    # runs with results over 4 KiB externalized to the bucket and requests
+    # over 32 KiB uploaded through the worker's own presigned upload grants.
+    if [ "$TRANSPORT" = "s3" ]; then
+      # shellcheck source=/dev/null
+      source "$HERE/start-rustfs.sh"
+    fi
     # vendor: this http lane with vgi-rpc's fake blob vendor. The extension's
     # test/start_fake_blob_vendor.sh starts it (uvx, pinned commit) and exports
     # VGI_BLOB_VENDOR_URL / _TOKEN, VGI_RPC_EXTERNALIZE_THRESHOLD_BYTES,
@@ -402,7 +413,7 @@ case "$TRANSPORT" in
     SUITE_GLOB="test/sql/integration/*"
     ;;
   *)
-    echo "::error::unknown TRANSPORT=$TRANSPORT (expected stdio|shm|launch|http|vendor)"; exit 1 ;;
+    echo "::error::unknown TRANSPORT=$TRANSPORT (expected stdio|shm|launch|http|vendor|s3)"; exit 1 ;;
 esac
 
 # ---------------------------------------------------------------------------
@@ -478,7 +489,7 @@ case "$TRANSPORT" in
       'require-env VGI_VERSIONED_TABLES_HTTP_WORKER'
     )
     ;;
-  http|vendor)
+  http|vendor|s3)
     # Over http: launcher tests gate off, and the subprocess-path worker vars
     # are unset (only their _HTTP_ variants would apply, and only the main
     # worker is booted).
@@ -508,7 +519,7 @@ esac
 case "$TRANSPORT" in
   stdio)      MIN_EXECUTED="${MIN_EXECUTED:-253}" ;;
   shm|launch) MIN_EXECUTED="${MIN_EXECUTED:-250}" ;;
-  http)       MIN_EXECUTED="${MIN_EXECUTED:-240}" ;;
+  http|s3)    MIN_EXECUTED="${MIN_EXECUTED:-240}" ;;
   # The http floor plus external_storage/ (7 files run, 3 fetch_* skip).
   vendor)     MIN_EXECUTED="${MIN_EXECUTED:-247}" ;;
 esac

@@ -2070,11 +2070,13 @@ func (w *Worker) newHttpServer() (*vgirpc.HttpServer, error) {
 	// get upload URLs for requests over VGI_RPC_MAX_REQUEST_BYTES (advertised
 	// and enforced whenever set), and VGI_RPC_MAX_UPLOAD_BYTES is advertised.
 	// Applied after SetPrefix: vending upload URLs adds a route.
-	config, err := vgirpc.ConfigureHTTPServerFromEnv(hs, nil)
+	//
+	// Or direct object storage (VGI_STORAGE_BACKEND=s3|gcs, or a
+	// VGI_STORAGE_S3_BUCKET / VGI_STORAGE_GCS_BUCKET alone): the operator's
+	// own bucket plays the vendor's role, signing its own URLs.
+	config, err := w.configureStorage(hs, passAuth != nil)
 	if err != nil {
-		return nil, fmt.Errorf("blob vendor: %w", err)
-	} else if config != nil {
-		fmt.Fprintf(os.Stderr, "Blob vendor enabled: threshold=%d bytes\n", config.ExternalizeThresholdBytes)
+		return nil, err
 	}
 	// Protocol 3.4 argument references: advertise VGI-Arguments-Ref-Bytes
 	// whenever this server vends upload URLs from an ObjectStore.
