@@ -799,7 +799,7 @@ Then configure them through the environment:
 VGI_STORAGE_S3_BUCKET=my-bucket            # selects the S3 backend
 VGI_STORAGE_S3_ENDPOINT=http://minio:9000  # unset for AWS
 VGI_STORAGE_S3_ACCESS_KEY_ID=... VGI_STORAGE_S3_SECRET_ACCESS_KEY=...  # or the AWS default chain
-VGI_STORAGE_ALLOW_PLAIN_HTTP=1             # only for a plain-http endpoint
+VGI_STORAGE_ALLOW_PLAIN_HTTP=1             # required for an http:// endpoint or public endpoint
 ```
 
 `VGI_STORAGE_BACKEND` (`vendor`, `s3`, `gcs` or `none`) chooses explicitly.
@@ -812,11 +812,32 @@ and the error names the import to add. The full variable table (prefix, region,
 path style, public endpoint, checksum mode, session token, URL TTL, startup
 check) is in vgi-rpc-go's API docs under "Direct object storage".
 
-The worker never deletes objects: add a lifecycle rule that expires the prefix
-after 1–2 days. With `VGI_STORAGE_S3_CHECKSUM=none`, the worker advertises no
-upload grants or argument references, but it still externalizes results.
-Function-storage externalization (`VGI_STORAGE_EXTERNALIZE`) still needs the
-blob vendor.
+Key layout:
+- `<prefix>rpc/` holds results, upload grants, StateRef and argument objects.
+  Add a lifecycle rule expiring it after 1 day.
+- `<prefix>fs/` holds function storage. Add a lifecycle rule expiring it after
+  2 days.
+
+These are the vendor's lifetimes. Function storage (`VGI_STORAGE_EXTERNALIZE`)
+uses the bucket's `fs/` area. Its deletes are best effort: the DELETE is issued
+and failures are ignored, with the lifecycle rule as the backstop.
+
+Other behaviour:
+- **Plain http:** an `http://` endpoint or public endpoint refuses to start
+  unless `VGI_STORAGE_ALLOW_PLAIN_HTTP=1` is set. The extension needs
+  `vgi_storage_allow_plain_http` as well.
+- **Public endpoint:** the worker must also be able to reach
+  `VGI_STORAGE_S3_PUBLIC_ENDPOINT`, because request-upload pointers are fetched
+  by URL. Argument references and StateRefs go by object id through the
+  internal endpoint.
+- **Session tokens:** an explicit `VGI_STORAGE_S3_SESSION_TOKEN` should come
+  with `VGI_STORAGE_S3_SESSION_EXPIRES` (RFC 3339 or epoch seconds), so URL
+  lifetimes are capped at the session. Without it the worker logs a startup
+  warning.
+- **CHECKSUM=none:** with `VGI_STORAGE_S3_CHECKSUM=none`, the worker advertises
+  no upload grants or argument references, but it still externalizes results.
+- **Startup check:** `VGI_STORAGE_GCS_VERIFY=1` checks the GCS bucket at
+  startup, as `VGI_STORAGE_S3_VERIFY=1` does for S3.
 
 ## Examples
 

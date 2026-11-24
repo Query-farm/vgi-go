@@ -74,7 +74,9 @@ import (
 // Environment variables read by WrapStorageFromEnv.
 const (
 	// StorageExternalizeEnv ("1", "true", "yes", "on") wraps any backend;
-	// it then requires vgirpc.EnvBlobVendorURL.
+	// it then requires blob storage: vgirpc.EnvBlobVendorURL, or a direct
+	// bucket (VGI_STORAGE_BACKEND=s3|gcs), whose <prefix>fs/ area holds the
+	// blobs.
 	StorageExternalizeEnv = "VGI_STORAGE_EXTERNALIZE"
 	// StorageExternalizeBytesEnv is the externalization threshold.
 	StorageExternalizeBytesEnv = "VGI_STORAGE_EXTERNALIZE_BYTES"
@@ -356,8 +358,9 @@ func vendorTokenFromEnv() string {
 // A backend with a per-value cap (maxValueBytes > 0, i.e. the Cloudflare
 // Durable Object) is always wrapped, vendor or not, so its stored format is
 // the same in every process. Any other backend (maxValueBytes 0) is wrapped
-// only with VGI_STORAGE_EXTERNALIZE=1, which then requires
-// VGI_BLOB_VENDOR_URL.
+// only with VGI_STORAGE_EXTERNALIZE=1, which then requires blob storage:
+// VGI_BLOB_VENDOR_URL, or a direct bucket (VGI_STORAGE_BACKEND=s3|gcs, its
+// <prefix>fs/ area).
 func WrapStorageFromEnv(base FunctionStorage, maxValueBytes int) (FunctionStorage, error) {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(StorageExternalizeEnv))) {
 	case "1", "true", "yes", "on":
@@ -365,23 +368,24 @@ func WrapStorageFromEnv(base FunctionStorage, maxValueBytes int) (FunctionStorag
 		if maxValueBytes <= 0 {
 			return base, nil
 		}
-		blobs, err := StorageBlobClientFromEnv()
+		blobs, err := storageBlobsFromEnv()
 		if err != nil {
 			return nil, err
 		}
 		return newExternalizingFromEnv(base, blobs, maxValueBytes)
 	}
-	blobs, err := StorageBlobClientFromEnv()
+	blobs, err := storageBlobsFromEnv()
 	if err != nil {
 		return nil, err
 	}
 	if blobs == nil {
-		return nil, fmt.Errorf("%s=1 needs the blob vendor: set %s", StorageExternalizeEnv, vgirpc.EnvBlobVendorURL)
+		return nil, fmt.Errorf("%s=1 needs blob storage: set %s, or %s=s3|gcs with its bucket",
+			StorageExternalizeEnv, vgirpc.EnvBlobVendorURL, vgirpc.EnvStorageBackend)
 	}
 	return newExternalizingFromEnv(base, blobs, maxValueBytes)
 }
 
-func newExternalizingFromEnv(base FunctionStorage, blobs *vgirpc.VendorBlobClient, maxValueBytes int) (FunctionStorage, error) {
+func newExternalizingFromEnv(base FunctionStorage, blobs StorageBlobs, maxValueBytes int) (FunctionStorage, error) {
 	threshold, err := StorageExternalizeBytesFromEnv()
 	if err != nil {
 		return nil, err
@@ -401,7 +405,7 @@ func newExternalizingFromEnv(base FunctionStorage, blobs *vgirpc.VendorBlobClien
 // this file. Safe for concurrent use when the wrapped backend is.
 type ExternalizingStorage struct {
 	base          FunctionStorage
-	blobs         *vgirpc.VendorBlobClient
+	blobs         StorageBlobs
 	threshold     int
 	maxValueBytes int
 	shardKey      string
@@ -424,7 +428,11 @@ var (
 // inline. With a vendor, values of at least threshold bytes are stored as
 // blobs. maxValueBytes is the backend's per-value cap (0 for none): threshold
 // may not exceed it, and with no vendor an over-cap value is refused.
-func NewExternalizingStorage(base FunctionStorage, blobs *vgirpc.VendorBlobClient, threshold, maxValueBytes int) (*ExternalizingStorage, error) {
+func NewExternalizingStorage(base FunctionStorage, blobs StorageBlobs, threshold, maxValueBytes int) (*ExternalizingStorage, error) {
+	// A typed nil vendor client means "no blob store", not a store.
+	if c, ok := blobs.(*vgirpc.VendorBlobClient); ok && c == nil {
+		blobs = nil
+	}
 	if threshold < 1 || (maxValueBytes > 0 && threshold > maxValueBytes) {
 		limit := "unbounded"
 		if maxValueBytes > 0 {

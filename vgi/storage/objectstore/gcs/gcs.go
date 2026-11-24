@@ -15,6 +15,16 @@ import (
 
 func init() {
 	vgi.RegisterObjectStorageBackend("gcs", func(getenv func(string) string) (vgi.ObjectStorage, error) {
-		return vgigcs.FromEnv(getenv)
+		storage, err := vgigcs.FromEnv(getenv)
+		if err != nil {
+			return nil, err
+		}
+		return withFunctionStore{storage}, nil
 	})
 }
+
+// withFunctionStore exposes the bucket's function-storage area.
+type withFunctionStore struct{ *vgigcs.GCSStorage }
+
+// FunctionObjectStore is the bucket's function-storage area (<prefix>fs/).
+func (w withFunctionStore) FunctionObjectStore() vgi.FunctionObjectStore { return w.FunctionStore() }

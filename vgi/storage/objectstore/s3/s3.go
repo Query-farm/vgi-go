@@ -29,6 +29,9 @@ func init() {
 // described adds the startup summary.
 type described struct{ *vgis3.S3Storage }
 
+// FunctionObjectStore is the bucket's function-storage area (<prefix>fs/).
+func (d described) FunctionObjectStore() vgi.FunctionObjectStore { return d.FunctionStore() }
+
 // Describe is the startup summary line (no secrets).
 func (d described) Describe() string {
 	return fmt.Sprintf("s3 bucket=%s region=%s checksum=%s upload_grants=%v",

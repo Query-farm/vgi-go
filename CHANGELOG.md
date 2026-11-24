@@ -19,6 +19,15 @@
     `VGI_STORAGE_BACKEND`, or when the selected backend is not linked.
   - `VGI_STORAGE_S3_CHECKSUM=none` turns off upload grants and argument
     references.
+  - Key layout: `<prefix>rpc/` (results, grants, StateRef and argument
+    objects; 1-day lifecycle) and `<prefix>fs/` (function storage; 2-day
+    lifecycle).
+  - Function storage (`VGI_STORAGE_EXTERNALIZE`) can use the bucket's `fs/`
+    area (`StorageBlobs`, `NewObjectStoreBlobs`), with best-effort deletes.
+  - New settings: `VGI_STORAGE_S3_SESSION_EXPIRES` (caps URL lifetimes under an
+    explicit session token; without it a startup warning) and
+    `VGI_STORAGE_GCS_VERIFY`. An `http://` endpoint refuses to start without
+    `VGI_STORAGE_ALLOW_PLAIN_HTTP=1`.
   - New integration lane `s3`: the whole suite over http with RustFS as the
     storage.
 

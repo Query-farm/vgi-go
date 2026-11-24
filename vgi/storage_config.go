@@ -30,6 +30,11 @@ func (w *Worker) configureStorage(hs *vgirpc.HttpServer, hosted bool) (*vgirpc.E
 		}
 		fmt.Fprintf(os.Stderr, "Direct storage enabled: %s threshold=%d bytes\n",
 			objectStorageSummary(storage), config.ExternalizeThresholdBytes)
+		if w, ok := storage.(interface{ StartupWarnings() []string }); ok {
+			for _, msg := range w.StartupWarnings() {
+				LogRPC.Warn(msg)
+			}
+		}
 		if hosted {
 			LogRPC.Warn("Orchard hosted mode with direct " + backend + " storage: large values go to the operator's bucket, not the blob vendor")
 		}
