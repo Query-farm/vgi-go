@@ -16,10 +16,10 @@ replace github.com/google/flatbuffers => github.com/rustyconover/flatbuffers v25
 
 require (
 	github.com/Query-farm-haybarn/haybarn-go/v2 v2.20000.0-rc.9
-	github.com/Query-farm/vgi-rpc-go v0.38.1-0.20261124175155-d20abba7d4a0
-	github.com/Query-farm/vgi-rpc-go/vgirpc/gcs v0.17.1-0.20261124175155-d20abba7d4a0
+	github.com/Query-farm/vgi-rpc-go v0.38.1-0.20261124180529-63e2b444ffa7
+	github.com/Query-farm/vgi-rpc-go/vgirpc/gcs v0.17.1-0.20261124180529-63e2b444ffa7
 	github.com/Query-farm/vgi-rpc-go/vgirpc/jwtauth v0.17.0
-	github.com/Query-farm/vgi-rpc-go/vgirpc/s3 v0.17.1-0.20261124175155-d20abba7d4a0
+	github.com/Query-farm/vgi-rpc-go/vgirpc/s3 v0.17.1-0.20261124180529-63e2b444ffa7
 	github.com/apache/arrow-go/v18 v18.7.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/flatbuffers v25.12.19+incompatible

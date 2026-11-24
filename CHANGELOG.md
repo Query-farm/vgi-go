@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Protocol version negotiation** (PROTOCOL_VERSIONS_V1, via vgi-rpc-go).
+  Every response advertises the protocols the worker gates
+  (`VGI-Protocol-Versions: vgi.v3=3.4-3.4`, plus `vgi.attach_tickets.v1=2.0-2.0`
+  in hosted mode and any versioned protocol the worker hosts), hosted-mode 401s
+  and `HEAD /health` included, and reflection carries the same string as
+  `vgi_rpc.protocol_versions` on every transport. A request outside the window
+  is refused with `protocol_version_unsupported` naming both windows.
+  - `VGI_TEST_PROTOCOL_RANGE` (fixture switch): a bare range (`3.3-3.3`)
+    overrides the `vgi.v3` window, `name=MIN-MAX[, ...]` names protocols; a
+    malformed value refuses to start.
 - **Direct object storage (S3, GCS) for self-hosted workers** (direct-storage
   contract v1). With `VGI_STORAGE_BACKEND=s3` or `gcs`, a worker keeps
   externalized results, upload grants, argument references and StateRef

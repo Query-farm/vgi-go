@@ -97,7 +97,13 @@ jobs:
           python-version: '3.13'
 
       - name: Clone vgi-rpc-python reference
-        run: git clone --depth 1 https://github.com/Query-farm/vgi-rpc-python.git "$RUNNER_TEMP/vgi-rpc-python"
+        run: |
+          # The reference branch of the same name when it exists (protocol-3.4
+          # tracks vgi-rpc-python protocol-3.4), else its default branch.
+          REF="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+          git clone --depth 1 -b "$REF" https://github.com/Query-farm/vgi-rpc-python.git "$RUNNER_TEMP/vgi-rpc-python" \
+            || git clone --depth 1 https://github.com/Query-farm/vgi-rpc-python.git "$RUNNER_TEMP/vgi-rpc-python"
+          git -C "$RUNNER_TEMP/vgi-rpc-python" log --oneline -1
 
       - name: Install the reference's conformance suite
         run: |

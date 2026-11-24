@@ -1770,8 +1770,8 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 	// key gets ProtocolNotSupportedError.
 	s.SetServiceName(ProtocolName)
 	// Declare the application protocol surface version. The framework
-	// advertises it via Reflection.v1 and enforces an exact major+minor match
-	// against the client's vgi_rpc.protocol_version at dispatch.
+	// advertises its window (VGI-Protocol-Versions, Reflection.v1) and refuses
+	// a client vgi_rpc.protocol_version outside it at dispatch.
 	s.SetProtocolVersion(ProtocolVersion)
 	// Tracebacks are on by default (WIRE_PROTOCOL.md §8); WithIncludeTracebacks
 	// or VGI_INCLUDE_TRACEBACKS turns them off for every transport.
@@ -1825,6 +1825,15 @@ func (w *Worker) buildServer(transport serverTransport) (*vgirpc.Server, error) 
 		if err := w.hostAttachTickets(s, grantKeys); err != nil {
 			return nil, err
 		}
+	}
+
+	// Every protocol hosted above that declares a version is gated and
+	// advertised by vgi-rpc (VGI-Protocol-Versions / vgi_rpc.protocol_versions:
+	// vgi.v3=3.4-3.4, vgi.attach_tickets.v1=2.0-2.0 when hosted, and any
+	// versioned protocol the worker hosts). The fixture switch overrides the
+	// windows so a test can stand up a "fake older worker".
+	if err := applyTestProtocolRanges(s); err != nil {
+		return nil, err
 	}
 
 	return s, nil

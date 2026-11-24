@@ -312,6 +312,23 @@ func (s *hostedServer) claims(t *testing.T, token string) (map[string]any, error
 	return out, nil
 }
 
+// assertHostedVersions: hosted responses -- 401s included -- advertise every
+// protocol the worker gates, vgi.v3 first (PROTOCOL_VERSIONS_V1 §4.1).
+func assertHostedVersions(t *testing.T, h http.Header) {
+	t.Helper()
+	values, ok := h[http.CanonicalHeaderKey(vgirpc.ProtocolVersionsHeader)]
+	if !ok || len(values) != 1 {
+		t.Fatalf("no VGI-Protocol-Versions in %v", h)
+	}
+	parsed := vgirpc.ParseProtocolVersions(values[0])
+	if !strings.HasPrefix(values[0], "vgi.v3=3.4-3.4") || parsed["vgi.v3"].String() != "3.4-3.4" {
+		t.Fatalf("VGI-Protocol-Versions = %q", values[0])
+	}
+	if len(parsed) != len(strings.Split(values[0], ",")) {
+		t.Fatalf("unparseable VGI-Protocol-Versions %q", values[0])
+	}
+}
+
 func assertHosted401(t *testing.T, resp *http.Response) {
 	t.Helper()
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -323,6 +340,7 @@ func assertHosted401(t *testing.T, resp *http.Response) {
 	if resp.Header.Get("VGI-Supported-Encodings") == "" {
 		t.Fatal("401 lacks the capability headers")
 	}
+	assertHostedVersions(t, resp.Header)
 	switch resp.Header.Get("VGI-Auth-Reason") {
 	case "missing_credential", "invalid_credential", "expired_credential":
 	default:
@@ -365,6 +383,7 @@ func TestHostedHeadHealthIsAnonymous(t *testing.T) {
 	if resp.Header.Get("VGI-Supported-Encodings") == "" {
 		t.Fatal("HEAD /health lacks the capability headers")
 	}
+	assertHostedVersions(t, resp.Header)
 	// VGI_RPC_MAX_REQUEST_BYTES unset: the hosted default cap is advertised.
 	if got, want := resp.Header.Get("VGI-Max-Request-Bytes"), fmt.Sprint(vgi.HostedDefaultMaxRequestBytes); got != want {
 		t.Fatalf("VGI-Max-Request-Bytes = %q, want %q", got, want)
