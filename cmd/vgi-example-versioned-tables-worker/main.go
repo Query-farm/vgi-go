@@ -14,6 +14,9 @@
 package main
 
 import (
+	// Direct object storage: VGI_STORAGE_BACKEND=s3|gcs (VGI_STORAGE_S3_* / VGI_STORAGE_GCS_*).
+	_ "github.com/Query-farm/vgi-go/vgi/storage/objectstore/all"
+
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
