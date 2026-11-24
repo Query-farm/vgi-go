@@ -58,12 +58,12 @@ jobs:
 
       # The externalizing-storage tests (vgi/storage_blobs_test.go) run against
       # vgi-rpc-python's fake blob vendor, the same build the extension's
-      # test/start_fake_blob_vendor.sh pins.
+      # test/start_fake_blob_vendor.sh pins (6a21ee3), as released in vgi-rpc 0.57.0.
       - uses: astral-sh/setup-uv@v6
 
       - name: Unit tests with coverage
         env:
-          VGI_RPC_FAKE_VENDOR_CMD: uvx --from git+https://github.com/Query-farm/vgi-rpc-python@6a21ee3b2fb21d9c348c9b615fd97dce8e0bb852 vgi-rpc-fake-vendor
+          VGI_RPC_FAKE_VENDOR_CMD: uvx --from vgi-rpc==0.57.0 vgi-rpc-fake-vendor
         run: make test-unit
 
       - name: Verify consumer FlatBuffers replacement
@@ -97,8 +97,7 @@ jobs:
           python-version: '3.13'
 
       - name: Clone vgi-rpc-python reference
-        # TODO(release-wave): back to main (unpinned) once protocol-3.4 is merged.
-        run: git clone --depth 1 --branch protocol-3.4 https://github.com/Query-farm/vgi-rpc-python.git "$RUNNER_TEMP/vgi-rpc-python"
+        run: git clone --depth 1 https://github.com/Query-farm/vgi-rpc-python.git "$RUNNER_TEMP/vgi-rpc-python"
 
       - name: Install the reference's conformance suite
         run: |

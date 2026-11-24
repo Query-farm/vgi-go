@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.44.0 (2026-11-23)
 
 ### Breaking
 
@@ -9,8 +9,8 @@
   vgi itself changes: 3.4 signals vgi-rpc upload-URL protocol v2. The HTTP
   serve path advertises `VGI-Upload-URL-Support: 2`, client uploads are
   vended as sized grants (size + SHA-256, verified by storage), and a request
-  pointer without `vgi_rpc.location.sha256` is refused. Pins the unreleased
-  vgi-rpc-go `protocol-3.4` commit until the release wave.
+  pointer without `vgi_rpc.location.sha256` is refused. Requires vgi-rpc-go
+  v0.38.0 and `vgirpc/jwtauth` v0.17.0.
 - **Large values (protocol 3.4, vgi `docs/large-values-3.4.md`).**
   - Generated bind types: `BindRequestWire`, `InitRequestWire` and the
     cardinality, statistics, plan, projection and dynamic-to-string requests

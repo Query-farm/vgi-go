@@ -22,7 +22,7 @@ concurrency:
 env:
   # vgi protocol-3.4 with the hosted-mode harness (0283f91: its client is
   # vgi-python 33099b4 / vgi-rpc 6a21ee3, which speak the 3.4 BindRequest).
-  # TODO(release-wave): a v2.0 commit once 3.4 lands there.
+  # TODO(extension-release): a v2.0 commit once the 3.4 extension ships there.
   VGI_HOSTED_REF: 0283f91f98f69337708c9ce4c6a40706355d3aa5
 
 jobs:
