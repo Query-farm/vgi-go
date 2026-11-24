@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Large storage transfers on slow links.** Through vgi-rpc-go (pinned to its
+  `protocol-3.4` branch until the release wave), every storage request (the
+  worker's externalized-result PUTs, argument, StateRef and pointer GETs,
+  request uploads) has a 30 s connect timeout and a 30 s stall timeout
+  (`VGI_RPC_STORAGE_STALL_TIMEOUT_SECONDS`) instead of a 30 s whole-request
+  deadline. A 100 MB result or a 300 MB argument at 2 MB/s now moves in one
+  attempt; it used to time out, and the upload was retried three times.
+- Catalog snapshot objects (`S3CatalogObjectStorage` requests and the
+  publication readback) keep a whole-request deadline, now
+  max(30 s, size / `MinTransferRate`) with a 64 KiB/s default floor
+  (`CatalogSnapshotPolicy.MinTransferRate`,
+  `S3CatalogObjectStorage.MinTransferRate`), on the storage transport. It was
+  a flat 30 s, which cut off any catalog object slower than size / 30 s.
+
 ## 0.44.0 (2026-11-23)
 
 ### Breaking

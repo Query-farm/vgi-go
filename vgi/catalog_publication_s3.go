@@ -33,8 +33,11 @@ type S3CatalogObjectStorage struct {
 	Client       *http.Client
 	ObjectPrefix string
 	Retention    time.Duration
-	mu           sync.Mutex
-	locations    map[string]CatalogPublicationLocation
+	// MinTransferRate is the floor rate (bytes/s) a request deadline allows
+	// for: max(30s, body size / rate). Default 64 KiB/s.
+	MinTransferRate int64
+	mu              sync.Mutex
+	locations       map[string]CatalogPublicationLocation
 }
 
 func (s *S3CatalogObjectStorage) request(key, method string, headers http.Header, body []byte) (*http.Response, error) {
@@ -47,12 +50,13 @@ func (s *S3CatalogObjectStorage) request(key, method string, headers http.Header
 		return nil, err
 	}
 	req.Header = headers.Clone()
-	client := http.Client{}
+	client := http.Client{Transport: catalogStorageTransport()}
 	if s.Client != nil {
 		client = *s.Client
 	}
-	if client.Timeout == 0 || client.Timeout > 30*time.Second {
-		client.Timeout = 30 * time.Second
+	deadline := catalogTransferDeadline(int64(len(body)), s.MinTransferRate)
+	if client.Timeout == 0 || client.Timeout > deadline {
+		client.Timeout = deadline
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return fmt.Errorf("catalog storage redirect refused") }
 	return client.Do(req)

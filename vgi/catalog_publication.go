@@ -99,6 +99,9 @@ type CatalogSnapshotPolicy struct {
 	MaxStoredBytes       int64
 	MaxCachedManifests   int
 	ReferenceGrace       time.Duration
+	// MinTransferRate is the floor rate (bytes/s) the readback deadline
+	// allows for: max(30s, stored size / rate). Default 64 KiB/s.
+	MinTransferRate int64
 }
 
 // WithCatalogSnapshotPolicy enables immutable external catalog delivery.
@@ -490,11 +493,12 @@ func (m *CatalogSnapshotManager) validate(p CatalogPublicationManifest, key stri
 		return fmt.Errorf("publication repository requires bounded resolver")
 	}
 	bounded := *config
-	client := http.Client{Timeout: 30 * time.Second}
+	deadline := catalogTransferDeadline(p.StoredSize, m.policy.MinTransferRate)
+	client := http.Client{Timeout: deadline, Transport: catalogStorageTransport()}
 	if config.HTTPClient != nil {
 		client = *config.HTTPClient
-		if client.Timeout <= 0 || client.Timeout > 30*time.Second {
-			client.Timeout = 30 * time.Second
+		if client.Timeout <= 0 || client.Timeout > deadline {
+			client.Timeout = deadline
 		}
 	}
 	bounded.HTTPClient = &client
