@@ -15,6 +15,8 @@ import (
 	"github.com/Query-farm/vgi-go/examples/writable_tx"
 	"github.com/Query-farm/vgi-go/internal/workercli"
 	"github.com/Query-farm/vgi-go/vgi"
+	// Direct object storage: the integration s3 lane boots this worker over http too.
+	_ "github.com/Query-farm/vgi-go/vgi/storage/objectstore/all"
 )
 
 func main() {
