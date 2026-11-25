@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.44.2 (2026-11-25)
+
+Patch release; the wire protocol stays 3.4 and the dependencies are unchanged
+from 0.44.1.
 
 ### Fixed
 
