@@ -58,12 +58,12 @@ jobs:
 
       # The externalizing-storage tests (vgi/storage_blobs_test.go) run against
       # vgi-rpc-python's fake blob vendor, the same build the extension's
-      # test/start_fake_blob_vendor.sh pins (6a21ee3), as released in vgi-rpc 0.57.0.
+      # test/start_fake_blob_vendor.sh pins (6a21ee3), as released in vgi-rpc 0.57.0 and later.
       - uses: astral-sh/setup-uv@v6
 
       - name: Unit tests with coverage
         env:
-          VGI_RPC_FAKE_VENDOR_CMD: uvx --from vgi-rpc==0.57.0 vgi-rpc-fake-vendor
+          VGI_RPC_FAKE_VENDOR_CMD: uvx --from vgi-rpc==0.57.1 vgi-rpc-fake-vendor
         run: make test-unit
 
       - name: Verify consumer FlatBuffers replacement

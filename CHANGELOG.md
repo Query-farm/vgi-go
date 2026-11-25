@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.44.1 (2026-11-24)
+
+Patch release; the wire protocol stays 3.4. Requires vgi-rpc-go v0.38.1
+(`vgirpc/gcs`, `vgirpc/jwtauth`, `vgirpc/s3` v0.17.1). The expression-filter engine
+(`vgi/exprduckdb`) moves to Haybarn 2.0.1rc3 (haybarn-go v2.20001.0-rc.3);
+the 3.4 extension is served only to Haybarn 2.0.1.
 
 ### Added
 
@@ -43,8 +48,7 @@
 
 ### Fixed
 
-- **Large storage transfers on slow links.** Through vgi-rpc-go (pinned to its
-  `protocol-3.4` branch until the release wave), every storage request (the
+- **Large storage transfers on slow links.** Through vgi-rpc-go v0.38.1, every storage request (the
   worker's externalized-result PUTs, argument, StateRef and pointer GETs,
   request uploads) has a 30 s connect timeout and a 30 s stall timeout
   (`VGI_RPC_STORAGE_STALL_TIMEOUT_SECONDS`) instead of a 30 s whole-request

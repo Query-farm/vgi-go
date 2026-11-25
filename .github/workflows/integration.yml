@@ -26,7 +26,8 @@ env:
   # protocol-3.4: vgi protocol-3.4 0283f91 (argument references, init StateRef,
   # the large-value files in test/sql/external_storage, SDK-neutral
   # arguments_ref_state_ref.test) and the native runner that branch built.
-  # TODO(extension-release): back to a v2.0 commit once the 3.4 extension ships there.
+  # The 3.4 extension is published (vgi v2.0); this pin may move to a v2.0
+  # commit whose native runner exists.
   VGI_REF: 0283f91f98f69337708c9ce4c6a40706355d3aa5
   # The native runner comes from this vgi commit. 0283f91 changed only tests,
   # so vgi's CI built no runner for it (path-filtered); e99683f has the same
