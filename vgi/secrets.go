@@ -154,7 +154,10 @@ func (s Secrets) LookupNamed(secretType, name string) (map[string]interface{}, b
 }
 
 // ForScope returns the fields of the resolved secret (of any type) whose scope
-// has the longest prefix of path; failing that, an unscoped secret. Prefer
+// has the longest prefix of path; failing that, an unscoped secret. Prefixes
+// match as DuckDB matches them (see ScopeMatches): an authority-only scope
+// such as snmp://10.0.0.1 covers only that host and paths under it, never
+// snmp://10.0.0.15 or snmp://10.0.0.1:161. Prefer
 // ForScopeOfType, which restricts the candidates to one secret type.
 // ok is false when no secret's scope matches and none is unscoped.
 func (s Secrets) ForScope(path string) (map[string]interface{}, bool) {
@@ -162,7 +165,8 @@ func (s Secrets) ForScope(path string) (map[string]interface{}, bool) {
 }
 
 // ForScopeOfType selects, among the secrets of secretType, the one whose scope
-// (newline-joined prefixes) has the longest prefix of path; failing that, one
+// (newline-joined prefixes) has the longest prefix of path, matched as in
+// ScopeMatches (authority-only scopes stop at the authority); failing that, one
 // with an empty scope; failing that, none (ok false). Use it when a function
 // requested several secrets of one type for different scopes (e.g. one per
 // cloud bucket) and must pick the right one per path.
@@ -193,7 +197,7 @@ func (s Secrets) selectForScope(path, secretType string) (map[string]interface{}
 			continue
 		}
 		for _, prefix := range scopes {
-			if strings.HasPrefix(path, prefix) && len(prefix) > bestLen {
+			if ScopeMatches(prefix, path) && len(prefix) > bestLen {
 				bestLen = len(prefix)
 				best = fields
 			}
@@ -206,6 +210,45 @@ func (s Secrets) selectForScope(path, secretType string) (map[string]interface{}
 		return fallback, true
 	}
 	return nil, false
+}
+
+// uriAuthority returns the URI authority of text, or "". It mirrors DuckDB's
+// StringUtil::GetURIAuthority: text is a URI only if it contains "://" after a
+// non-empty scheme and its first '/' or backslash is the one that starts that "://".
+// The authority runs from after "://" to the first '/', backslash, '?' or '#' (or
+// the end). Go strings index by byte, as std::string does.
+func uriAuthority(text string) string {
+	schemeEnd := strings.Index(text, "://")
+	if schemeEnd <= 0 || strings.IndexAny(text, "/\\") != schemeEnd+1 {
+		return ""
+	}
+	start := schemeEnd + 3
+	if end := strings.IndexAny(text[start:], "/\\?#"); end >= 0 {
+		return text[start : start+end]
+	}
+	return text[start:]
+}
+
+// ScopeMatches reports whether a secret scope prefix covers path, exactly as
+// DuckDB decides. A scope matches when it is a string prefix of path, except
+// that an authority-only URI scope (scheme://authority with nothing after the
+// authority) has an implicit trailing '/': snmp://10.0.0.1 covers
+// snmp://10.0.0.1 and snmp://10.0.0.1/x but not snmp://10.0.0.15 or
+// snmp://10.0.0.1:161, and s3://bucket no longer covers s3://bucket-evil/.
+// This is DuckDB's BaseSecret::MatchScore as of the Haybarn 2.0.1 engine
+// (upstream duckdb#28684). Matching it keeps a worker from choosing a secret
+// DuckDB itself would not resolve for that path. An empty prefix is not a
+// scope; selectors treat unscoped secrets as the fallback separately.
+func ScopeMatches(prefix, path string) bool {
+	if prefix == "" || !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	authority := uriAuthority(prefix)
+	authorityOnly := authority != "" && len(prefix) == strings.Index(prefix, "://")+3+len(authority)
+	if !authorityOnly {
+		return true
+	}
+	return len(path) == len(prefix) || path[len(prefix)] == '/'
 }
 
 // MissingSecretError is returned by Secrets.Require when no secret of the

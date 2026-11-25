@@ -268,7 +268,8 @@ func NewSecretValueByNameFunction() vgi.TableFunction {
 // ---------------------------------------------------------------------------
 
 // SecretValueForScopeFunction selects among several same-type secrets by the
-// longest scope prefix of path, falling back to the unscoped one.
+// longest scope prefix of path (authority-only scopes stop at the authority,
+// as in vgi.ScopeMatches), falling back to the unscoped one.
 type SecretValueForScopeFunction struct{}
 
 var _ vgi.TypedTableFunc[secretValueState] = (*SecretValueForScopeFunction)(nil)

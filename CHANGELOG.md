@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Secret scope matching now follows DuckDB 2.0.1's authority boundary
+  (duckdb#28684). An authority-only scope such as `snmp://10.0.0.1` covers
+  `snmp://10.0.0.1` and `snmp://10.0.0.1/x` but no longer `snmp://10.0.0.15`
+  or `snmp://10.0.0.1:161`, and `s3://bucket` no longer covers
+  `s3://bucket-evil/`. `Secrets.ForScope`, `ForScopeOfType` and
+  `FieldForScope` use the new exported `vgi.ScopeMatches`, so a worker never
+  picks a secret DuckDB itself would not resolve for that path. Checked
+  against 3,025 cases generated from DuckDB's C++
+  (`vgi/testdata/scope_match_vectors.json`).
+
 ## 0.44.1 (2026-11-24)
 
 Patch release; the wire protocol stays 3.4. Requires vgi-rpc-go v0.38.1
